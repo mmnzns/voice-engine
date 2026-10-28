@@ -18,6 +18,9 @@ pub use gpu::{Device, DeviceKind};
 /// the engine existed.
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// A JSON object with any keys: the grammar that keeps a reply parseable when the caller has no schema of its own.
+pub const JSON_OBJECT_SCHEMA: &str = r#"{"type":"object"}"#;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
@@ -127,8 +130,19 @@ pub struct Reply {
     pub truncated: bool,
 }
 
+/// One message as one line (no newline inside: JSON escapes the ones in the text).
 pub fn encode<T: Serialize>(msg: &T) -> String {
     serde_json::to_string(msg).expect("protocol messages always serialize")
+}
+
+/// Reads one request line. A UTF-8 byte order mark (a file piped in by hand) isn't part of the request.
+pub fn decode_request(line: &str) -> Result<Request, serde_json::Error> {
+    serde_json::from_str(line.trim_start_matches('\u{feff}').trim())
+}
+
+/// Reads one event line.
+pub fn decode_event(line: &str) -> Result<Event, serde_json::Error> {
+    serde_json::from_str(line.trim())
 }
 
 #[cfg(test)]
@@ -212,6 +226,72 @@ mod tests {
         let c = HelperConfig { env_prefix: "TALAAN" };
         assert_eq!(c.gpu_env(), "TALAAN_GPU");
         assert_eq!(c.idle_secs_env(), "TALAAN_LLM_IDLE_SECS");
+    }
+
+    fn ensayo_completion() -> Completion {
+        Completion {
+            model_path: "/m.gguf".into(),
+            n_ctx: 8192,
+            system: "s".into(),
+            user: "line one\nline two \"quoted\" \u{2192} caf\u{e9}".into(),
+            json_schema: Some(JSON_OBJECT_SCHEMA.into()),
+            max_tokens: 100,
+            temperature: 0.0,
+            gpu: true,
+        }
+    }
+
+    #[test]
+    fn ensayo_a_request_is_one_line_and_round_trips_with_its_text_intact() {
+        let req = Request::Complete(ensayo_completion());
+        let line = encode(&req);
+        assert!(!line.contains('\n'), "{line}");
+        assert!(line.contains("\"op\":\"complete\""));
+        assert_eq!(decode_request(&line).unwrap(), req);
+        assert_eq!(encode(&Request::Ping), r#"{"op":"ping"}"#);
+        assert_eq!(decode_request(r#"{"op":"ping"}"#).unwrap(), Request::Ping);
+    }
+
+    #[test]
+    fn ensayo_every_event_round_trips_as_one_line() {
+        let events = [
+            Event::Ready { backend: Backend { backend: "metal".into(), ..Default::default() }, protocol: PROTOCOL_VERSION },
+            Event::Progress { phase: Phase::Reading, done: 5, total: 10 },
+            Event::Progress { phase: Phase::Loading, done: 0, total: 0 },
+            Event::Done(Reply { text: "{\"a\":\n1}".into(), prompt_tokens: 12, output_tokens: 3, seconds: 0.5, truncated: false }),
+            Event::Error { message: "the AI model failed".into() },
+        ];
+        for ev in events {
+            let line = encode(&ev);
+            assert!(!line.contains('\n'), "{line}");
+            assert_eq!(decode_event(&line).unwrap(), ev);
+        }
+    }
+
+    #[test]
+    fn ensayo_a_ready_from_an_app_with_only_a_backend_name_still_reads() {
+        // Ensayo's helper before the engine said just the backend name; it must keep working.
+        let Event::Ready { backend, protocol } = decode_event(r#"{"event":"ready","backend":"cpu"}"#).unwrap() else { panic!() };
+        assert_eq!(backend, Backend { backend: "cpu".into(), ..Default::default() });
+        assert_eq!(protocol, 0);
+        let Event::Ready { backend, .. } = decode_event(r#"{"event":"ready"}"#).unwrap() else { panic!() };
+        assert_eq!(backend, Backend::default());
+    }
+
+    #[test]
+    fn ensayo_the_schema_is_left_out_when_there_is_none() {
+        let line = encode(&Request::Complete(Completion { json_schema: None, ..ensayo_completion() }));
+        assert!(!line.contains("json_schema"), "{line}");
+        let Request::Complete(c) = decode_request(&line).unwrap() else { panic!() };
+        assert_eq!(c.json_schema, None);
+    }
+
+    #[test]
+    fn ensayo_a_byte_order_mark_and_blank_edges_are_ignored_and_garbage_is_an_error() {
+        assert_eq!(decode_request("\u{feff}{\"op\":\"ping\"}  ").unwrap(), Request::Ping);
+        assert!(decode_request("not json").is_err());
+        assert!(decode_request(r#"{"op":"unknown"}"#).is_err());
+        assert!(decode_event("").is_err());
     }
 
     #[test]
