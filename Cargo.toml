@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+# Each crate is added here by the task that creates it (protocol: Task 3, llm: 7, stt: 9, models: 10), so the
+# workspace always builds. At the end: ["crates/protocol", "crates/llm", "crates/stt", "crates/models"].
+members = ["crates/protocol"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+authors = ["Miguel Monzones"]
+repository = "https://github.com/mmnzns/voice-engine"
+publish = false
+
+[workspace.dependencies]
+voice-engine-protocol = { path = "crates/protocol" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+dirs = "7"
+tempfile = "3"
