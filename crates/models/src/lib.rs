@@ -2,5 +2,6 @@
 //! (`store`).
 
 pub mod catalog;
+pub mod llm_catalog;
 
 pub use catalog::{EngineKind, ModelFile, ModelInfo};
