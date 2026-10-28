@@ -1,0 +1,48 @@
+name: Vulkan SDK
+description: >
+  Installs the LunarG Vulkan SDK on a Windows runner (pinned, cached) and sets VULKAN_SDK and PATH, the way
+  llama.cpp's own release workflow does (the SDK's silent installer). Needed only to build the GPU helpers
+  (the Vulkan builds of the llm and stt helpers); the apps themselves never link Vulkan. If the installer ever changes its
+  flags, jakoch/install-vulkan-sdk-action@v1 (with glslc) is the drop-in alternative.
+inputs:
+  version:
+    description: LunarG SDK version
+    default: 1.4.363.0
+runs:
+  using: composite
+  steps:
+    - id: cache
+      uses: actions/cache@v4
+      with:
+        path: C:\VulkanSDK\${{ inputs.version }}
+        key: vulkan-sdk-${{ inputs.version }}-windows-x64
+    - if: steps.cache.outputs.cache-hit != 'true'
+      name: Install the Vulkan SDK
+      shell: pwsh
+      run: |
+        $v = '${{ inputs.version }}'
+        $exe = Join-Path $env:RUNNER_TEMP "vulkansdk-windows-X64-$v.exe"
+        curl.exe -fsSL --retry 3 -o $exe "https://sdk.lunarg.com/sdk/download/$v/windows/vulkansdk-windows-X64-$v.exe"
+        if ($LASTEXITCODE -ne 0) { throw "Vulkan SDK download failed" }
+        $p = Start-Process -FilePath $exe -ArgumentList '--root', "C:\VulkanSDK\$v", '--accept-licenses', '--default-answer', '--confirm-command', 'install' -Wait -PassThru -NoNewWindow
+        if ($p.ExitCode -ne 0) { throw "Vulkan SDK installer exited with $($p.ExitCode)" }
+    - name: Use the Vulkan SDK
+      shell: pwsh
+      run: |
+        $sdk = 'C:\VulkanSDK\${{ inputs.version }}'
+        foreach ($f in 'Bin\glslc.exe', 'Lib\vulkan-1.lib', 'Include\vulkan\vulkan.h') {
+          if (-not (Test-Path (Join-Path $sdk $f))) { throw "Vulkan SDK incomplete: $f is missing under $sdk" }
+        }
+        "VULKAN_SDK=$sdk" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+        "$sdk\Bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+        & "$sdk\Bin\glslc.exe" --version
+        # The Vulkan builds import vulkan-1.dll, so tests and the start check need a loader: System32's (the SDK
+        # installer puts one there, a cache restore doesn't) or the SDK's own copy on PATH.
+        $sys = Join-Path $env:WINDIR 'System32\vulkan-1.dll'
+        if (Test-Path $sys) { "Vulkan loader: $sys" }
+        else {
+          $own = Get-ChildItem $sdk -Recurse -Filter vulkan-1.dll -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $own) { throw "No vulkan-1.dll in System32 or the SDK: delete the vulkan-sdk cache (Actions, Caches) so the installer runs again" }
+          $own.DirectoryName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          "Vulkan loader: $($own.FullName)"
+        }

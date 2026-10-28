@@ -60,7 +60,9 @@ pub enum SttEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         language: Option<String>,
     },
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 pub fn encode_samples(samples: &[f32]) -> String {
@@ -72,11 +74,14 @@ pub fn encode_samples(samples: &[f32]) -> String {
 }
 
 pub fn decode_samples(text: &str) -> Result<Vec<f32>, String> {
-    let bytes = base64::engine::general_purpose::STANDARD.decode(text).map_err(|e| format!("bad audio: {e}"))?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(text)
+        .map_err(|e| format!("bad audio: {e}"))?;
     if bytes.len() % 4 != 0 {
         return Err("bad audio: not a whole number of samples".into());
     }
-    Ok(bytes.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect())
+    let (samples, _) = bytes.as_chunks::<4>();
+    Ok(samples.iter().map(|b| f32::from_le_bytes(*b)).collect())
 }
 
 #[cfg(test)]
@@ -86,7 +91,10 @@ mod tests {
 
     #[test]
     fn samples_survive_the_trip_exactly() {
-        let samples: Vec<f32> = (0..16_000).map(|i| ((i as f32) * 0.01).sin() * 0.8).chain([0.0, -1.0, 1.0, f32::MIN_POSITIVE]).collect();
+        let samples: Vec<f32> = (0..16_000)
+            .map(|i| ((i as f32) * 0.01).sin() * 0.8)
+            .chain([0.0, -1.0, 1.0, f32::MIN_POSITIVE])
+            .collect();
         assert_eq!(decode_samples(&encode_samples(&samples)).unwrap(), samples);
         assert_eq!(decode_samples("").unwrap(), Vec::<f32>::new());
         assert!(decode_samples("AAA").is_err());
@@ -95,10 +103,19 @@ mod tests {
 
     #[test]
     fn stt_ready_carries_the_protocol_version() {
-        let line = crate::encode(&SttEvent::Ready { backend: Backend::default(), protocol: crate::PROTOCOL_VERSION });
+        let line = crate::encode(&SttEvent::Ready {
+            backend: Backend::default(),
+            protocol: crate::PROTOCOL_VERSION,
+        });
         assert!(line.contains(r#""protocol":1"#), "{line}");
         let old: SttEvent = serde_json::from_str(r#"{"event":"ready"}"#).unwrap();
-        assert_eq!(old, SttEvent::Ready { backend: Backend::default(), protocol: 0 });
+        assert_eq!(
+            old,
+            SttEvent::Ready {
+                backend: Backend::default(),
+                protocol: 0
+            }
+        );
     }
 
     #[test]
@@ -106,9 +123,18 @@ mod tests {
         let reqs = [
             SttRequest::Ping,
             SttRequest::Devices,
-            SttRequest::Load { model_path: "C:\\m\\ggml-large-v3-turbo.bin".into(), gpu: true },
-            SttRequest::Transcribe { samples: encode_samples(&[0.5, -0.25]), language: Some("fr".into()) },
-            SttRequest::Transcribe { samples: String::new(), language: None },
+            SttRequest::Load {
+                model_path: "C:\\m\\ggml-large-v3-turbo.bin".into(),
+                gpu: true,
+            },
+            SttRequest::Transcribe {
+                samples: encode_samples(&[0.5, -0.25]),
+                language: Some("fr".into()),
+            },
+            SttRequest::Transcribe {
+                samples: String::new(),
+                language: None,
+            },
         ];
         for r in reqs {
             let line = encode(&r);
@@ -116,19 +142,50 @@ mod tests {
             assert_eq!(serde_json::from_str::<SttRequest>(&line).unwrap(), r);
         }
         assert_eq!(encode(&SttRequest::Ping), r#"{"op":"ping"}"#);
-        let SttRequest::Load { gpu, .. } = serde_json::from_str(r#"{"op":"load","model_path":"m"}"#).unwrap() else { panic!() };
+        let SttRequest::Load { gpu, .. } =
+            serde_json::from_str(r#"{"op":"load","model_path":"m"}"#).unwrap()
+        else {
+            panic!()
+        };
         assert!(gpu);
         let events = [
-            SttEvent::Ready { backend: Backend { backend: "vulkan".into(), device: Some("RTX".into()), vram_mb: 16000 }, protocol: crate::PROTOCOL_VERSION },
-            SttEvent::Loaded { backend: Backend::cpu() },
-            SttEvent::Transcribed { pieces: vec![SttPiece { start_ms: 0, end_ms: 1200, text: "Bonjour.".into() }], language: Some("fr".into()) },
-            SttEvent::Error { message: "transcription failed".into() },
-            SttEvent::Devices { devices: vec![], chosen: None },
+            SttEvent::Ready {
+                backend: Backend {
+                    backend: "vulkan".into(),
+                    device: Some("RTX".into()),
+                    vram_mb: 16000,
+                },
+                protocol: crate::PROTOCOL_VERSION,
+            },
+            SttEvent::Loaded {
+                backend: Backend::cpu(),
+            },
+            SttEvent::Transcribed {
+                pieces: vec![SttPiece {
+                    start_ms: 0,
+                    end_ms: 1200,
+                    text: "Bonjour.".into(),
+                }],
+                language: Some("fr".into()),
+            },
+            SttEvent::Error {
+                message: "transcription failed".into(),
+            },
+            SttEvent::Devices {
+                devices: vec![],
+                chosen: None,
+            },
         ];
         for e in events {
             assert_eq!(serde_json::from_str::<SttEvent>(&encode(&e)).unwrap(), e);
         }
         // A fake helper's bare ready.
-        assert_eq!(serde_json::from_str::<SttEvent>(r#"{"event":"ready"}"#).unwrap(), SttEvent::Ready { backend: Backend::default(), protocol: 0 });
+        assert_eq!(
+            serde_json::from_str::<SttEvent>(r#"{"event":"ready"}"#).unwrap(),
+            SttEvent::Ready {
+                backend: Backend::default(),
+                protocol: 0
+            }
+        );
     }
 }

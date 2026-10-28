@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Actions > CI > Run workflow: also builds the Vulkan GPU versions (windows-gpu, below).
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  # The Vulkan builds of the llm and stt crates, with the Vulkan SDK. Manual only: the shaders take a while.
+  windows-gpu:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-gpu
+          cache-directories: C:\tg
+      - uses: ./.github/actions/vulkan-sdk
+      - name: Vulkan builds and their tests
+        shell: pwsh
+        run: |
+          # Ninja, not the Visual Studio generator, for the Vulkan builds (as llama.cpp's own Windows Vulkan CI does):
+          # the vulkan-shaders-gen install step fails under MSBuild.
+          if (-not (Get-Command ninja -ErrorAction SilentlyContinue)) {
+            $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+            $ninja = if (Test-Path $vswhere) { & $vswhere -latest -products * -find 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe' | Select-Object -First 1 }
+            if (-not $ninja) { throw "ninja.exe not found" }
+            $env:PATH = "$(Split-Path $ninja);$env:PATH"
+          }
+          $env:CMAKE_GENERATOR = 'Ninja'
+          cargo test --release -p voice-engine-llm -p voice-engine-stt -p voice-engine-protocol --features voice-engine-llm/vulkan,voice-engine-stt/vulkan --target-dir C:\tg

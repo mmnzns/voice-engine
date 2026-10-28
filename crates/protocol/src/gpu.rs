@@ -61,14 +61,29 @@ mod tests {
     use super::*;
 
     fn dev(index: usize, description: &str, kind: DeviceKind, memory_mb: u64) -> Device {
-        let backend = if kind == DeviceKind::Cpu { "CPU" } else { "Vulkan" };
-        Device { index, name: format!("{backend}{index}"), description: description.into(), backend: backend.into(), kind, memory_mb }
+        let backend = if kind == DeviceKind::Cpu {
+            "CPU"
+        } else {
+            "Vulkan"
+        };
+        Device {
+            index,
+            name: format!("{backend}{index}"),
+            description: description.into(),
+            backend: backend.into(),
+            kind,
+            memory_mb,
+        }
     }
 
     #[test]
     fn miguels_pc_picks_the_rtx_not_the_radeon_igpu() {
         // Vulkan lists the iGPU first on this PC; the CPU device comes last in ggml.
-        let devices = vec![dev(0, "AMD Radeon(TM) Graphics", DeviceKind::Igpu, 512), dev(1, "NVIDIA GeForce RTX 5070 Ti", DeviceKind::Gpu, 16303), dev(2, "CPU", DeviceKind::Cpu, 64000)];
+        let devices = vec![
+            dev(0, "AMD Radeon(TM) Graphics", DeviceKind::Igpu, 512),
+            dev(1, "NVIDIA GeForce RTX 5070 Ti", DeviceKind::Gpu, 16303),
+            dev(2, "CPU", DeviceKind::Cpu, 64000),
+        ];
         let chosen = pick(&devices).unwrap();
         assert_eq!(chosen.description, "NVIDIA GeForce RTX 5070 Ti");
         assert_eq!(chosen.index, 1);
@@ -78,26 +93,45 @@ mod tests {
 
     #[test]
     fn the_largest_discrete_gpu_wins_and_a_tie_goes_to_the_first() {
-        let devices = vec![dev(0, "small", DeviceKind::Gpu, 4096), dev(1, "big", DeviceKind::Gpu, 12288), dev(2, "big twin", DeviceKind::Gpu, 12288)];
+        let devices = vec![
+            dev(0, "small", DeviceKind::Gpu, 4096),
+            dev(1, "big", DeviceKind::Gpu, 12288),
+            dev(2, "big twin", DeviceKind::Gpu, 12288),
+        ];
         assert_eq!(pick(&devices).unwrap().description, "big");
-        assert_eq!(whisper_gpu_index(&devices, pick(&devices).unwrap()), Some(1));
+        assert_eq!(
+            whisper_gpu_index(&devices, pick(&devices).unwrap()),
+            Some(1)
+        );
     }
 
     #[test]
     fn integrated_graphics_or_nothing_means_the_processor() {
         assert_eq!(pick(&[]), None);
         assert_eq!(pick(&[dev(0, "CPU", DeviceKind::Cpu, 32000)]), None);
-        assert_eq!(pick(&[dev(0, "Intel(R) UHD Graphics", DeviceKind::Igpu, 8000), dev(1, "CPU", DeviceKind::Cpu, 32000)]), None);
+        assert_eq!(
+            pick(&[
+                dev(0, "Intel(R) UHD Graphics", DeviceKind::Igpu, 8000),
+                dev(1, "CPU", DeviceKind::Cpu, 32000)
+            ]),
+            None
+        );
         assert_eq!(pick(&[dev(0, "Some NPU", DeviceKind::Accel, 8000)]), None);
         // A GPU-typed device on the CPU backend (never seen, but cheap to rule out).
-        let odd = Device { backend: "CPU".into(), ..dev(0, "odd", DeviceKind::Gpu, 9000) };
+        let odd = Device {
+            backend: "CPU".into(),
+            ..dev(0, "odd", DeviceKind::Gpu, 9000)
+        };
         assert_eq!(pick(&[odd]), None);
     }
 
     #[test]
     fn a_device_whisper_cant_see_has_no_whisper_index() {
         let devices = vec![dev(0, "gpu", DeviceKind::Gpu, 8000)];
-        assert_eq!(whisper_gpu_index(&devices, &dev(5, "elsewhere", DeviceKind::Gpu, 8000)), None);
+        assert_eq!(
+            whisper_gpu_index(&devices, &dev(5, "elsewhere", DeviceKind::Gpu, 8000)),
+            None
+        );
     }
 
     #[test]
