@@ -4,6 +4,8 @@
 pub mod apps;
 pub mod catalog;
 pub mod llm_catalog;
+pub mod store;
 
 pub use apps::{App, Layout, OtherRoot};
 pub use catalog::{EngineKind, ModelFile, ModelInfo};
+pub use store::{Location, ModelStore};
