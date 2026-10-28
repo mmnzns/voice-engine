@@ -1,0 +1,28 @@
+[package]
+name = "voice-engine-llm"
+description = "The voice-engine local AI helper: llama.cpp in its own process"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "voice_engine_llm"
+path = "src/lib.rs"
+
+# Only for this crate's own tests (tests/process.rs). Apps build their own helper binary with their own name.
+[[bin]]
+name = "voice-engine-llm"
+path = "src/main.rs"
+
+[dependencies]
+voice-engine-protocol.workspace = true
+serde_json.workspace = true
+llama-cpp-2 = { version = "=0.1.159", default-features = false, features = ["common"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+llama-cpp-2 = { version = "=0.1.159", default-features = false, features = ["metal", "common"] }
+
+[features]
+# Windows GPU build: needs the Vulkan SDK (VULKAN_SDK) to build and vulkan-1.dll, installed by GPU drivers, to run.
+vulkan = ["llama-cpp-2/vulkan"]
