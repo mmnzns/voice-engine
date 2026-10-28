@@ -1,0 +1,13 @@
+[package]
+name = "voice-engine-models"
+description = "The voice-engine model catalog and the model finder"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+dirs.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
