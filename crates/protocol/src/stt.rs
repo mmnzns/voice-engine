@@ -42,6 +42,8 @@ pub enum SttEvent {
     Ready {
         #[serde(flatten)]
         backend: Backend,
+        #[serde(default)]
+        protocol: u32,
     },
     Devices {
         devices: Vec<super::Device>,
@@ -92,6 +94,14 @@ mod tests {
     }
 
     #[test]
+    fn stt_ready_carries_the_protocol_version() {
+        let line = crate::encode(&SttEvent::Ready { backend: Backend::default(), protocol: crate::PROTOCOL_VERSION });
+        assert!(line.contains(r#""protocol":1"#), "{line}");
+        let old: SttEvent = serde_json::from_str(r#"{"event":"ready"}"#).unwrap();
+        assert_eq!(old, SttEvent::Ready { backend: Backend::default(), protocol: 0 });
+    }
+
+    #[test]
     fn requests_and_events_round_trip() {
         let reqs = [
             SttRequest::Ping,
@@ -109,7 +119,7 @@ mod tests {
         let SttRequest::Load { gpu, .. } = serde_json::from_str(r#"{"op":"load","model_path":"m"}"#).unwrap() else { panic!() };
         assert!(gpu);
         let events = [
-            SttEvent::Ready { backend: Backend { backend: "vulkan".into(), device: Some("RTX".into()), vram_mb: 16000 } },
+            SttEvent::Ready { backend: Backend { backend: "vulkan".into(), device: Some("RTX".into()), vram_mb: 16000 }, protocol: crate::PROTOCOL_VERSION },
             SttEvent::Loaded { backend: Backend::cpu() },
             SttEvent::Transcribed { pieces: vec![SttPiece { start_ms: 0, end_ms: 1200, text: "Bonjour.".into() }], language: Some("fr".into()) },
             SttEvent::Error { message: "transcription failed".into() },
@@ -119,6 +129,6 @@ mod tests {
             assert_eq!(serde_json::from_str::<SttEvent>(&encode(&e)).unwrap(), e);
         }
         // A fake helper's bare ready.
-        assert_eq!(serde_json::from_str::<SttEvent>(r#"{"event":"ready"}"#).unwrap(), SttEvent::Ready { backend: Backend::default() });
+        assert_eq!(serde_json::from_str::<SttEvent>(r#"{"event":"ready"}"#).unwrap(), SttEvent::Ready { backend: Backend::default(), protocol: 0 });
     }
 }

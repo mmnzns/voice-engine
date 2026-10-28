@@ -6,10 +6,17 @@
 
 use serde::{Deserialize, Serialize};
 
+pub mod config;
 pub mod gpu;
 pub mod stt;
 
+pub use config::HelperConfig;
 pub use gpu::{Device, DeviceKind};
+
+/// Bumped whenever a message changes shape. Each helper sends it in `Ready`; the app compares it with its own and
+/// reports a mismatch (a helper and an app from different builds) instead of failing later. 0 = a helper from before
+/// the engine existed.
+pub const PROTOCOL_VERSION: u32 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -85,6 +92,8 @@ pub enum Event {
     Ready {
         #[serde(flatten)]
         backend: Backend,
+        #[serde(default)]
+        protocol: u32,
     },
     /// Reading the prompt (`done` of `total` tokens), then writing (`done` tokens written, `total` 0).
     Progress { phase: Phase, done: u32, total: u32 },
@@ -121,10 +130,6 @@ pub struct Reply {
 pub fn encode<T: Serialize>(msg: &T) -> String {
     serde_json::to_string(msg).expect("protocol messages always serialize")
 }
-
-/// Environment variable that makes a GPU build fail on purpose (`TALAAN_GPU=fail`), to test the fallback on a real
-/// PC. CPU builds ignore it.
-pub const FAIL_ENV: &str = "TALAAN_GPU";
 
 #[cfg(test)]
 mod tests {
@@ -170,16 +175,43 @@ mod tests {
 
     #[test]
     fn ready_carries_the_backend_and_an_old_ready_still_reads() {
-        let gpu = Event::Ready { backend: Backend { backend: "vulkan".into(), device: Some("NVIDIA GeForce RTX 5070 Ti".into()), vram_mb: 16303 } };
+        let gpu = Event::Ready {
+            backend: Backend { backend: "vulkan".into(), device: Some("NVIDIA GeForce RTX 5070 Ti".into()), vram_mb: 16303 },
+            protocol: PROTOCOL_VERSION,
+        };
         let line = encode(&gpu);
-        assert_eq!(line, r#"{"event":"ready","backend":"vulkan","device":"NVIDIA GeForce RTX 5070 Ti","vram_mb":16303}"#);
+        assert_eq!(line, r#"{"event":"ready","backend":"vulkan","device":"NVIDIA GeForce RTX 5070 Ti","vram_mb":16303,"protocol":1}"#);
         assert_eq!(serde_json::from_str::<Event>(&line).unwrap(), gpu);
         // The fake helpers in tests (and a 1.0.x helper) answer with just this.
-        let Event::Ready { backend } = serde_json::from_str::<Event>(r#"{"event":"ready"}"#).unwrap() else { panic!() };
+        let Event::Ready { backend, protocol } = serde_json::from_str::<Event>(r#"{"event":"ready"}"#).unwrap() else { panic!() };
         assert_eq!(backend, Backend::default());
+        assert_eq!(protocol, 0);
         assert!(!backend.on_gpu());
         assert!(!Backend::cpu().on_gpu());
-        assert_eq!(encode(&Event::Ready { backend: Backend::cpu() }), r#"{"event":"ready","backend":"cpu","vram_mb":0}"#);
+        assert_eq!(
+            encode(&Event::Ready { backend: Backend::cpu(), protocol: PROTOCOL_VERSION }),
+            r#"{"event":"ready","backend":"cpu","vram_mb":0,"protocol":1}"#
+        );
+    }
+
+    #[test]
+    fn ready_carries_the_protocol_version() {
+        let line = encode(&Event::Ready { backend: Backend::cpu(), protocol: PROTOCOL_VERSION });
+        assert!(line.contains(r#""protocol":1"#), "{line}");
+    }
+
+    #[test]
+    fn a_ready_without_a_version_reads_as_zero() {
+        let ev: Event = serde_json::from_str(r#"{"event":"ready","backend":"cpu"}"#).unwrap();
+        let Event::Ready { protocol, .. } = ev else { panic!("not ready: {ev:?}") };
+        assert_eq!(protocol, 0);
+    }
+
+    #[test]
+    fn env_names_follow_the_app_prefix() {
+        let c = HelperConfig { env_prefix: "TALAAN" };
+        assert_eq!(c.gpu_env(), "TALAAN_GPU");
+        assert_eq!(c.idle_secs_env(), "TALAAN_LLM_IDLE_SECS");
     }
 
     #[test]
