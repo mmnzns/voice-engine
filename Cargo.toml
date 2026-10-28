@@ -2,7 +2,7 @@
 resolver = "3"
 # Each crate is added here by the task that creates it (protocol: Task 3, llm: 7, stt: 9, models: 10), so the
 # workspace always builds. At the end: ["crates/protocol", "crates/llm", "crates/stt", "crates/models"].
-members = ["crates/protocol", "crates/llm"]
+members = ["crates/protocol", "crates/llm", "crates/stt"]
 
 [workspace.package]
 version = "0.1.0"
