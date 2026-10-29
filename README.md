@@ -41,8 +41,8 @@ voice-engine-models   = { path = "C:/Dev/voice-engine/crates/models" }
 
 | App | Engine tag |
 | --- | --- |
-| Talaan | not yet |
-| Ensayo | not yet |
+| Talaan | v0.1.0 (moving) |
+| Ensayo | v0.1.0 (moving) |
 | Parlato | not yet |
 
 ## Licence
