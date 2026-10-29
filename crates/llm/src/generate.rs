@@ -1,5 +1,6 @@
 //! Writing a reply and computing embeddings with a loaded model.
 
+use crate::failure::Failure;
 use crate::model::{Loaded, Target, context_params, load};
 use crate::send;
 use llama_cpp_2::context::params::LlamaPoolingType;
@@ -8,7 +9,7 @@ use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::LlamaChatMessage;
 use llama_cpp_2::sampling::LlamaSampler;
 use std::time::Instant;
-use voice_engine_protocol::{Completion, Embedding, Event, Phase, Reply};
+use voice_engine_protocol::{Completion, Embedding, ErrorKind, Event, Phase, Reply};
 
 const BATCH: usize = 512;
 
@@ -20,7 +21,7 @@ pub(crate) fn embed(
     loaded: &mut Option<Loaded>,
     t: Target,
     e: &Embedding,
-) -> Result<Vec<Vec<f32>>, String> {
+) -> Result<Vec<Vec<f32>>, Failure> {
     let model = load(llama, loaded, t)?;
     let ctx_params = context_params(EMBED_MAX_TOKENS as u32, t.gpu.is_some())
         .with_n_batch(EMBED_MAX_TOKENS as u32)
@@ -28,9 +29,9 @@ pub(crate) fn embed(
         .with_embeddings(true)
         // The model's own pooling (Qwen3-Embedding: last token) from its metadata.
         .with_pooling_type(LlamaPoolingType::Unspecified);
-    let mut ctx = model
-        .new_context(llama, ctx_params)
-        .map_err(|e| format!("not enough memory for the search model: {e}"))?;
+    let mut ctx = model.new_context(llama, ctx_params).map_err(|e| {
+        Failure::out_of_memory(format!("not enough memory for the search model: {e}"))
+    })?;
     let vocab = model.vocab();
     let mut out = Vec::with_capacity(e.texts.len());
     let mut batch = LlamaBatch::new(EMBED_MAX_TOKENS, 1);
@@ -43,13 +44,13 @@ pub(crate) fn embed(
         for (i, t) in tokens.iter().enumerate() {
             batch
                 .add(*t, i as i32, &[0], true)
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| Failure::internal(e.to_string()))?;
         }
         ctx.decode(&mut batch)
-            .map_err(|e| format!("the search model failed: {e}"))?;
+            .map_err(|e| Failure::internal(format!("the search model failed: {e}")))?;
         let v = ctx
             .embeddings_seq_ith(0)
-            .map_err(|e| format!("the search model gave no vector: {e}"))?;
+            .map_err(|e| Failure::internal(format!("the search model gave no vector: {e}")))?;
         let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
         out.push(v.iter().map(|x| x / norm).collect());
     }
@@ -61,39 +62,55 @@ pub(crate) fn complete(
     loaded: &mut Option<Loaded>,
     t: Target,
     c: &Completion,
-) -> Result<Reply, String> {
+) -> Result<Reply, Failure> {
     let started = Instant::now();
     let model = load(llama, loaded, t)?;
 
-    let template = model
-        .chat_template(None)
-        .map_err(|e| format!("the model has no chat template: {e}"))?;
+    let template = model.chat_template(None).map_err(|e| {
+        Failure::new(
+            ErrorKind::NoChatTemplate,
+            format!("the model has no chat template: {e}"),
+        )
+    })?;
     let messages = [
-        LlamaChatMessage::new("system".into(), c.system.clone()).map_err(|e| e.to_string())?,
-        LlamaChatMessage::new("user".into(), c.user.clone()).map_err(|e| e.to_string())?,
+        LlamaChatMessage::new("system".into(), c.system.clone())
+            .map_err(|e| Failure::internal(e.to_string()))?,
+        LlamaChatMessage::new("user".into(), c.user.clone())
+            .map_err(|e| Failure::internal(e.to_string()))?,
     ];
     let prompt = model
         .apply_chat_template(&template, &messages, true)
-        .map_err(|e| format!("couldn't build the prompt: {e}"))?;
+        .map_err(|e| Failure::internal(format!("couldn't build the prompt: {e}")))?;
     let vocab = model.vocab();
     let tokens = vocab.tokenize(prompt.as_bytes(), false, true);
     let n_prompt = tokens.len() as u32;
     if n_prompt + c.max_tokens > c.n_ctx {
-        return Err(format!(
-            "the transcript part is too long for the model ({n_prompt} tokens, context {})",
-            c.n_ctx
+        return Err(Failure::new(
+            ErrorKind::PromptTooLong {
+                prompt_tokens: n_prompt,
+                n_ctx: c.n_ctx,
+                max_tokens: c.max_tokens,
+            },
+            format!(
+                "the prompt is too long for the model ({n_prompt} tokens, context {})",
+                c.n_ctx
+            ),
         ));
     }
 
     // The sampler first: a bad schema should fail before the model reads anything.
     let mut samplers = vec![];
     if let Some(schema) = &c.json_schema {
-        let grammar = llama_cpp_2::json_schema_to_grammar(schema)
-            .map_err(|e| format!("bad output schema: {e}"))?;
-        samplers.push(
-            LlamaSampler::grammar(model, &grammar, "root")
-                .map_err(|e| format!("bad output schema: {e}"))?,
-        );
+        let bad_schema = |e: &dyn std::fmt::Display| {
+            Failure::new(
+                ErrorKind::BadSchema {
+                    detail: e.to_string(),
+                },
+                format!("bad output schema: {e}"),
+            )
+        };
+        let grammar = llama_cpp_2::json_schema_to_grammar(schema).map_err(|e| bad_schema(&e))?;
+        samplers.push(LlamaSampler::grammar(model, &grammar, "root").map_err(|e| bad_schema(&e))?);
     }
     if c.temperature <= 0.0 {
         samplers.push(LlamaSampler::greedy());
@@ -110,7 +127,7 @@ pub(crate) fn complete(
         .with_n_ubatch(BATCH as u32);
     let mut ctx = model
         .new_context(llama, ctx_params)
-        .map_err(|e| format!("not enough memory for the AI model: {e}"))?;
+        .map_err(|e| Failure::out_of_memory(format!("not enough memory for the AI model: {e}")))?;
 
     // Read the prompt in batches; only the last token needs logits.
     let mut batch = LlamaBatch::new(BATCH, 1);
@@ -124,10 +141,10 @@ pub(crate) fn complete(
             let pos = start + j;
             batch
                 .add(*t, pos as i32, &[0], pos + 1 == tokens.len())
-                .map_err(|e| e.to_string())?;
+                .map_err(|e| Failure::internal(e.to_string()))?;
         }
         ctx.decode(&mut batch)
-            .map_err(|e| format!("the AI model failed reading: {e}"))?;
+            .map_err(|e| Failure::internal(format!("the AI model failed reading: {e}")))?;
         send(&Event::Progress {
             phase: Phase::Reading,
             done: (start + chunk.len()) as u32,
@@ -159,10 +176,10 @@ pub(crate) fn complete(
         batch.clear();
         batch
             .add(token, n_cur, &[0], true)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| Failure::internal(e.to_string()))?;
         n_cur += 1;
         ctx.decode(&mut batch)
-            .map_err(|e| format!("the AI model failed writing: {e}"))?;
+            .map_err(|e| Failure::internal(format!("the AI model failed writing: {e}")))?;
     }
 
     Ok(Reply {
@@ -207,6 +224,12 @@ mod tests {
             n_ctx: c.n_ctx,
         };
         let e = complete(&llama, &mut loaded, target, &c).unwrap_err();
-        assert!(e.contains("missing"), "{e}");
+        assert_eq!(
+            e.error,
+            ErrorKind::ModelMissing {
+                path: "/nonexistent/model.gguf".into()
+            }
+        );
+        assert!(e.message.contains("missing"), "{}", e.message);
     }
 }

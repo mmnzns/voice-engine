@@ -9,9 +9,11 @@
 //! (`voice_engine_protocol::gpu::pick`), never splits a model across devices, and lets llama.cpp fit as many layers
 //! as that GPU's memory allows (`fit_params`). The Mac build: Metal, every layer.
 
+mod failure;
 mod generate;
 mod model;
 
+use failure::Failure;
 use generate::{EMBED_MAX_TOKENS, complete, embed};
 use model::{Loaded, Target};
 
@@ -105,10 +107,7 @@ pub fn run(config: HelperConfig) {
     let llama = match LlamaBackend::init() {
         Ok(b) => b,
         Err(e) => {
-            return send(&Event::Error {
-                message: format!("couldn't start the local AI: {e}"),
-                error: ErrorKind::Internal,
-            });
+            return send(&Failure::internal(format!("couldn't start the local AI: {e}")).event());
         }
     };
     let all = devices();
@@ -147,10 +146,7 @@ pub fn run(config: HelperConfig) {
                 };
                 match complete(&llama, &mut loaded, target, &c) {
                     Ok(reply) => send(&Event::Done(reply)),
-                    Err(message) => send(&Event::Error {
-                        message,
-                        error: ErrorKind::Internal,
-                    }),
+                    Err(f) => send(&f.event()),
                 }
             }
             Ok(Request::Configure(_) | Request::Load(_) | Request::Inspect(_)) => {
@@ -173,16 +169,12 @@ pub fn run(config: HelperConfig) {
                 };
                 match embed(&llama, &mut loaded, target, &e) {
                     Ok(vectors) => send(&Event::Embedded { vectors }),
-                    Err(message) => send(&Event::Error {
-                        message,
-                        error: ErrorKind::Internal,
-                    }),
+                    Err(f) => send(&f.event()),
                 }
             }
-            Err(e) => send(&Event::Error {
-                message: format!("bad request: {e}"),
-                error: ErrorKind::BadRequest,
-            }),
+            Err(e) => {
+                send(&Failure::new(ErrorKind::BadRequest, format!("bad request: {e}")).event())
+            }
         }
     }
 }

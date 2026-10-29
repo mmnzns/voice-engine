@@ -1,5 +1,6 @@
 //! Loading a model: on which device, how many layers, with which context settings.
 
+use crate::failure::Failure;
 use crate::send;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::llama_backend::LlamaBackend;
@@ -30,7 +31,7 @@ const GPU_MARGIN: usize = 1024 * 1024 * 1024;
 /// Model settings for a target. On the GPU: only that device, no split, and as many layers as fit next to the
 /// context (fit_params lowers the layer count when the GPU is too small, so a 9B model still uses part of a 6 GB
 /// card). On the processor in a GPU build: no layers on the GPU. Otherwise llama.cpp as before (Metal: all).
-fn model_params(t: Target) -> Result<LlamaModelParams, String> {
+fn model_params(t: Target) -> Result<LlamaModelParams, Failure> {
     let Some(dev) = t.gpu else {
         let layers = if cfg!(feature = "vulkan") { 0 } else { 999 };
         return Ok(LlamaModelParams::default().with_n_gpu_layers(layers));
@@ -39,14 +40,14 @@ fn model_params(t: Target) -> Result<LlamaModelParams, String> {
         .with_split_mode(LlamaSplitMode::None)
         .with_main_gpu(0)
         .with_devices(&[dev.index])
-        .map_err(|e| format!("couldn't use the graphics chip: {e}"))?;
-    let path = std::ffi::CString::new(t.path).map_err(|_| "bad model path".to_string())?;
+        .map_err(|e| Failure::internal(format!("couldn't use the graphics chip: {e}")))?;
+    let path = std::ffi::CString::new(t.path).map_err(|_| Failure::internal("bad model path"))?;
     let mut cparams = context_params(t.n_ctx, true);
     let mut margins = vec![GPU_MARGIN; llama_cpp_2::max_devices().max(1)];
     // Log level 4 is GGML_LOG_LEVEL_ERROR: fitting reports only problems.
     std::pin::Pin::new(&mut params)
         .fit_params(&path, &mut cparams, &mut margins, t.n_ctx, 4)
-        .map_err(|e| format!("the AI model doesn't fit in memory: {e}"))?;
+        .map_err(|e| Failure::out_of_memory(format!("the AI model doesn't fit in memory: {e}")))?;
     Ok(params)
 }
 
@@ -54,7 +55,7 @@ pub(crate) fn load<'a>(
     llama: &LlamaBackend,
     loaded: &'a mut Option<Loaded>,
     t: Target,
-) -> Result<&'a LlamaModel, String> {
+) -> Result<&'a LlamaModel, Failure> {
     let gpu = t.gpu.map(|d| d.index);
     // The context size only changes how a model is fitted on a GPU (`fit_params`); on the processor or Metal a
     // different size must not reload the model, so it is left out of the key there.
@@ -70,11 +71,11 @@ pub(crate) fn load<'a>(
             total: 0,
         });
         if !std::path::Path::new(t.path).is_file() {
-            return Err(format!("couldn't load the AI model: {} is missing", t.path));
+            return Err(Failure::missing(t.path));
         }
         let params = model_params(t)?;
         let model = LlamaModel::load_from_file(llama, t.path, &params)
-            .map_err(|e| format!("couldn't load the AI model: {e}"))?;
+            .map_err(|e| Failure::internal(format!("couldn't load the AI model: {e}")))?;
         *loaded = Some(Loaded {
             path: t.path.to_string(),
             gpu,
