@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ensayo/extract-claims.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["claims", "conflicts"],
+  "properties": {
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "subject", "value", "quote", "sentence"],
+        "properties": {
+          "type": {"enum": ["reason_for_leaving", "why_this_company", "compensation", "availability", "role_title", "tenure", "proof_number"]},
+          "subject": {"type": "string", "maxLength": 80, "description": "what the claim is about, e.g. 'notice period', 'activation rate 7-day', 'title at Fernhill'"},
+          "value": {"type": "string", "maxLength": 200, "description": "the claim in short form, keeping every number, date, title and company name as said"},
+          "quote": {"type": "string", "maxLength": 200},
+          "sentence": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "conflicts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "subject", "earlier_claim_id", "earlier_stage", "earlier_value", "new_value", "sentence"],
+        "properties": {
+          "type": {"enum": ["reason_for_leaving", "why_this_company", "compensation", "availability", "role_title", "tenure", "proof_number"]},
+          "subject": {"type": "string", "maxLength": 80},
+          "earlier_claim_id": {"type": "string"},
+          "earlier_stage": {"type": "string"},
+          "earlier_value": {"type": "string", "maxLength": 200},
+          "new_value": {"type": "string", "maxLength": 200},
+          "sentence": {"type": "integer", "minimum": 1}
+        }
+      }
+    }
+  }
+}

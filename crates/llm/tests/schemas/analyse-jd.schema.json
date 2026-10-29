@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ensayo/analyse-jd.v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["company_stage", "stage_evidence", "startup", "great_eight", "must_believe", "unsaid", "mirror_language", "summary", "questions", "gap_questions", "no_match"],
+  "$defs": {
+    "g8": {"enum": ["generate_revenue", "reduce_costs", "market_share", "attract_customers", "retain_customers", "productivity", "develop_people", "compliance"]},
+    "stage": {"enum": ["recruiter", "hiring_manager", "technical", "panel", "leadership"]},
+    "qtype": {"enum": ["behavioral", "tell_me_about_yourself", "technical", "factual", "future_looking", "gap", "motivation"]}
+  },
+  "properties": {
+    "company_stage": {"enum": ["early_startup", "growth", "scale_up", "enterprise", "unknown"]},
+    "stage_evidence": {"type": "string", "maxLength": 300},
+    "startup": {"type": "boolean"},
+    "great_eight": {
+      "type": "array", "minItems": 2, "maxItems": 3,
+      "items": {"type": "object", "additionalProperties": false, "required": ["priority", "why"],
+        "properties": {"priority": {"$ref": "#/$defs/g8"}, "why": {"type": "string", "maxLength": 240}}}
+    },
+    "must_believe": {
+      "type": "array", "minItems": 3, "maxItems": 3,
+      "items": {"type": "object", "additionalProperties": false, "required": ["belief", "best_story_id"],
+        "properties": {"belief": {"type": "string", "maxLength": 200}, "best_story_id": {"type": ["string", "null"]}}}
+    },
+    "unsaid": {"type": "array", "maxItems": 2, "items": {"type": "string", "maxLength": 240}},
+    "mirror_language": {"type": "array", "minItems": 3, "maxItems": 8, "items": {"type": "string", "maxLength": 80}},
+    "summary": {"type": "string", "maxLength": 500},
+    "questions": {
+      "type": "array", "minItems": 8, "maxItems": 12,
+      "items": {"type": "object", "additionalProperties": false,
+        "required": ["stage", "text", "type", "behavioral_situation", "commitment_check", "builder_operator_check", "best_story_id", "why"],
+        "properties": {
+          "stage": {"$ref": "#/$defs/stage"},
+          "text": {"type": "string", "maxLength": 240},
+          "type": {"$ref": "#/$defs/qtype"},
+          "behavioral_situation": {"enum": ["problem_solving", "disagreement", "influence", "serving_customers", "leading_team", "motivation", "other", null]},
+          "commitment_check": {"type": "boolean"},
+          "builder_operator_check": {"type": "boolean"},
+          "best_story_id": {"type": ["string", "null"]},
+          "why": {"type": "string", "maxLength": 200}
+        }}
+    },
+    "gap_questions": {
+      "type": "array",
+      "items": {"type": "object", "additionalProperties": false, "required": ["stage", "text", "requirement"],
+        "properties": {"stage": {"$ref": "#/$defs/stage"}, "text": {"type": "string", "maxLength": 240}, "requirement": {"type": "string", "maxLength": 200}}}
+    },
+    "target_fit": {
+      "type": "object", "additionalProperties": false,
+      "description": "v2. What kind of job the posting is and how each target fits. Optional so version 1 readings stay valid.",
+      "required": ["sells_to", "role_family", "seniority", "best_target_id", "mismatch_notes", "per_target"],
+      "properties": {
+        "sells_to": {"enum": ["b2b", "b2c", "both"]},
+        "role_family": {"enum": ["lifecycle", "marketing_ops", "growth", "product_marketing", "gtm", "other"]},
+        "seniority": {"enum": ["early", "mid", "senior", "lead", "director"]},
+        "best_target_id": {"type": ["string", "null"]},
+        "mismatch_notes": {"type": "array", "maxItems": 3, "items": {"type": "string", "maxLength": 160}},
+        "per_target": {
+          "type": "array",
+          "items": {"type": "object", "additionalProperties": false, "required": ["target_id", "fit", "why"],
+            "properties": {"target_id": {"type": "string"}, "fit": {"enum": ["strong", "ok", "weak"]}, "why": {"type": "string", "maxLength": 280}}}
+        }
+      }
+    },
+    "no_match": {
+      "type": "array",
+      "items": {"type": "object", "additionalProperties": false, "required": ["priority_or_belief", "story_needed"],
+        "properties": {"priority_or_belief": {"type": "string", "maxLength": 200}, "story_needed": {"type": "string", "maxLength": 240}}}
+    }
+  }
+}

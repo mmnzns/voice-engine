@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ensayo/score-answer.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "rubric_version",
+    "clarifying_question",
+    "not_an_answer",
+    "restart_at_sentence",
+    "story_id",
+    "first_answer_sentence",
+    "proof_landed_sentence",
+    "tail_exempt_sentences",
+    "approach_sentence",
+    "action_sentence",
+    "numbers_said",
+    "criteria"
+  ],
+  "$defs": {
+    "idx": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1
+    },
+    "verdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "result",
+        "sentences",
+        "quote",
+        "reason"
+      ],
+      "properties": {
+        "result": {
+          "enum": [
+            "pass",
+            "fail",
+            "na"
+          ]
+        },
+        "sentences": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "quote": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 240
+        }
+      }
+    }
+  },
+  "properties": {
+    "rubric_version": {
+      "const": 1
+    },
+    "clarifying_question": {
+      "type": "boolean"
+    },
+    "not_an_answer": {
+      "type": "boolean"
+    },
+    "restart_at_sentence": {
+      "$ref": "#/$defs/idx"
+    },
+    "story_id": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "first_answer_sentence": {
+      "$ref": "#/$defs/idx"
+    },
+    "proof_landed_sentence": {
+      "$ref": "#/$defs/idx"
+    },
+    "tail_exempt_sentences": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "approach_sentence": {
+      "$ref": "#/$defs/idx"
+    },
+    "action_sentence": {
+      "$ref": "#/$defs/idx"
+    },
+    "numbers_said": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "text",
+          "sentence",
+          "metric",
+          "matches_bank",
+          "conflicts_with_bank",
+          "not_in_bank"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "sentence": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "metric": {
+            "type": "string",
+            "maxLength": 80
+          },
+          "matches_bank": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "proof point label, e.g. st_onboarding.activation_7d"
+          },
+          "conflicts_with_bank": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "proof point label with the bank value, e.g. st_onboarding.activation_7d = 44%"
+          },
+          "not_in_bank": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "criteria": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "answer_first",
+        "proof",
+        "story_fit",
+        "context_short",
+        "clean_stop",
+        "ownership",
+        "conviction",
+        "no_complaining",
+        "method_first",
+        "approach_before_action",
+        "jd_fit",
+        "stage_fit",
+        "commitment",
+        "builder_operator",
+        "type_fit"
+      ],
+      "properties": {
+        "answer_first": {
+          "$ref": "#/$defs/verdict"
+        },
+        "proof": {
+          "$ref": "#/$defs/verdict"
+        },
+        "story_fit": {
+          "$ref": "#/$defs/verdict"
+        },
+        "context_short": {
+          "$ref": "#/$defs/verdict"
+        },
+        "clean_stop": {
+          "$ref": "#/$defs/verdict"
+        },
+        "ownership": {
+          "$ref": "#/$defs/verdict"
+        },
+        "conviction": {
+          "$ref": "#/$defs/verdict"
+        },
+        "no_complaining": {
+          "$ref": "#/$defs/verdict"
+        },
+        "method_first": {
+          "$ref": "#/$defs/verdict"
+        },
+        "approach_before_action": {
+          "$ref": "#/$defs/verdict"
+        },
+        "jd_fit": {
+          "$ref": "#/$defs/verdict"
+        },
+        "stage_fit": {
+          "$ref": "#/$defs/verdict"
+        },
+        "commitment": {
+          "$ref": "#/$defs/verdict"
+        },
+        "builder_operator": {
+          "$ref": "#/$defs/verdict"
+        },
+        "type_fit": {
+          "$ref": "#/$defs/verdict"
+        }
+      }
+    }
+  }
+}

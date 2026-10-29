@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ensayo/answer-clarification.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reply"],
+  "properties": {
+    "reply": {"type": "string", "minLength": 1, "maxLength": 240}
+  }
+}

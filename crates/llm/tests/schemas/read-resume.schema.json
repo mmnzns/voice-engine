@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ensayo/read-resume.v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["unreadable", "claims", "bank_check", "must_say", "story_suggestions"],
+  "properties": {
+    "unreadable": {"type": "boolean"},
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "type", "subject", "value", "quote"],
+        "properties": {
+          "id": {"type": "string", "description": "r1, r2, ... unique within this response"},
+          "type": {"enum": ["role_title", "tenure", "proof_number", "availability", "reason_for_leaving", "why_this_company", "compensation"]},
+          "subject": {"type": "string", "maxLength": 80},
+          "value": {"type": "string", "maxLength": 200},
+          "quote": {"type": "string", "maxLength": 200}
+        }
+      }
+    },
+    "bank_check": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["claim_id", "result", "story_id", "note"],
+        "properties": {
+          "claim_id": {"type": "string"},
+          "result": {"enum": ["matches", "differs", "not_in_bank"]},
+          "story_id": {"type": ["string", "null"]},
+          "note": {"type": "string", "maxLength": 240}
+        }
+      }
+    },
+    "must_say": {
+      "type": "array",
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["qualification", "resume_quote", "why", "story_id"],
+        "properties": {
+          "qualification": {"type": "string", "maxLength": 80},
+          "resume_quote": {"type": "string", "maxLength": 200},
+          "why": {"type": "string", "maxLength": 240},
+          "story_id": {"type": ["string", "null"]}
+        }
+      }
+    },
+    "lead_with_fit": {
+      "type": "array",
+      "maxItems": 3,
+      "description": "v2. One item per lead-with point sent, same ids. Optional so version 1 readings stay valid.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "fits", "why"],
+        "properties": {
+          "id": {"type": "string"},
+          "fits": {"type": "boolean"},
+          "why": {"type": "string", "maxLength": 240}
+        }
+      }
+    },
+    "story_suggestions": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["bullet", "employer", "title", "headline_result"],
+        "properties": {
+          "bullet": {"type": "string", "maxLength": 400},
+          "employer": {"type": "string", "maxLength": 80},
+          "title": {"type": "string", "maxLength": 60},
+          "headline_result": {"type": "string", "maxLength": 80}
+        }
+      }
+    }
+  }
+}

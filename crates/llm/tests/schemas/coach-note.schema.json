@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ensayo/coach-note.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["note", "rewrite", "offer_follow_up"],
+  "properties": {
+    "note": {"type": "string", "minLength": 1, "maxLength": 280},
+    "rewrite": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["text", "position", "replaces_sentence"],
+      "properties": {
+        "text": {"type": "string", "minLength": 1, "maxLength": 220},
+        "position": {"enum": ["open", "replace"]},
+        "replaces_sentence": {"type": ["integer", "null"], "minimum": 1}
+      }
+    },
+    "offer_follow_up": {"type": "boolean"}
+  }
+}

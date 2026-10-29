@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ensayo/score-follow-up.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["rubric_version", "clarifying_question", "not_an_answer", "first_answer_sentence", "criteria"],
+  "$defs": {
+    "verdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result", "sentences", "quote", "reason"],
+      "properties": {
+        "result": {"enum": ["pass", "fail", "na"]},
+        "sentences": {"type": "array", "items": {"type": "integer", "minimum": 1}},
+        "quote": {"type": "string", "maxLength": 200},
+        "reason": {"type": "string", "maxLength": 240}
+      }
+    }
+  },
+  "properties": {
+    "rubric_version": {"const": 1},
+    "clarifying_question": {"type": "boolean"},
+    "not_an_answer": {"type": "boolean"},
+    "first_answer_sentence": {"type": ["integer", "null"], "minimum": 1},
+    "criteria": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["f1_answer_push", "f2_new_specific", "f3_consistent", "f5_held_position"],
+      "properties": {
+        "f1_answer_push": {"$ref": "#/$defs/verdict"},
+        "f2_new_specific": {"$ref": "#/$defs/verdict"},
+        "f3_consistent": {"$ref": "#/$defs/verdict"},
+        "f5_held_position": {"$ref": "#/$defs/verdict"}
+      }
+    }
+  }
+}

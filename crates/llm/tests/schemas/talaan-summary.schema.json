@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "title": { "type": "string" },
+    "recap": { "type": "string" },
+    "decisions": { "type": "array", "maxItems": 10, "items": { "type": "object", "properties": { "text": { "type": "string" }, "time": { "type": "string" } }, "required": ["text", "time"], "additionalProperties": false } },
+    "action_items": { "type": "array", "maxItems": 15, "items": { "type": "object", "properties": { "text": { "type": "string" }, "owner": { "type": "string" }, "due": { "type": "string" }, "time": { "type": "string" } }, "required": ["text", "owner", "due", "time"], "additionalProperties": false } },
+    "open_questions": { "type": "array", "maxItems": 8, "items": { "type": "object", "properties": { "text": { "type": "string" }, "time": { "type": "string" } }, "required": ["text", "time"], "additionalProperties": false } }
+  },
+  "required": ["title", "recap", "decisions", "action_items", "open_questions"],
+  "additionalProperties": false
+}

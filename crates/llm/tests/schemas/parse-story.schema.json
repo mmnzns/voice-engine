@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ensayo/parse-story.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["title", "employer", "context", "approach", "action", "ownership", "result", "proof_points", "scale", "direct_answer", "best_for", "competencies", "great_eight", "branches", "missing", "numbers_check"],
+  "properties": {
+    "title": {"type": "string", "maxLength": 80},
+    "employer": {"type": "string", "maxLength": 80},
+    "context": {"type": "string", "maxLength": 600},
+    "approach": {"type": "string", "maxLength": 600},
+    "action": {"type": "string", "maxLength": 800},
+    "ownership": {"type": "string", "maxLength": 400},
+    "result": {"type": "string", "maxLength": 400},
+    "proof_points": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "metric", "before", "after", "unit", "approximate"],
+        "properties": {
+          "label": {"type": "string", "pattern": "^[a-z0-9_]+$", "maxLength": 50},
+          "metric": {"type": "string", "maxLength": 100},
+          "before": {"type": "string", "maxLength": 30},
+          "after": {"type": "string", "maxLength": 30},
+          "unit": {"type": "string", "maxLength": 30},
+          "approximate": {"type": "boolean"}
+        }
+      }
+    },
+    "scale": {"type": "string", "maxLength": 300},
+    "direct_answer": {"type": "string", "maxLength": 240},
+    "best_for": {"type": "array", "maxItems": 4, "items": {"type": "string", "maxLength": 60}},
+    "competencies": {"type": "array", "maxItems": 4, "items": {"type": "string", "maxLength": 40}},
+    "great_eight": {"type": "array", "maxItems": 3, "items": {"enum": ["generate_revenue", "reduce_costs", "market_share", "attract_customers", "retain_customers", "productivity", "develop_people", "compliance"]}},
+    "branches": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "trigger", "angle"],
+        "properties": {
+          "kind": {"enum": ["leadership", "ambiguity", "data", "technical", "failure", "avoided_failure"]},
+          "trigger": {"type": "string", "maxLength": 160},
+          "angle": {"type": "string", "maxLength": 300}
+        }
+      }
+    },
+    "missing": {"type": "array", "items": {"enum": ["approach", "proof_points", "ownership", "result", "scale"]}},
+    "numbers_check": {"type": "array", "items": {"type": "string", "maxLength": 40}}
+  }
+}

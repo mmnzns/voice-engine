@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ensayo/generate-follow-up.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "question", "targets", "why"],
+  "properties": {
+    "type": {"enum": ["ownership_probe", "metric_probe", "skeptic_push", "depth_branch", "stakeholder_branch", "ambiguity_branch", "data_branch", "leadership_branch", "counterfactual", "avoided_failure", "tack_on"]},
+    "question": {"type": "string", "minLength": 5, "maxLength": 200},
+    "targets": {"type": "string", "maxLength": 40, "description": "rubric criterion id the follow-up probes, or 'depth' when the answer passed"},
+    "why": {"type": "string", "maxLength": 200, "description": "log only, never shown"}
+  }
+}
