@@ -1,0 +1,31 @@
+name: Windows ARM64 toolchain
+description: >
+  Sets up a windows-11-arm runner (aarch64-pc-windows-msvc) to build llama.cpp, whisper.cpp and ONNX Runtime's
+  dependents: the Visual Studio environment for ARM64, clang-cl as the C and C++ compiler and Ninja as the CMake
+  generator. Used by the CI test job and by the reusable helper build, so the recipe is one thing.
+runs:
+  using: composite
+  steps:
+    # Windows ARM64 needs clang-cl and Ninja (both are on the runner image: LLVM in C:\Program Files\LLVM, Ninja in
+    # C:\Tools\Ninja). MSVC's own `cl` does not build it: whisper.cpp's and llama.cpp's ggml-cpu stop at configure time
+    # with "MSVC is not supported for ARM, use clang" (ggml/src/ggml-cpu/CMakeLists.txt). The Visual Studio environment is
+    # loaded for the ARM64 target (INCLUDE, LIB, the Windows SDK) because Ninja, unlike the Visual Studio generator,
+    # does not find them itself.
+    - name: Visual Studio environment (Windows ARM64)
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: arm64
+    - name: clang-cl and Ninja (Windows ARM64)
+      shell: pwsh
+      run: |
+        $clang = (Get-Command clang-cl -ErrorAction Stop).Source
+        $ninja = (Get-Command ninja -ErrorAction Stop).Source
+        Write-Host "clang-cl: $clang"; & $clang --version
+        Write-Host "ninja: $ninja"; & $ninja --version
+        # The cc and cmake crates take the compiler from CC/CXX and the generator from CMAKE_GENERATOR.
+        "CC=$clang" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+        "CXX=$clang" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+        "CMAKE_GENERATOR=Ninja" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+        # llama-cpp-sys-2 compiles its wrapper_common.cpp with the cc crate, which does not pass /EHsc to clang-cl:
+        # "cannot use 'try' with exceptions disabled". CXXFLAGS is read by the cc and cmake crates.
+        "CXXFLAGS=/EHsc" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV

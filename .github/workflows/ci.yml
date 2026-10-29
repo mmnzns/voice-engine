@@ -22,31 +22,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      # Windows ARM64 needs clang-cl and Ninja (both are on the runner image: LLVM in C:\Program Files\LLVM, Ninja in
-      # C:\Tools\Ninja). MSVC's own `cl` does not build it: whisper.cpp's and llama.cpp's ggml-cpu stop at configure time
-      # with "MSVC is not supported for ARM, use clang" (ggml/src/ggml-cpu/CMakeLists.txt). The Visual Studio environment is
-      # loaded for the ARM64 target (INCLUDE, LIB, the Windows SDK) because Ninja, unlike the Visual Studio generator,
-      # does not find them itself.
-      - name: Visual Studio environment (Windows ARM64)
+      # Windows ARM64: clang-cl, Ninja and the ARM64 Visual Studio environment (why: the action's comments).
+      - uses: ./.github/actions/windows-arm64-toolchain
         if: runner.os == 'Windows' && runner.arch == 'ARM64'
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: arm64
-      - name: clang-cl and Ninja (Windows ARM64)
-        if: runner.os == 'Windows' && runner.arch == 'ARM64'
-        shell: pwsh
-        run: |
-          $clang = (Get-Command clang-cl -ErrorAction Stop).Source
-          $ninja = (Get-Command ninja -ErrorAction Stop).Source
-          Write-Host "clang-cl: $clang"; & $clang --version
-          Write-Host "ninja: $ninja"; & $ninja --version
-          # The cc and cmake crates take the compiler from CC/CXX and the generator from CMAKE_GENERATOR.
-          "CC=$clang" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          "CXX=$clang" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          "CMAKE_GENERATOR=Ninja" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          # llama-cpp-sys-2 compiles its wrapper_common.cpp with the cc crate, which does not pass /EHsc to clang-cl:
-          # "cannot use 'try' with exceptions disabled". CXXFLAGS is read by the cc and cmake crates.
-          "CXXFLAGS=/EHsc" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
@@ -132,3 +110,44 @@ jobs:
           }
           $env:CMAKE_GENERATOR = 'Ninja'
           cargo test --release -p voice-engine-llm -p voice-engine-stt -p voice-engine-protocol --features voice-engine-llm/vulkan,voice-engine-stt/vulkan --target-dir C:\tg
+
+  # The reusable helper build (build-helpers.yml, the one an app's release workflow calls), run on this very commit so it is
+  # proven here: it builds voice-engine-llm and voice-engine-stt for Mac Apple silicon, Windows x64 and Windows ARM64 as
+  # Tauri sidecars (<name>-<target triple>[.exe]). The Vulkan variants (Windows x64) only on a manual run: they are slow.
+  helpers:
+    if: github.event_name != 'pull_request'
+    uses: ./.github/workflows/build-helpers.yml
+    with:
+      engine-ref: ${{ github.sha }}
+      helpers: ${{ github.event_name == 'workflow_dispatch' && 'llm,stt,llm-vulkan,stt-vulkan' || 'llm,stt' }}
+
+  # Takes each artifact to a runner of the same kind and does what an app does first: starts the helper and sends the
+  # handshake. Fails if a file is missing or misnamed, the checksum is wrong, or the answer is not "ready" with protocol 2.
+  helpers-smoke:
+    needs: helpers
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { triple: aarch64-apple-darwin, os: macos-latest }
+          - { triple: x86_64-pc-windows-msvc, os: windows-latest }
+          - { triple: aarch64-pc-windows-msvc, os: windows-11-arm }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: helpers-${{ matrix.triple }}
+          path: ${{ runner.temp }}/helpers
+      # The Vulkan helpers import vulkan-1.dll; the action finds a loader (System32's or the SDK's) and puts it on PATH.
+      - uses: ./.github/actions/vulkan-sdk
+        if: github.event_name == 'workflow_dispatch' && matrix.triple == 'x86_64-pc-windows-msvc'
+      - name: Handshake
+        shell: pwsh
+        env:
+          VULKAN: ${{ github.event_name == 'workflow_dispatch' && matrix.triple == 'x86_64-pc-windows-msvc' }}
+        run: |
+          $names = @('voice-engine-llm', 'voice-engine-stt')
+          if ($env:VULKAN -eq 'true') { $names += 'voice-engine-llm-vulkan', 'voice-engine-stt-vulkan' }
+          Get-ChildItem "${{ runner.temp }}/helpers" | Format-Table Name, Length
+          ./scripts/smoke-helpers.ps1 -Dir "${{ runner.temp }}/helpers" -Triple "${{ matrix.triple }}" -Names $names -ExpectedProtocol 2

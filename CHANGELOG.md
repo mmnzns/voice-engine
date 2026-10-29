@@ -11,6 +11,20 @@
   says what to copy. New: `scripts/check-baseline.sh` (fails unless the CMake caches say `GGML_NATIVE:BOOL=OFF` and, on
   a Mac, macOS 11.0), run by CI on macOS, with a PowerShell check of `GGML_NATIVE` and `GGML_AVX2` on Windows. CI also
   runs on pushes to `v0.2.0-step-*` branches.
+- build: the helpers can be built for an app's release. New reusable workflow `.github/workflows/build-helpers.yml`
+  (`workflow_call` and `workflow_dispatch`; inputs `engine-ref`, `helpers`, `llm-name`, `stt-name`, `cache`): it checks out
+  the engine at `engine-ref`, so the engine's `.cargo/config.toml` baseline applies (Cargo does not read it for a git
+  dependency), builds `voice-engine-llm` and `voice-engine-stt` for `aarch64-apple-darwin`, `x86_64-pc-windows-msvc` and
+  `aarch64-pc-windows-msvc`, and uploads `helpers-<target triple>` with the files named as Tauri sidecars
+  (`<name>-<target triple>[.exe]`; Vulkan variants of the Windows x64 build as `<name>-vulkan-<target triple>.exe`),
+  `SHA256SUMS` and `build-info.txt` (engine ref and commit, rustc, the native library versions from `Cargo.lock`). New:
+  `scripts/build-helpers.sh` and `scripts/build-helpers.ps1` (the recipe the workflow runs, with the baseline checked on
+  what was built), `scripts/smoke-helpers.ps1` (checksums and the startup handshake, expecting protocol 2),
+  `.github/actions/windows-arm64-toolchain` (clang-cl, Ninja, `/EHsc`, shared with the CI test job) and
+  `docs/building-helpers.md` (how an app calls it, Tauri `externalBin`, closing a helper before a Windows update, signing
+  notes). CI calls the workflow on every push and runs each artifact's handshake on a runner of the same kind. Windows
+  ARM64 (`aarch64-pc-windows-msvc`) is built and tested in CI with clang-cl and Ninja; its CPU baseline is armv8-a with
+  no dot-product kernels (ggml's default with `GGML_NATIVE` off).
 - protocol 2 (`PROTOCOL_VERSION` 2): `configure` (idle time, or never exit while the app runs; can be sent at any
   time), `load` (load now, answers `loaded` with the load time and the model's trained context; a different path
   replaces the loaded model), `unload` (frees the model, the helper keeps running), `cancel` (stops the reply, the

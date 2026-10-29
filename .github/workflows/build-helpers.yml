@@ -1,0 +1,155 @@
+name: Build helpers
+
+# Builds the engine's two helper programs (the AI helper, voice-engine-llm, and the speech helper, voice-engine-stt) for
+# Mac Apple silicon, Windows x64 and Windows ARM64, named as Tauri sidecars: <name>-<target triple>[.exe]. An app's release
+# workflow calls it instead of copying files from the engine by hand; docs/building-helpers.md has a complete example.
+#
+# It checks out the ENGINE repository at `engine-ref` and builds there, so the engine's own .cargo/config.toml (the CPU
+# baseline: GGML_NATIVE off, AVX2 on x64, macOS 11) applies. Cargo does not read that file for an app that depends on the
+# engine as a git dependency; that is why the helpers are built here and not in the app's workspace.
+#
+# One artifact per target triple, `helpers-<target triple>`, with the helpers, SHA256SUMS and build-info.txt. Use the same
+# tag for `engine-ref` and for the `@tag` of this workflow, so the workflow, the scripts and the engine match.
+
+on:
+  workflow_call:
+    inputs:
+      engine-ref:
+        description: The engine tag or commit to build (use the same as the tag this workflow is called at).
+        type: string
+        required: true
+      helpers:
+        description: 'Comma list among llm, stt, llm-vulkan and stt-vulkan. The Vulkan variants are built for x86_64-pc-windows-msvc only.'
+        type: string
+        default: 'llm,stt'
+      llm-name:
+        description: 'The sidecar base name of the AI helper. The file is <name>-<target triple>[.exe].'
+        type: string
+        default: voice-engine-llm
+      stt-name:
+        description: The sidecar base name of the speech helper.
+        type: string
+        default: voice-engine-stt
+      cache:
+        description: "Cache Cargo's registry and build folder between runs (faster). Set false to build from scratch."
+        type: boolean
+        default: true
+  workflow_dispatch:
+    inputs:
+      engine-ref:
+        description: 'The engine tag or commit to build. Empty: the commit this run was started on.'
+        type: string
+        default: ''
+      helpers:
+        description: 'Comma list among llm, stt, llm-vulkan and stt-vulkan. The Vulkan variants are built for x86_64-pc-windows-msvc only.'
+        type: string
+        default: 'llm,stt'
+      llm-name:
+        description: 'The sidecar base name of the AI helper. The file is <name>-<target triple>[.exe].'
+        type: string
+        default: voice-engine-llm
+      stt-name:
+        description: The sidecar base name of the speech helper.
+        type: string
+        default: voice-engine-stt
+      cache:
+        description: "Cache Cargo's registry and build folder between runs (faster). Set false to build from scratch."
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Helpers (${{ matrix.triple }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - triple: aarch64-apple-darwin
+            os: macos-latest
+          - triple: x86_64-pc-windows-msvc
+            os: windows-latest
+          - triple: aarch64-pc-windows-msvc
+            os: windows-11-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      # Which commit of the engine, and which helpers this target builds. Inputs reach the shell through the environment,
+      # never pasted into the script.
+      - name: Choose the engine commit and the helpers
+        id: pick
+        shell: pwsh
+        env:
+          ENGINE_REF: ${{ inputs.engine-ref }}
+          HELPERS: ${{ inputs.helpers }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          $ref = $env:ENGINE_REF
+          if (-not $ref) {
+            # Only the engine's own repository may default to its own commit; an app must say which engine it wants.
+            if ($env:GITHUB_REPOSITORY -ne 'mmnzns/voice-engine') {
+              throw "engine-ref is empty: say which engine tag or commit to build (the tag this workflow is called at)"
+            }
+            $ref = $env:GITHUB_SHA
+          }
+          $allowed = 'llm', 'stt', 'llm-vulkan', 'stt-vulkan'
+          $want = @($env:HELPERS -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+          if ($want.Count -eq 0) { throw 'helpers is empty' }
+          foreach ($h in $want) { if ($h -notin $allowed) { throw "unknown helper '$h' (llm, stt, llm-vulkan, stt-vulkan)" } }
+          $vulkanOk = $env:TRIPLE -eq 'x86_64-pc-windows-msvc'
+          $mine = @($want | Where-Object { $vulkanOk -or $_ -notlike '*-vulkan' })
+          if ($mine.Count -eq 0) { Write-Host "::notice::Nothing to build for $($env:TRIPLE): $($want -join ',') is Vulkan, which is x86_64-pc-windows-msvc only" }
+          "ref=$ref" >> $env:GITHUB_OUTPUT
+          "helpers=$($mine -join ',')" >> $env:GITHUB_OUTPUT
+          "vulkan=$(@($mine | Where-Object { $_ -like '*-vulkan' }).Count -gt 0)".ToLower() >> $env:GITHUB_OUTPUT
+          Write-Host "engine ref: $ref; helpers for $($env:TRIPLE): $($mine -join ',')"
+
+      - uses: actions/checkout@v4
+        if: steps.pick.outputs.helpers != ''
+        with:
+          repository: mmnzns/voice-engine
+          ref: ${{ steps.pick.outputs.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.pick.outputs.helpers != ''
+      - uses: Swatinem/rust-cache@v2
+        if: steps.pick.outputs.helpers != '' && inputs.cache
+        with:
+          key: helpers-${{ matrix.triple }}
+          cache-directories: ${{ runner.os == 'Windows' && 'C:\tg' || '' }}
+      - uses: ./.github/actions/vulkan-sdk
+        if: steps.pick.outputs.vulkan == 'true'
+      # Windows ARM64: clang-cl, Ninja and the ARM64 Visual Studio environment, the same setup the CI test job uses.
+      - uses: ./.github/actions/windows-arm64-toolchain
+        if: steps.pick.outputs.helpers != '' && runner.os == 'Windows' && runner.arch == 'ARM64'
+
+      - name: Build the helpers
+        if: steps.pick.outputs.helpers != ''
+        shell: pwsh
+        env:
+          ENGINE_REF: ${{ steps.pick.outputs.ref }}
+          HELPERS: ${{ steps.pick.outputs.helpers }}
+          LLM_NAME: ${{ inputs.llm-name }}
+          STT_NAME: ${{ inputs.stt-name }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          $out = Join-Path $env:GITHUB_WORKSPACE 'dist'
+          if ($IsWindows) {
+            & ./scripts/build-helpers.ps1 -Target $env:TRIPLE -OutDir $out -Helpers $env:HELPERS -LlmName $env:LLM_NAME -SttName $env:STT_NAME -EngineRef $env:ENGINE_REF
+          } else {
+            & bash ./scripts/build-helpers.sh $env:TRIPLE $out --helpers $env:HELPERS --llm-name $env:LLM_NAME --stt-name $env:STT_NAME --engine-ref $env:ENGINE_REF
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: What was built
+        if: steps.pick.outputs.helpers != ''
+        shell: pwsh
+        run: |
+          Get-ChildItem dist | Format-Table Name, Length
+          Get-Content dist/SHA256SUMS
+          Get-Content dist/build-info.txt
+      - uses: actions/upload-artifact@v4
+        if: steps.pick.outputs.helpers != ''
+        with:
+          name: helpers-${{ matrix.triple }}
+          path: dist
+          if-no-files-found: error

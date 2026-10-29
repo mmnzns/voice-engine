@@ -20,8 +20,8 @@ One JSON object per line. Requests (`op`): `ping`, `configure`, `load`, `unload`
 `PROTOCOL_VERSION` in `voice-engine-protocol`; a helper reports it in `ready`.
 
 Lifetime: the helper runs until its stdin closes (the app exited or crashed) or, with an idle time set, until that
-long passes without a request. Name the binary as your app wants (Ensayo: the Tauri sidecar `ensayo-llm`); the build
-recipe for each target triple comes in a later step of v0.2.0. The helper never logs user text: only sizes, timings,
+long passes without a request. Name the binary as your app wants (Ensayo: the Tauri sidecar `ensayo-llm`); the reusable
+workflow described in `docs/building-helpers.md` builds it for each target triple under that name. The helper never logs user text: only sizes, timings,
 paths and error kinds reach stderr.
 
 Reply schemas: llama.cpp enforces structure (objects, required keys, `additionalProperties: false`, `enum`, `const`,
@@ -315,8 +315,16 @@ dependency does not get these lines, and nothing warns it: it builds the librari
 that links `voice-engine-llm` or `voice-engine-stt` (the helper programs, or the speech crate in process) copies the block
 above into its own `.cargo/config.toml` (for a Tauri app, next to `Cargo.toml` in `src-tauri/`; commit it, unlike the
 patch file in the next section), or sets the same variables in its release workflow, or builds the helpers with the
-reusable workflow described in `docs/building-helpers.md` (added in this same v0.2.0 step), which carries them.
-The rustflags line is for Windows x64 only (the Windows ARM64 build is covered in a later step of v0.2.0).
+reusable workflow described in `docs/building-helpers.md`, which builds in the engine's own checkout and so carries
+them. The rustflags line is for Windows x64 only.
+
+**Windows ARM64** (`aarch64-pc-windows-msvc`) is built and tested in CI on the `windows-11-arm` runner, with clang-cl and
+Ninja: MSVC's own `cl` stops whisper.cpp's and llama.cpp's ggml-cpu at configure time ("MSVC is not supported for ARM").
+An app that builds it needs the Visual Studio ARM64 environment, `CC` and `CXX` set to clang-cl, `CMAKE_GENERATOR=Ninja`
+and `CXXFLAGS=/EHsc` (llama-cpp-sys-2's C++ wrapper needs exceptions); `.github/actions/windows-arm64-toolchain` is the
+exact setup CI uses. The ARM64 CPU baseline is ggml's own: with `GGML_NATIVE` off and no architecture flag, the compiler's
+default for the target applies, armv8-a with NEON, so there are no dot-product (`dotprod`) or i8mm kernels whatever the
+build machine's CPU is, and there are no ARM64 lines to copy into `.cargo/config.toml`.
 
 Two things to know. A build script does not run again when one of these values changes, so after editing them run
 `cargo clean -p whisper-rs-sys -p llama-cpp-sys-2` (with `--release` for release builds). And `RUSTFLAGS` set in the
@@ -324,6 +332,17 @@ environment replaces the `rustflags` line in the file instead of adding to it; p
 `scripts/check-baseline.sh` (Mac and Linux) builds the two helpers and fails unless the CMake caches say
 `GGML_NATIVE:BOOL=OFF` and, on a Mac, the libraries were compiled for macOS 11.0 and the binaries say so; CI runs it,
 and a PowerShell check does the same for `GGML_NATIVE` and `GGML_AVX2` on Windows x64.
+
+## Build the helpers for an app's release
+
+An app's release workflow builds `voice-engine-llm` and `voice-engine-stt` for Mac Apple silicon, Windows x64 and Windows
+ARM64 by calling `mmnzns/voice-engine/.github/workflows/build-helpers.yml@<tag>`. It checks out the engine at that tag,
+builds with the baseline above, names the files as Tauri sidecars (`<name>-<target triple>[.exe]`, with the app's names)
+and uploads one artifact per target with a `SHA256SUMS` and a `build-info.txt`. `docs/building-helpers.md` has the complete
+example, the Tauri `externalBin` entries, the note on closing a running helper before an update, and the signing notes
+(the engine ships unsigned binaries; the app signs them). The same recipe runs locally with `scripts/build-helpers.sh` and
+`scripts/build-helpers.ps1`, and this repository's CI calls the workflow on every push and starts each helper to check
+its handshake.
 
 ## Try an engine change in an app before tagging
 
