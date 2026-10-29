@@ -4,11 +4,14 @@ use crate::failure::Failure;
 use crate::inbox::Inbox;
 use crate::model::{Loaded, Target, context_params, load};
 use crate::send;
+use crate::think;
+use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::context::params::LlamaPoolingType;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
-use llama_cpp_2::model::LlamaChatMessage;
+use llama_cpp_2::model::{LlamaChatMessage, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
+use llama_cpp_2::token::LlamaToken;
 use std::time::Instant;
 use voice_engine_protocol::{Completion, Embedding, ErrorKind, Event, Phase, Reply};
 
@@ -78,19 +81,39 @@ pub(crate) fn complete(
             format!("the model has no chat template: {e}"),
         )
     })?;
+    // Only a template with a thinking step gets a prompt ending, and only then can a reply have thinking.
+    let thinks = think::template_thinks(&template.to_string().unwrap_or_default());
+    let thinking = thinks && c.thinking;
     let messages = [
         LlamaChatMessage::new("system".into(), c.system.clone())
             .map_err(|e| Failure::internal(e.to_string()))?,
         LlamaChatMessage::new("user".into(), c.user.clone())
             .map_err(|e| Failure::internal(e.to_string()))?,
     ];
-    let prompt = model
+    let mut prompt = model
         .apply_chat_template(&template, &messages, true)
         .map_err(|e| Failure::internal(format!("couldn't build the prompt: {e}")))?;
+    prompt.push_str(think::prompt_ending(thinks, thinking));
     let vocab = model.vocab();
     let tokens = vocab.tokenize(prompt.as_bytes(), false, true);
     let n_prompt = tokens.len() as u32;
-    if n_prompt + c.max_tokens > c.n_ctx {
+    let budget = if thinking {
+        c.thinking_budget.unwrap_or(0)
+    } else {
+        0
+    };
+    // The tokens the helper writes itself when thinking runs past its budget; they need room too.
+    let force_end = if budget > 0 {
+        vocab.tokenize(think::FORCE_END.as_bytes(), false, true)
+    } else {
+        vec![]
+    };
+    if n_prompt
+        .saturating_add(c.max_tokens)
+        .saturating_add(budget)
+        .saturating_add(force_end.len() as u32)
+        > c.n_ctx
+    {
         return Err(Failure::new(
             ErrorKind::PromptTooLong {
                 prompt_tokens: n_prompt,
@@ -104,29 +127,13 @@ pub(crate) fn complete(
         ));
     }
 
-    // The sampler first: a bad schema should fail before the model reads anything.
-    let mut samplers = vec![];
-    if let Some(schema) = &c.json_schema {
-        let bad_schema = |e: &dyn std::fmt::Display| {
-            Failure::new(
-                ErrorKind::BadSchema {
-                    detail: e.to_string(),
-                },
-                format!("bad output schema: {e}"),
-            )
-        };
-        let grammar = llama_cpp_2::json_schema_to_grammar(schema).map_err(|e| bad_schema(&e))?;
-        samplers.push(LlamaSampler::grammar(model, &grammar, "root").map_err(|e| bad_schema(&e))?);
-    }
-    if c.temperature <= 0.0 {
-        samplers.push(LlamaSampler::greedy());
+    // The answer's sampler first: a bad schema should fail before the model reads anything.
+    let mut answer_sampler = Some(sampling_chain(model, c, true)?);
+    let mut sampler = if thinking {
+        sampling_chain(model, c, false)?
     } else {
-        samplers.push(LlamaSampler::top_k(40));
-        samplers.push(LlamaSampler::top_p(0.9, 1));
-        samplers.push(LlamaSampler::temp(c.temperature));
-        samplers.push(LlamaSampler::dist(1234));
-    }
-    let mut sampler = LlamaSampler::chain_simple(samplers);
+        answer_sampler.take().expect("built above")
+    };
 
     let ctx_params = context_params(c.n_ctx, t.gpu.is_some())
         .with_n_batch(BATCH as u32)
@@ -162,12 +169,32 @@ pub(crate) fn complete(
     }
 
     let mut out: Vec<u8> = vec![];
+    // Where the answer starts in `out`: 0 without thinking, just after `</think>` with it.
+    let mut answer_from: Option<usize> = if thinking { None } else { Some(0) };
     let mut n_cur = tokens.len() as i32;
     let mut written = 0u32;
+    let mut thought = 0u32;
     let mut truncated = true;
-    while written < c.max_tokens {
+    // Stops at max_tokens for the answer, or when the context is full (a long thinking without a budget).
+    while written < c.max_tokens && (n_cur as u32) < c.n_ctx {
         if inbox.cancel_requested() {
             return Err(Failure::cancelled());
+        }
+        // Thinking past its budget: the helper writes the closing tag itself and the answer starts. The text
+        // is rendered with special tokens so the closing tag is always found.
+        if answer_from.is_none() && budget > 0 && thought >= budget {
+            for token in &force_end {
+                out.extend(vocab.token_to_piece(*token, true, None));
+                feed(*token, &mut ctx, &mut batch, &mut n_cur)?;
+            }
+        }
+        if answer_from.is_none()
+            && let Some(end) = think::end_of_thinking(&out)
+        {
+            answer_from = Some(end);
+            sampler = answer_sampler
+                .take()
+                .expect("the answer's sampler is used once");
         }
         // `sample` also accepts the token into the samplers (grammar state included); accepting it again
         // would push the grammar past it.
@@ -176,34 +203,102 @@ pub(crate) fn complete(
             truncated = false;
             break;
         }
-        out.extend(vocab.token_to_piece(token, false, None));
-        written += 1;
-        if written.is_multiple_of(32) {
-            send(&Event::Progress {
-                phase: Phase::Writing,
-                done: written,
-                total: 0,
-            });
+        // While thinking, special tokens are rendered too, so a closing tag that is one is still seen.
+        out.extend(vocab.token_to_piece(token, answer_from.is_none(), None));
+        if answer_from.is_some() {
+            written += 1;
+            if written.is_multiple_of(32) {
+                send(&Event::Progress {
+                    phase: Phase::Writing,
+                    done: written,
+                    total: 0,
+                });
+            }
+        } else {
+            thought += 1;
         }
-        batch.clear();
-        batch
-            .add(token, n_cur, &[0], true)
-            .map_err(|e| Failure::internal(e.to_string()))?;
-        n_cur += 1;
-        ctx.decode(&mut batch)
-            .map_err(|e| Failure::internal(format!("the AI model failed writing: {e}")))?;
+        feed(token, &mut ctx, &mut batch, &mut n_cur)?;
+    }
+    // The last token written may have been the closing tag, with the context full right after it.
+    if answer_from.is_none() {
+        answer_from = think::end_of_thinking(&out);
     }
 
+    let (thinking_text, answer) = match answer_from {
+        Some(from) if thinking => (
+            Some(
+                String::from_utf8_lossy(&out[..from])
+                    .trim_end()
+                    .trim_end_matches(think::CLOSE)
+                    .trim()
+                    .to_string(),
+            ),
+            String::from_utf8_lossy(&out[from..]).into_owned(),
+        ),
+        Some(_) => (None, String::from_utf8_lossy(&out).into_owned()),
+        // Cut off while still thinking: no answer.
+        None => (
+            Some(String::from_utf8_lossy(&out).trim().to_string()),
+            String::new(),
+        ),
+    };
     Ok(Reply {
-        text: String::from_utf8_lossy(&out).into_owned(),
+        text: think::strip_think(&answer).trim_start().to_string(),
         prompt_tokens: n_prompt,
         output_tokens: written,
         seconds: started.elapsed().as_secs_f32(),
         truncated,
-        thinking_tokens: 0,
+        thinking_tokens: thought,
         load_seconds,
-        thinking_text: None,
+        thinking_text,
     })
+}
+
+/// Puts one token in the context after the ones already there.
+fn feed(
+    token: LlamaToken,
+    ctx: &mut LlamaContext,
+    batch: &mut LlamaBatch,
+    n_cur: &mut i32,
+) -> Result<(), Failure> {
+    batch.clear();
+    batch
+        .add(token, *n_cur, &[0], true)
+        .map_err(|e| Failure::internal(e.to_string()))?;
+    *n_cur += 1;
+    ctx.decode(batch)
+        .map_err(|e| Failure::internal(format!("the AI model failed writing: {e}")))
+}
+
+/// The sampling chain for a request. With `answer`, the reply's schema (if any) constrains it; thinking is free
+/// text. Temperature 0 is greedy; above 0 the seed makes it repeatable.
+fn sampling_chain(
+    model: &LlamaModel,
+    c: &Completion,
+    answer: bool,
+) -> Result<LlamaSampler, Failure> {
+    let mut samplers = vec![];
+    if answer && let Some(schema) = &c.json_schema {
+        let bad_schema = |e: &dyn std::fmt::Display| {
+            Failure::new(
+                ErrorKind::BadSchema {
+                    detail: e.to_string(),
+                },
+                format!("bad output schema: {e}"),
+            )
+        };
+        let grammar = llama_cpp_2::json_schema_to_grammar(schema).map_err(|e| bad_schema(&e))?;
+        samplers.push(LlamaSampler::grammar(model, &grammar, "root").map_err(|e| bad_schema(&e))?);
+    }
+    if c.temperature <= 0.0 {
+        samplers.push(LlamaSampler::greedy());
+    } else {
+        samplers.push(LlamaSampler::top_k(40));
+        samplers.push(LlamaSampler::top_p(0.9, 1));
+        samplers.push(LlamaSampler::temp(c.temperature));
+        samplers.push(LlamaSampler::dist(c.seed.unwrap_or(1234)));
+    }
+    Ok(LlamaSampler::chain_simple(samplers))
 }
 
 #[cfg(test)]
