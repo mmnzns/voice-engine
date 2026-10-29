@@ -65,6 +65,15 @@
   crash, a kill, a card fallback), so a crash costs the app one `Crashed` and nothing else. `EngineError` gains
   `BadModel`, `TooLong { max_secs }` and `Unsupported { detail }`. Cancel: the helper cannot interrupt a Whisper
   decode, so a cancel ends the call after the 2 s grace by stopping the helper.
+- client: `servers::detect()` says which local AI servers run on this computer (Ollama on port 11434, LM Studio on
+  port 1234) and lists each one's models with `id`, `context_length` and `size_bytes` (`detect_at(&[Probe])` takes
+  other addresses, `default_probes()` gives the two defaults). Ollama: `/api/tags` for the list, `/api/show` per model
+  for the context length. LM Studio: `/api/v0/models`, keeping `llm` and `vlm` and dropping `embeddings`. Each
+  server says `Running` or `Unreadable` (something answers, but not with a list we can read); a server that is not
+  there is left out, so neither being installed is an empty list, not an error. Connecting gives up after 300 ms and a
+  server gets 2 s in all; the servers are asked at the same time. No retries, no logging, and no error carries a
+  model name. `LocalServer::api_base` is the `/v1` root the apps send their chat requests to; the engine does not
+  make those requests. New dependency of the client crate: `reqwest` (blocking, rustls, the workspace's).
 - Known: on a Mac, several helpers starting at the same moment can make one die with SIGBUS inside Apple's Metal
   shader cache (not engine code). An app's client must restart a helper that dies at startup.
 - Catalog: one catalog for every kind of model (speech, voice detection, speaker separation, search, local AI).

@@ -11,6 +11,7 @@ mod error;
 mod gpu_memory;
 mod llm;
 mod process;
+pub mod servers;
 mod stt;
 
 pub use error::EngineError;

@@ -2233,6 +2233,7 @@ name = "voice-engine-client"
 version = "0.1.0"
 dependencies = [
  "dirs",
+ "reqwest",
  "serde_json",
  "tempfile",
  "voice-engine-models",

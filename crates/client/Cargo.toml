@@ -25,6 +25,8 @@ test = false
 [dependencies]
 voice-engine-protocol.workspace = true
 serde_json.workspace = true
+# servers.rs: short blocking requests to Ollama and LM Studio on this computer.
+reqwest.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

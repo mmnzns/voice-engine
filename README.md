@@ -38,6 +38,18 @@ call `load`, `complete`, `embed`, `inspect`, `unload`, `set_idle` and `cancel` f
 `EngineError`, never on text. Each result says which backend ran it and whether the graphics card failed during the
 call (`fell_back`): show "Graphics card failed, used processor" once, then keep passing the same config.
 
+## Local AI servers
+
+`voice_engine_client::servers::detect()` says which local AI servers are running on this computer: Ollama (port 11434)
+and LM Studio (port 1234). Each one comes with its models (`id`, `context_length`, `size_bytes`, each `None` when the
+server does not say) and `api_base`, the OpenAI-compatible `/v1` root. The apps keep making the chat requests to
+those servers themselves; the engine only finds them and lists the models. A server that is not running is left out,
+so nothing installed is an empty list. A server that answers with something we cannot read (an error status, not
+JSON, no answer in time) is reported as `ServerState::Unreadable` with no models. It is quick enough for a settings
+screen (connecting gives up after 300 ms, a server gets 2 s in all, the two are asked at the same time, no retries)
+and it blocks, so call it from a worker thread. `detect_at(&[Probe])` looks at other addresses. Try it with
+`cargo run -p voice-engine-client --example servers`.
+
 ## Speech
 
 `voice-engine-stt` loads one speech model and turns audio (16 kHz mono `f32`) into a `Transcript`: segments, each with
