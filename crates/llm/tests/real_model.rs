@@ -1,0 +1,242 @@
+//! The helper with a real model. Ignored by default (CI has no model); run on the Mac before a tag:
+//!   VOICE_ENGINE_TEST_LLM=".../qwen3.5-4b/Qwen3.5-4B-Q4_K_M.gguf" cargo test -p voice-engine-llm --release \
+//!     --test real_model -- --ignored --test-threads=1
+
+use std::io::{BufRead, BufReader, Write};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use voice_engine_protocol::{ErrorKind, Event, decode_event};
+
+struct Helper {
+    child: Child,
+    /// None once `stderr` has closed it.
+    stdin: Option<ChildStdin>,
+    out: BufReader<std::process::ChildStdout>,
+}
+
+impl Helper {
+    fn start() -> Self {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_voice-engine-llm"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take();
+        let out = BufReader::new(child.stdout.take().unwrap());
+        Helper { child, stdin, out }
+    }
+
+    /// Everything the helper wrote to stderr: closes stdin so the helper exits, then reads to the end (call last).
+    fn stderr(&mut self) -> String {
+        drop(self.stdin.take());
+        let mut err = String::new();
+        if let Some(mut e) = self.child.stderr.take() {
+            use std::io::Read;
+            let _ = e.read_to_string(&mut err);
+        }
+        let _ = self.child.wait();
+        err
+    }
+
+    fn send(&mut self, request: &serde_json::Value) {
+        writeln!(self.stdin.as_mut().expect("stdin still open"), "{request}").unwrap();
+    }
+
+    /// The next event that isn't progress.
+    fn answer(&mut self) -> Event {
+        loop {
+            let mut line = String::new();
+            self.out.read_line(&mut line).unwrap();
+            let ev = decode_event(&line).unwrap_or_else(|e| panic!("{e}: {line}"));
+            if !matches!(ev, Event::Progress { .. }) {
+                return ev;
+            }
+        }
+    }
+}
+
+impl Drop for Helper {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+    }
+}
+
+fn model() -> String {
+    std::env::var("VOICE_ENGINE_TEST_LLM").expect("set VOICE_ENGINE_TEST_LLM to a Qwen 3.5 GGUF")
+}
+
+fn complete(user: &str, extra: serde_json::Value) -> serde_json::Value {
+    let mut r = serde_json::json!({
+        "op": "complete", "model_path": model(), "n_ctx": 8192,
+        "system": "You clean up dictated text: fix punctuation and remove filler words. Reply with the cleaned text only.",
+        "user": user, "max_tokens": 200, "temperature": 0.0
+    });
+    r.as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    r
+}
+
+fn done(ev: Event) -> voice_engine_protocol::Reply {
+    match ev {
+        Event::Done(r) => r,
+        other => panic!("expected done, got {other:?}"),
+    }
+}
+
+const DICTATION: &str =
+    "um so I think we should uh move the meeting to thursday because like friday is full";
+
+#[test]
+#[ignore]
+fn thinking_off_answers_straight_away_and_logs_no_user_text() {
+    let mut h = Helper::start();
+    h.send(&complete(DICTATION, serde_json::json!({})));
+    let r = done(h.answer());
+    assert!(
+        !r.text.contains("<think>") && !r.text.contains("</think>"),
+        "{r:?}"
+    );
+    assert_eq!(
+        (r.thinking_tokens, r.thinking_text.is_none()),
+        (0, true),
+        "{r:?}"
+    );
+    assert!(r.text.to_lowercase().contains("thursday"), "{r:?}");
+    let err = h.stderr();
+    assert!(
+        !err.contains("thursday") && !err.contains("friday"),
+        "stderr leaks the prompt: {err}"
+    );
+}
+
+#[test]
+#[ignore]
+fn unload_then_complete_loads_again() {
+    let mut h = Helper::start();
+    h.send(&serde_json::json!({"op": "load", "model_path": model(), "n_ctx": 8192}));
+    assert!(matches!(h.answer(), Event::Loaded { .. }));
+    h.send(&serde_json::json!({"op": "unload"}));
+    assert_eq!(h.answer(), Event::Unloaded);
+    h.send(&complete(DICTATION, serde_json::json!({})));
+    assert!(
+        done(h.answer()).load_seconds > 0.0,
+        "the model was freed, so it loads again"
+    );
+}
+
+#[test]
+#[ignore]
+fn thinking_on_is_counted_apart_and_kept_within_its_budget() {
+    let mut h = Helper::start();
+    h.send(&complete(
+        DICTATION,
+        serde_json::json!({"thinking": true, "thinking_budget": 64}),
+    ));
+    let r = done(h.answer());
+    assert!(
+        r.thinking_tokens > 0 && r.thinking_tokens <= 64 + 8,
+        "{r:?}"
+    );
+    assert!(
+        r.thinking_text.as_deref().is_some_and(|t| !t.is_empty()),
+        "{r:?}"
+    );
+    assert!(
+        !r.text.contains("think>") && !r.text.trim().is_empty(),
+        "{r:?}"
+    );
+}
+
+#[test]
+#[ignore]
+fn the_same_request_gives_the_same_reply() {
+    let mut h = Helper::start();
+    for extra in [
+        serde_json::json!({}),
+        serde_json::json!({"temperature": 0.7, "seed": 42}),
+    ] {
+        h.send(&complete(DICTATION, extra.clone()));
+        let a = done(h.answer()).text;
+        h.send(&complete(DICTATION, extra));
+        let b = done(h.answer()).text;
+        assert_eq!(a, b);
+    }
+}
+
+#[test]
+#[ignore]
+fn load_then_complete_does_not_load_again() {
+    let mut h = Helper::start();
+    h.send(&serde_json::json!({"op": "load", "model_path": model(), "n_ctx": 8192}));
+    let Event::Loaded {
+        seconds,
+        n_ctx_train,
+        ..
+    } = h.answer()
+    else {
+        panic!()
+    };
+    assert!(seconds > 0.0 && n_ctx_train >= 8192);
+    h.send(&complete(DICTATION, serde_json::json!({})));
+    assert_eq!(done(h.answer()).load_seconds, 0.0);
+}
+
+#[test]
+#[ignore]
+fn cancel_stops_the_reply_and_keeps_the_model() {
+    let mut h = Helper::start();
+    h.send(&complete(
+        "Write a 600-word story about a lighthouse.",
+        serde_json::json!({"max_tokens": 1500, "system": "You are a writer."}),
+    ));
+    // Wait until it is writing, then stop it.
+    loop {
+        let mut line = String::new();
+        h.out.read_line(&mut line).unwrap();
+        if line.contains(r#""phase":"writing""#) {
+            break;
+        }
+    }
+    h.send(&serde_json::json!({"op": "cancel"}));
+    let Event::Error { error, .. } = h.answer() else {
+        panic!("expected the cancelled error")
+    };
+    assert_eq!(error, ErrorKind::Cancelled);
+    h.send(&complete(DICTATION, serde_json::json!({})));
+    assert_eq!(
+        done(h.answer()).load_seconds,
+        0.0,
+        "the model stayed loaded"
+    );
+}
+
+#[test]
+#[ignore]
+fn every_app_schema_gives_a_reply_with_its_required_keys() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/schemas");
+    let mut h = Helper::start();
+    for entry in std::fs::read_dir(&dir).unwrap() {
+        let path = entry.unwrap().path();
+        let schema = std::fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&schema).unwrap();
+        h.send(&complete(
+            "A candidate said: 'I led a team of five to ship the billing redesign two weeks early, cutting support tickets by 30%.' Fill in the reply for this.",
+            serde_json::json!({
+                "system": "Reply with JSON only, matching the schema.",
+                "json_schema": schema, "max_tokens": 1500
+            }),
+        ));
+        let r = done(h.answer());
+        let reply: serde_json::Value = serde_json::from_str(&r.text)
+            .unwrap_or_else(|e| panic!("{}: not JSON ({e}): {}", path.display(), r.text));
+        for key in parsed["required"].as_array().into_iter().flatten() {
+            assert!(
+                reply.get(key.as_str().unwrap()).is_some(),
+                "{}: missing {key} in {}",
+                path.display(),
+                r.text
+            );
+        }
+    }
+}
