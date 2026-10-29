@@ -1,6 +1,6 @@
 [package]
 name = "voice-engine-stt"
-description = "Whisper chunk transcription, shared by an app (processor) and its Windows GPU helper"
+description = "Speech to text: Whisper in process (Metal on the Mac) and in the Windows GPU helper"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -17,12 +17,20 @@ path = "src/main.rs"
 
 [dependencies]
 voice-engine-protocol.workspace = true
+# ModelInfo and Kind only. This crate never depends on voice-engine-llm (no llama.cpp: tests/no_llama.rs, Task 6).
+voice-engine-models.workspace = true
 serde_json.workspace = true
 # raw-api: ggml's device list (whisper_rs::whisper_rs_sys), to choose the GPU.
 whisper-rs = { version = "0.16.0", features = ["raw-api"] }
 
+# Metal on the Mac, in process. Cargo unifies the features with the entry above.
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "0.16.0", features = ["metal"] }
+
 [dev-dependencies]
 tempfile.workspace = true
+# The real-model tests find the default model folder (~/Library/Application Support/Talaan/models).
+dirs.workspace = true
 
 [features]
 # Windows GPU build: needs the Vulkan SDK (VULKAN_SDK) to build and vulkan-1.dll to run. Never linked into an app's

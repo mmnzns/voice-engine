@@ -1,8 +1,25 @@
-//! Whisper, the same way everywhere: an app's in-process engine (processor on Windows, Metal on the Mac) and the
-//! Windows GPU helper ([`run_helper`]) both transcribe a chunk with `transcribe` below, so a GPU transcript differs
-//! from a processor one only by what the hardware computes.
+//! Speech to text.
+//!
+//! * [`load`] and the [`Transcriber`] trait (`api`): one loaded model, audio in, timed segments and words out,
+//!   with `Timing::Segments` (Talaan's settings) or `Timing::Words` (Ensayo's). Whisper runs in process
+//!   ([`whisper_engine`]: Metal on the Mac, Vulkan with the `vulkan` feature, else the processor); the thread rule
+//!   is in [`threads`].
+//! * [`run_helper`]: the Windows GPU helper, which still speaks the v0.1.0 protocol and transcribes a chunk with
+//!   `transcribe` below, the same Whisper the apps run in process (it moves onto the new API with `SttClient`).
+//!
+//! This crate never depends on `voice-engine-llm`: no llama.cpp is linked next to whisper.cpp, so an app can use
+//! it in process (no duplicate ggml symbols).
 
+mod api;
 mod helper;
+pub mod threads;
+pub mod whisper_engine;
+pub mod words;
+
+pub use api::{
+    ChunkOptions, LoadOptions, Segment, SpeechBackend, SpeechError, Timing, Transcriber,
+    Transcript, Word, load,
+};
 pub use helper::run_helper;
 
 use std::ffi::CStr;
@@ -23,7 +40,8 @@ pub fn is_noise(text: &str) -> bool {
         || t.chars().all(|c| !c.is_alphanumeric())
 }
 
-/// Speech threads on this computer.
+/// Speech threads on this computer, by the v0.1.0 rule the helper still uses. The engine's rule is
+/// [`threads::default_threads`]; this goes when the helper moves onto the new API.
 pub fn threads() -> usize {
     thread_count(
         std::thread::available_parallelism()

@@ -1459,8 +1459,10 @@ dependencies = [
 name = "voice-engine-stt"
 version = "0.1.0"
 dependencies = [
+ "dirs",
  "serde_json",
  "tempfile",
+ "voice-engine-models",
  "voice-engine-protocol",
  "whisper-rs",
 ]
