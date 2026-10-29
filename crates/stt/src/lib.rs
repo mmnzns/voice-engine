@@ -10,8 +10,11 @@
 //! * [`diarize::load`] and [`diarize::Diarizer::run`]: who is talking, every 10 ms, for up to 8 speakers (NVIDIA's
 //!   Nemotron 3 Diarization through parakeet-rs's `sortformer`, always on the processor, on the ONNX thread rule).
 //!   Naming speakers and turning frames into turns is the app's.
-//! * [`run_helper`]: the Windows GPU helper, which still speaks the v0.1.0 protocol and transcribes a chunk with
-//!   `transcribe` below, the same Whisper the apps run in process (it moves onto the new API with `SttClient`).
+//! * [`run_helper`]: the speech helper (Windows Vulkan, and a process fallback on any system), protocol 2
+//!   (`voice_engine_protocol::stt`), driven by `voice_engine_client::SttClient`. It loads a Whisper model on `load`,
+//!   keeps it for every `transcribe`, frees it on `unload`, and returns the same [`Transcript`] as [`load`]. It serves
+//!   Whisper only: the ONNX models (Parakeet, Parakeet Unified, Nemotron) run in the app's own process through
+//!   [`load`], and a helper `load` of one of them is answered with `unsupported`.
 //! * This crate never depends on `voice-engine-llm`: no llama.cpp is linked next to whisper.cpp, so an app can use
 //!   it in process (no duplicate ggml symbols).
 //!
@@ -50,7 +53,6 @@ pub use helper::run_helper;
 
 use std::ffi::CStr;
 use voice_engine_protocol::gpu::{Device, DeviceKind, bytes_to_mb};
-use voice_engine_protocol::stt::SttPiece;
 use whisper_rs::whisper_rs_sys as sys;
 
 /// Text that engines produce for non-speech ("[BLANK_AUDIO]", "(music)", "*laughs*") or nothing at all.
@@ -66,35 +68,23 @@ pub fn is_noise(text: &str) -> bool {
         || t.chars().all(|c| !c.is_alphanumeric())
 }
 
-/// Speech threads on this computer, by the v0.1.0 rule the helper still uses. The engine's rule is
-/// [`threads::default_threads`]; this goes when the helper moves onto the new API.
-pub fn threads() -> usize {
-    thread_count(
-        std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4),
-        cfg!(windows),
-    )
+/// One piece of text with its time, relative to the chunk, as Talaan's own chunk function returns it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Piece {
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub text: String,
 }
 
-/// Mac: all cores, 2..=8 (the original formula). Windows: three quarters of the logical cores, 2..=12. Measured on a
-/// 16-thread Ryzen: 12 threads is fastest and 16 is 2-3x slower.
-pub fn thread_count(logical: usize, windows: bool) -> usize {
-    if windows {
-        (logical * 3 / 4).clamp(2, 12)
-    } else {
-        logical.clamp(2, 8)
-    }
-}
-
-/// Transcribes one chunk (16 kHz mono) with a loaded state. Pieces are relative to the chunk; the language is
-/// what Whisper detected (or was told).
+/// Talaan's own chunk function (16 kHz mono, a loaded state, Whisper's settings as Talaan has them), kept as the
+/// reference that `Timing::Segments` is tested against (`tests/real_whisper.rs`). The engines and the helper use
+/// [`load`], not this. Pieces are relative to the chunk; the language is what Whisper detected (or was told).
 pub fn transcribe(
     state: &mut whisper_rs::WhisperState,
     samples: &[f32],
     language: Option<&str>,
     n_threads: usize,
-) -> Result<(Vec<SttPiece>, Option<String>), String> {
+) -> Result<(Vec<Piece>, Option<String>), String> {
     let mut params =
         whisper_rs::FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 1 });
     params.set_n_threads(n_threads as i32);
@@ -133,7 +123,7 @@ pub fn transcribe(
         let end_ms = ((seg.end_timestamp().max(0) * 10) as u64)
             .min(samples.len() as u64 * 1000 / 16_000)
             .max(start_ms);
-        pieces.push(SttPiece {
+        pieces.push(Piece {
             start_ms,
             end_ms,
             text,
@@ -196,20 +186,6 @@ pub fn devices() -> Vec<Device> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn windows_thread_count_is_three_quarters_clamped() {
-        for (logical, want) in [(16, 12), (8, 6), (4, 3), (2, 2), (1, 2), (32, 12)] {
-            assert_eq!(thread_count(logical, true), want, "{logical} cores");
-        }
-    }
-
-    #[test]
-    fn mac_thread_count_is_all_cores_clamped() {
-        for (logical, want) in [(16, 8), (10, 8), (8, 8), (4, 4), (2, 2), (1, 2)] {
-            assert_eq!(thread_count(logical, false), want, "{logical} cores");
-        }
-    }
 
     #[test]
     fn noise_markers_are_not_speech() {

@@ -1,8 +1,8 @@
 //! Messages between an app and its local AI helper (a CPU build, and on Windows a Vulkan GPU build). One JSON
 //! object per line on stdin (requests) and stdout (events). The helper runs one request at a time.
 //!
-//! Also here, because both GPU helpers need them: the Whisper helper's protocol (`stt`) and the device policy
-//! (`gpu`), which are pure so they can be tested without a GPU.
+//! Also here, because both GPU helpers need them: the speech helper's protocol (`stt`, also protocol 2) and the device
+//! policy (`gpu`), which are pure so they can be tested without a GPU.
 
 use serde::{Deserialize, Serialize};
 
@@ -15,7 +15,8 @@ pub use gpu::{Device, DeviceKind};
 
 /// Bumped whenever a message changes shape. Each helper sends it in `Ready`; the app compares it with its own and
 /// reports a mismatch (a helper and an app from different builds) instead of failing later. 0 = a helper from before
-/// the engine existed. 2 = configure, load, unload, cancel, inspect, thinking, seed, error kinds.
+/// the engine existed. 2 = configure, load, unload, cancel, inspect, thinking, seed, error kinds; and the speech helper's new messages
+/// (`stt`: load a model by id, transcribe with options, timed segments and words, error kinds).
 pub const PROTOCOL_VERSION: u32 = 2;
 
 /// A JSON object with any keys: the grammar that keeps a reply parseable when the caller has no schema of its own.

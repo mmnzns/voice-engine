@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 use voice_engine_client::__testing::*;
+use voice_engine_protocol::stt::{SttEvent, SttRequest};
 use voice_engine_protocol::{Backend, Event, Request};
 
 fn fake() -> PathBuf {
@@ -87,4 +88,37 @@ fn the_stderr_tail_recognises_an_out_of_memory_death() {
     }
     assert!(p.died_of_memory());
     p.kill();
+}
+
+// --- the speech helper's process (the same type with the speech messages) ---------------------------------------------
+
+fn fake_stt() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_fake-stt-helper"))
+}
+
+#[test]
+fn a_working_speech_helper_answers_the_ping_with_its_backend_and_then_its_requests() {
+    let _t = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut p, backend) =
+        SttProcess::start(&fake_stt(), &env(""), Duration::from_secs(20)).unwrap();
+    assert_eq!(backend, Backend::cpu());
+    p.send(&SttRequest::Unload).unwrap();
+    assert!(matches!(
+        p.recv(Duration::from_secs(5)),
+        Recv::Event(SttEvent::Unloaded)
+    ));
+    p.kill();
+}
+
+#[test]
+fn a_speech_helper_from_another_protocol_version_is_refused_and_one_that_dies_is_a_startup_death() {
+    let _t = TURN.lock().unwrap_or_else(|e| e.into_inner());
+    let e = SttProcess::start(&fake_stt(), &env("wrong_protocol"), Duration::from_secs(20))
+        .err()
+        .unwrap();
+    assert_eq!(e, StartFailure::VersionMismatch { helper: 1 });
+    let e = SttProcess::start(&fake_stt(), &env("die_at_start"), Duration::from_secs(20))
+        .err()
+        .unwrap();
+    assert_eq!(e, StartFailure::Died);
 }

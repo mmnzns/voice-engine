@@ -22,6 +22,26 @@
   processor helper does the work, the result says `fell_back`, and the failure is remembered in a file per build and
   driver until `clear_gpu_failure`. Limits (start, stall, total) are checked on every pass, so a helper that keeps
   streaming progress is still stopped.
+- stt helper on the Transcript API, protocol 2, **breaking for anyone who had adopted the v0.1.0 speech messages**
+  (nobody had): `load { model_id, model_dir, kind, gpu, threads }` (the catalog says which file in the folder is the
+  model), `transcribe { audio_b64, options }` (language, timing, keep_fillers, vocabulary), `unload`, `ping`,
+  `cancel`, `devices`; answers `loaded { seconds, backend }`, `transcribed { transcript, backend }` (segments with
+  their words, language, `stopped_early_at_ms`; `backend` has `fell_back`), `unloaded`, and `error { error: { kind } }`
+  with the speech kinds (`model_missing` with the path, `bad_model`, `out_of_memory`, `too_long` with `max_secs`,
+  `unsupported`, `gpu_failed` with `fell_back`, `cancelled`, `bad_request`, `internal`). The v0.1.0 `load
+  { model_path }`, `transcribe { samples, language }` and `transcribed { pieces }` are no longer read. `ChunkOptions`,
+  `Transcript`, `Segment`, `Word`, `Timing` and `SpeechBackend` are defined in the protocol crate and re-exported by
+  `voice-engine-stt`, so the in-process engines, the helper and the client share them. The helper serves Whisper
+  only (the ONNX models run in the app's process). Audio is base64 of little-endian f32, as in v0.1.0 (about 2.5 MB
+  for 30 s). The helper keeps its model between calls and exits when stdin closes. `voice_engine_stt::threads()` and
+  `thread_count` (v0.1.0's formulas) are gone; `transcribe` stays only as the reference Talaan's settings are tested
+  against.
+- client: `SttClient` (`SttConfig`, `load`, `transcribe`, `unload`, `cancel`, `shutdown`), built like `LlmClient`:
+  startup retried 3 times, protocol check, graphics card helper first with the remembered fallback (`fell_back`),
+  limits checked on every pass. It remembers the loaded model and loads it into any helper it starts again (after a
+  crash, a kill, a card fallback), so a crash costs the app one `Crashed` and nothing else. `EngineError` gains
+  `BadModel`, `TooLong { max_secs }` and `Unsupported { detail }`. Cancel: the helper cannot interrupt a Whisper
+  decode, so a cancel ends the call after the 2 s grace by stopping the helper.
 - Known: on a Mac, several helpers starting at the same moment can make one die with SIGBUS inside Apple's Metal
   shader cache (not engine code). An app's client must restart a helper that dies at startup.
 - Catalog: one catalog for every kind of model (speech, voice detection, speaker separation, search, local AI).

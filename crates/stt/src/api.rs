@@ -33,74 +33,11 @@ pub struct LoadOptions {
     pub threads: Option<usize>,
 }
 
-/// What to do with one piece of audio.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ChunkOptions {
-    /// A hint ("fr"); `None` lets the model detect the language.
-    pub language: Option<String>,
-    pub timing: Timing,
-    /// Ask the model to keep "um", "uh" and "like" (Whisper: a short prompt of fillers; the ONNX models transcribe
-    /// them as heard and ignore this).
-    pub keep_fillers: bool,
-    /// The app's custom words, spelled as the person wants them (Whisper's initial prompt).
-    pub vocabulary: Vec<String>,
-}
-
-impl Default for ChunkOptions {
-    fn default() -> Self {
-        ChunkOptions {
-            language: None,
-            timing: Timing::Words,
-            keep_fillers: false,
-            vocabulary: vec![],
-        }
-    }
-}
-
-/// Which settings the model decodes with. Every result carries both segments and words, in either mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Timing {
-    /// Talaan's settings: the segments the model produced; the words are derived from the token times.
-    Segments,
-    /// Ensayo's settings: token timestamps, one word per segment.
-    Words,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Transcript {
-    /// What the model produced, in order, each with its words.
-    pub segments: Vec<Segment>,
-    /// The language the model settled on.
-    pub language: Option<String>,
-    /// Decoding stopped with 2 s or more of audio left after this point (the engine resumed from here).
-    pub stopped_early_at_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Segment {
-    pub start_ms: u64,
-    pub end_ms: u64,
-    pub text: String,
-    pub words: Vec<Word>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Word {
-    pub text: String,
-    pub start_ms: u64,
-    pub end_ms: u64,
-}
-
-/// Where a model runs.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SpeechBackend {
-    /// `metal`, `vulkan`, `directml` or `cpu`.
-    pub backend: String,
-    /// The GPU's name when known; `None` on the processor.
-    pub device: Option<String>,
-    /// The app asked for the GPU (`gpu: true`) and the model runs on the processor instead.
-    pub fell_back: bool,
-}
+// The transcript types are defined in the protocol crate (the speech helper's messages carry them), so the
+// in-process engines, the helper and `SttClient` all return the same types.
+pub use voice_engine_protocol::stt::{
+    ChunkOptions, Segment, SpeechBackend, Timing, Transcript, Word,
+};
 
 /// A loaded speech model. `Send`, so an app can keep it behind a mutex or move it to a worker thread.
 pub trait Transcriber: Send {

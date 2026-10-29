@@ -1,0 +1,538 @@
+//! `SttClient` against the fake speech helper (src/bin/fake_stt_helper.rs).
+
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+use voice_engine_client::{EngineError, Limits, SttClient, SttConfig};
+use voice_engine_protocol::stt::{ChunkOptions, SttLoad, SttModelKind, Timing};
+
+/// Helpers that start at the same moment can crash on a Mac (see CHANGELOG), so the tests take turns.
+static TURN: Mutex<()> = Mutex::new(());
+
+fn turn() -> std::sync::MutexGuard<'static, ()> {
+    TURN.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+fn fake() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_fake-stt-helper"))
+}
+
+fn config(mode: &str, state: &Path) -> SttConfig {
+    SttConfig {
+        cpu_helper: fake(),
+        gpu_helper: None,
+        env: vec![
+            ("FAKE_MODE".into(), mode.into()),
+            ("FAKE_STATE".into(), state.display().to_string()),
+        ],
+        gpu_env: vec![],
+        gpu_failures: None,
+        gpu_key: "test-build".into(),
+        limits: Limits {
+            start: Duration::from_secs(20),
+            stall: Duration::from_millis(600),
+            total: Duration::from_secs(30),
+        },
+    }
+}
+
+fn model(id: &str) -> SttLoad {
+    SttLoad {
+        model_id: id.into(),
+        model_dir: format!("/models/{id}"),
+        kind: SttModelKind::Whisper,
+        gpu: true,
+        threads: None,
+    }
+}
+
+fn state() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state");
+    (dir, path)
+}
+
+fn audio() -> Vec<f32> {
+    vec![0.25; 16_000]
+}
+
+fn opts() -> ChunkOptions {
+    ChunkOptions::default()
+}
+
+#[test]
+fn a_model_is_loaded_and_audio_comes_back_as_a_transcript_with_the_backend() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = SttClient::new(config("", &st));
+    let loaded = client.load(model("whisper-turbo")).unwrap();
+    assert_eq!(loaded.value.seconds, 0.5);
+    assert_eq!(loaded.backend.backend, "cpu");
+    assert!(!loaded.fell_back);
+
+    let options = ChunkOptions {
+        language: Some("fr".into()),
+        timing: Timing::Segments,
+        keep_fillers: true,
+        vocabulary: vec!["Talaan".into(), "Ensayo".into()],
+    };
+    let out = client.transcribe(&audio(), &options).unwrap();
+    let t = &out.value;
+    // The fake echoes what it received: the options and the audio arrived intact, for the model that was loaded.
+    assert_eq!(t.segments[0].text, "segments vocab=2 lang=fr");
+    assert_eq!(t.segments[0].words.len(), 3);
+    assert_eq!(t.language.as_deref(), Some("whisper-turbo"));
+    assert_eq!(t.stopped_early_at_ms, Some(16_000));
+    assert_eq!(out.backend.backend, "cpu");
+    assert!(!out.fell_back);
+    // It stays loaded between calls: a second call needs no load.
+    let again = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(again.value.segments[0].text, "words vocab=0 lang=none");
+    client.shutdown();
+}
+
+#[test]
+fn transcribing_with_no_model_loaded_is_a_bad_request_and_starts_no_helper() {
+    let _t = turn();
+    let (_d, st) = state();
+    // A helper that cannot start would say CouldNotStart if one were started.
+    let client = SttClient::new(config("die_at_start", &st));
+    assert_eq!(
+        client.transcribe(&audio(), &opts()).unwrap_err(),
+        EngineError::BadRequest
+    );
+}
+
+#[test]
+fn unload_frees_the_model_and_a_transcribe_after_it_is_a_bad_request_until_the_next_load() {
+    let _t = turn();
+    let (_d, st) = state();
+    // Unload with no helper running has nothing to free and must not start one.
+    SttClient::new(config("die_at_start", &st))
+        .unload()
+        .unwrap();
+
+    let client = SttClient::new(config("", &st));
+    client.load(model("whisper-base")).unwrap();
+    assert!(client.transcribe(&audio(), &opts()).is_ok());
+    client.unload().unwrap();
+    assert_eq!(
+        client.transcribe(&audio(), &opts()).unwrap_err(),
+        EngineError::BadRequest
+    );
+    // The app loads again when it wants to transcribe again.
+    client.load(model("whisper-small")).unwrap();
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(out.value.language.as_deref(), Some("whisper-small"));
+    client.shutdown();
+}
+
+#[test]
+fn loading_another_model_replaces_the_first_and_a_failed_load_leaves_none() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = SttClient::new(config("", &st));
+    client.load(model("whisper-base")).unwrap();
+    client.load(model("whisper-small")).unwrap();
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(out.value.language.as_deref(), Some("whisper-small"));
+    client.shutdown();
+
+    let client = SttClient::new(config("missing", &st));
+    let e = client.load(model("whisper-base")).unwrap_err();
+    assert_eq!(
+        e,
+        EngineError::ModelMissing {
+            path: "/models/whisper-base/model.bin".into()
+        }
+    );
+    assert_eq!(
+        client.transcribe(&audio(), &opts()).unwrap_err(),
+        EngineError::BadRequest
+    );
+}
+
+#[test]
+fn a_helper_that_dies_mid_call_is_a_crash_and_the_next_call_starts_a_new_one_with_the_model_loaded_again()
+ {
+    let _t = turn();
+    let (_d, st) = state();
+    // The first transcribe of the first helper dies; the next helper works.
+    let client = SttClient::new(config("die_on_first_transcribe", &st));
+    client.load(model("whisper-turbo")).unwrap();
+    let e = client.transcribe(&audio(), &opts()).unwrap_err();
+    assert_eq!(e, EngineError::Crashed);
+    // The app does not load again: the client puts the remembered model into the new helper.
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(out.value.language.as_deref(), Some("whisper-turbo"));
+    client.shutdown();
+
+    // A helper that always dies on transcribe: Crashed every time, and load still works (a fresh helper each time).
+    let client = SttClient::new(config("die_on_transcribe", &st));
+    client.load(model("whisper-turbo")).unwrap();
+    assert_eq!(
+        client.transcribe(&audio(), &opts()).unwrap_err(),
+        EngineError::Crashed
+    );
+    assert!(client.load(model("whisper-turbo")).is_ok());
+}
+
+#[test]
+fn a_helper_that_died_while_idle_is_replaced_and_given_the_model_again_without_an_error() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = SttClient::new(config("exit_after_first_answer", &st));
+    client.load(model("whisper-turbo")).unwrap();
+    assert!(client.transcribe(&audio(), &opts()).is_ok());
+    // The helper exits right after its first answer. Nobody was waiting on it, so the next call is not an error.
+    std::thread::sleep(Duration::from_millis(400));
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(out.value.language.as_deref(), Some("whisper-turbo"));
+    assert_eq!(
+        starts(&st),
+        2,
+        "one start for the first helper, one replacement"
+    );
+    client.shutdown();
+}
+
+#[test]
+fn unload_does_not_start_a_helper_to_free_a_model_that_died_with_the_last_one() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = SttClient::new(config("exit_after_first_answer", &st));
+    client.load(model("whisper-turbo")).unwrap();
+    assert!(client.transcribe(&audio(), &opts()).is_ok());
+    std::thread::sleep(Duration::from_millis(400)); // the helper exits after that answer
+    client.unload().unwrap();
+    assert_eq!(starts(&st), 1, "no second helper just to unload");
+    // And the model is forgotten: nothing to transcribe with until the next load.
+    assert_eq!(
+        client.transcribe(&audio(), &opts()).unwrap_err(),
+        EngineError::BadRequest
+    );
+    assert_eq!(starts(&st), 1);
+}
+
+/// How many helpers `exit_after_first_answer` has seen start.
+fn starts(state: &Path) -> u32 {
+    std::fs::read_to_string(state)
+        .ok()
+        .and_then(|t| t.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+#[test]
+fn a_helper_from_another_protocol_version_is_a_version_mismatch() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = SttClient::new(config("wrong_protocol", &st));
+    let e = client.load(model("whisper-turbo")).unwrap_err();
+    assert_eq!(e, EngineError::VersionMismatch { helper: 1, app: 2 });
+}
+
+#[test]
+fn a_helper_that_dies_at_startup_is_started_again_up_to_three_times() {
+    let _t = turn();
+    let (_d, st) = state();
+    // The first two starts die without a word (the Metal shader cache crash); the third works.
+    let client = SttClient::new(config("die_at_start_twice", &st));
+    assert!(client.load(model("whisper-turbo")).is_ok());
+    client.shutdown();
+
+    let (_d2, st2) = state();
+    let client = SttClient::new(config("die_at_start", &st2));
+    let e = client.load(model("whisper-turbo")).unwrap_err();
+    assert!(matches!(e, EngineError::CouldNotStart { .. }), "{e:?}");
+}
+
+#[test]
+fn an_out_of_memory_death_is_reported_as_out_of_memory() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = SttClient::new(config("oom", &st));
+    client.load(model("whisper-large-v3")).unwrap();
+    assert_eq!(
+        client.transcribe(&audio(), &opts()).unwrap_err(),
+        EngineError::OutOfMemory
+    );
+}
+
+#[test]
+fn the_helpers_own_errors_come_back_as_their_kinds() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = SttClient::new(config("too_long", &st));
+    client.load(model("whisper-turbo")).unwrap();
+    assert_eq!(
+        client.transcribe(&audio(), &opts()).unwrap_err(),
+        EngineError::TooLong { max_secs: 40 }
+    );
+    // The helper stays up after an error: another call is answered (by the same kind, here).
+    assert_eq!(
+        client.transcribe(&audio(), &opts()).unwrap_err(),
+        EngineError::TooLong { max_secs: 40 }
+    );
+}
+
+#[test]
+fn a_helper_that_says_nothing_is_stopped_at_the_stall_limit() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = SttClient::new(config("stall", &st));
+    client.load(model("whisper-turbo")).unwrap();
+    let began = Instant::now();
+    let e = client.transcribe(&audio(), &opts()).unwrap_err();
+    assert_eq!(e, EngineError::TimedOut);
+    assert!(began.elapsed() < Duration::from_secs(10));
+}
+
+#[test]
+fn a_load_that_takes_longer_than_the_stall_limit_is_a_timeout_too() {
+    let _t = turn();
+    let (_d, st) = state();
+    // The fake needs 700 ms to load and the stall limit is 600 ms.
+    let client = SttClient::new(config("slow_load", &st));
+    let e = client.load(model("whisper-turbo")).unwrap_err();
+    assert_eq!(e, EngineError::TimedOut);
+}
+
+#[test]
+fn a_helper_that_keeps_streaming_still_hits_the_total_limit() {
+    let _t = turn();
+    let (_d, st) = state();
+    let mut cfg = config("chatter", &st);
+    // It writes an event every 50 ms forever, so the stall limit never trips; only the total limit can stop it.
+    cfg.limits.total = Duration::from_millis(700);
+    let client = SttClient::new(cfg);
+    client.load(model("whisper-turbo")).unwrap();
+    let began = Instant::now();
+    let e = client.transcribe(&audio(), &opts()).unwrap_err();
+    assert_eq!(e, EngineError::TimedOut);
+    assert!(began.elapsed() < Duration::from_secs(8));
+}
+
+#[test]
+fn a_helper_that_keeps_streaming_is_not_a_stall_so_without_a_total_limit_it_runs_on_until_cancelled()
+ {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = SttClient::new(config("chatter", &st));
+    client.load(model("whisper-turbo")).unwrap();
+    let began = Instant::now();
+    let result = std::thread::scope(|s| {
+        let worker = s.spawn(|| client.transcribe(&audio(), &opts()));
+        // Far past the 600 ms stall limit: events keep arriving, so it is not a stall.
+        std::thread::sleep(Duration::from_millis(1500));
+        client.cancel();
+        worker.join().unwrap()
+    });
+    // It ignores `cancel`, so the client stops it after the grace period, still answering Cancelled.
+    assert_eq!(result.unwrap_err(), EngineError::Cancelled);
+    assert!(
+        began.elapsed() >= Duration::from_millis(3000),
+        "{:?}",
+        began.elapsed()
+    );
+    assert!(began.elapsed() < Duration::from_secs(10));
+}
+
+fn with_gpu(mut cfg: SttConfig, gpu_mode: &str, failures: &Path) -> SttConfig {
+    cfg.gpu_helper = Some(fake());
+    cfg.gpu_env = vec![("FAKE_MODE".into(), gpu_mode.into())];
+    cfg.gpu_failures = Some(failures.to_path_buf());
+    cfg
+}
+
+#[test]
+fn the_graphics_card_helper_is_used_when_it_works() {
+    let _t = turn();
+    let (d, st) = state();
+    let client = SttClient::new(with_gpu(
+        config("", &st),
+        "gpu_ok",
+        &d.path().join("gpu.txt"),
+    ));
+    client.load(model("whisper-turbo")).unwrap();
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(out.backend.backend, "vulkan");
+    assert_eq!(out.backend.device.as_deref(), Some("Fake GPU"));
+    assert_eq!(out.backend.vram_mb, 8000);
+    assert!(!out.fell_back);
+    client.shutdown();
+}
+
+#[test]
+fn a_graphics_card_helper_that_dies_hands_the_call_to_the_processor_helper_and_is_remembered() {
+    let _t = turn();
+    let (d, st) = state();
+    let failures = d.path().join("gpu.txt");
+    let client = SttClient::new(with_gpu(config("", &st), "gpu_die", &failures));
+    let loaded = client.load(model("whisper-turbo")).unwrap();
+    assert_eq!(loaded.backend.backend, "vulkan");
+    // It dies on transcribe; the processor helper is started, loads the same model, and answers.
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(out.value.language.as_deref(), Some("whisper-turbo"));
+    assert_eq!(out.backend.backend, "cpu");
+    assert!(out.fell_back, "the app is told the card failed, once");
+    assert_eq!(
+        std::fs::read_to_string(&failures).unwrap().trim(),
+        "test-build"
+    );
+    // Later calls stay on the processor and say nothing more.
+    let next = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(next.backend.backend, "cpu");
+    assert!(!next.fell_back);
+
+    // A new client (the app restarted) with the same build and driver doesn't try the card again.
+    let again = SttClient::new(with_gpu(config("", &st), "gpu_die", &failures));
+    let first = again.load(model("whisper-turbo")).unwrap();
+    assert_eq!(first.backend.backend, "cpu");
+    assert!(!first.fell_back);
+
+    // A new build (or driver) gets a fresh try.
+    let mut newer = with_gpu(config("", &st), "gpu_die", &failures);
+    newer.gpu_key = "next-build".into();
+    let newer = SttClient::new(newer);
+    assert_eq!(
+        newer.load(model("whisper-turbo")).unwrap().backend.backend,
+        "vulkan"
+    );
+    assert!(newer.transcribe(&audio(), &opts()).unwrap().fell_back);
+
+    // The app's "try the graphics card again" button.
+    voice_engine_client::clear_gpu_failure(&failures);
+    assert!(!failures.exists());
+}
+
+#[test]
+fn a_graphics_card_error_from_the_helper_also_falls_back() {
+    let _t = turn();
+    let (d, st) = state();
+    let client = SttClient::new(with_gpu(
+        config("", &st),
+        "gpu_error",
+        &d.path().join("gpu.txt"),
+    ));
+    client.load(model("whisper-turbo")).unwrap();
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert!(out.fell_back);
+    assert_eq!(out.backend.backend, "cpu");
+}
+
+#[test]
+fn a_model_that_runs_on_the_processor_though_the_card_was_asked_for_says_it_fell_back() {
+    let _t = turn();
+    let (_d, st) = state();
+    // The helper itself reports `fell_back` (the engine could not start the card): the app hears it from `fell_back`
+    // without any process having died.
+    let client = SttClient::new(config("cpu_fallback", &st));
+    let loaded = client.load(model("whisper-turbo")).unwrap();
+    assert!(loaded.fell_back);
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert!(out.fell_back);
+    assert_eq!(out.backend.backend, "cpu");
+    client.shutdown();
+}
+
+#[test]
+fn cancel_stops_a_helper_that_answers_it_and_the_helper_keeps_going() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = SttClient::new(config("cancellable", &st));
+    client.load(model("whisper-turbo")).unwrap();
+    let began = Instant::now();
+    let result = std::thread::scope(|s| {
+        let worker = s.spawn(|| client.transcribe(&audio(), &opts()));
+        std::thread::sleep(Duration::from_millis(300));
+        client.cancel();
+        worker.join().unwrap()
+    });
+    assert_eq!(result.unwrap_err(), EngineError::Cancelled);
+    assert!(
+        began.elapsed() < Duration::from_secs(2),
+        "no kill was needed"
+    );
+    // Same helper: the model is still loaded, so unload (which only asks a running helper) answers.
+    client.unload().unwrap();
+}
+
+#[test]
+fn a_decode_that_cannot_be_interrupted_is_killed_after_the_grace_period_and_the_model_comes_back_later()
+ {
+    let _t = turn();
+    let (_d, st) = state();
+    // The first transcribe never answers and never reads `cancel` (like a Whisper decode); the next helper works.
+    let mut cfg = config("stall_once", &st);
+    cfg.limits.stall = Duration::from_secs(60);
+    let client = SttClient::new(cfg);
+    client.load(model("whisper-turbo")).unwrap();
+    let began = Instant::now();
+    let result = std::thread::scope(|s| {
+        let worker = s.spawn(|| client.transcribe(&audio(), &opts()));
+        std::thread::sleep(Duration::from_millis(300));
+        client.cancel();
+        worker.join().unwrap()
+    });
+    assert_eq!(result.unwrap_err(), EngineError::Cancelled);
+    let took = began.elapsed();
+    assert!(
+        took >= Duration::from_millis(2000),
+        "{took:?}: waited the 2 s grace"
+    );
+    assert!(took < Duration::from_secs(8), "{took:?}");
+    // The killed helper took the model with it; the client puts it into a fresh one without the app loading again.
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(out.value.language.as_deref(), Some("whisper-turbo"));
+    client.shutdown();
+}
+
+#[test]
+fn cancel_with_nothing_running_does_nothing() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = SttClient::new(config("", &st));
+    client.cancel();
+    client.load(model("whisper-turbo")).unwrap();
+    client.cancel();
+    assert!(client.transcribe(&audio(), &opts()).is_ok());
+    client.shutdown();
+}
+
+#[test]
+fn shutdown_stops_the_helper_and_the_next_call_starts_one_with_the_model_loaded_again() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = SttClient::new(config("", &st));
+    client.shutdown(); // nothing running: nothing to do
+    client.load(model("whisper-turbo")).unwrap();
+    client.shutdown();
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(out.value.language.as_deref(), Some("whisper-turbo"));
+    client.shutdown();
+}
+
+#[test]
+fn shutdown_from_another_thread_ends_a_call_that_is_running() {
+    let _t = turn();
+    let (_d, st) = state();
+    let mut cfg = config("stall", &st);
+    cfg.limits.stall = Duration::from_secs(60);
+    let client = SttClient::new(cfg);
+    client.load(model("whisper-turbo")).unwrap();
+    let began = Instant::now();
+    let result = std::thread::scope(|s| {
+        let worker = s.spawn(|| client.transcribe(&audio(), &opts()));
+        std::thread::sleep(Duration::from_millis(300));
+        client.shutdown();
+        worker.join().unwrap()
+    });
+    assert_eq!(result.unwrap_err(), EngineError::Cancelled);
+    assert!(
+        began.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        began.elapsed()
+    );
+    // The client is usable again afterwards.
+    assert!(client.load(model("whisper-turbo")).is_ok());
+}

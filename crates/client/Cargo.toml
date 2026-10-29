@@ -16,9 +16,18 @@ name = "fake-llm-helper"
 path = "src/bin/fake_llm_helper.rs"
 test = false
 
+# A fake speech helper with scripted failures, for this crate's own tests (tests/stt_client.rs).
+[[bin]]
+name = "fake-stt-helper"
+path = "src/bin/fake_stt_helper.rs"
+test = false
+
 [dependencies]
 voice-engine-protocol.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# tests/real_stt.rs: the catalog's file name for a model, and the default models folder.
+voice-engine-models.workspace = true
+dirs.workspace = true

@@ -1,6 +1,9 @@
-//! Every way a request to the helper can fail, as one type the app matches on (never on message text).
+//! Every way a request to a helper can fail, as one type the app matches on (never on message text). The AI helper
+//! and the speech helper share it: a variant that one of them never produces (`PromptTooLong` for speech, `TooLong`
+//! for the AI) is simply never returned by that client.
 
 use voice_engine_protocol::ErrorKind;
+use voice_engine_protocol::stt::SttErrorKind;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EngineError {
@@ -19,7 +22,17 @@ pub enum EngineError {
         detail: String,
     },
     NoChatTemplate,
-    /// Stopped by the app (`LlmClient::cancel`).
+    /// The speech model's file is there but cannot be read as that model.
+    BadModel,
+    /// The audio is longer than the model takes in one call; cut it and call again.
+    TooLong {
+        max_secs: u32,
+    },
+    /// The helper cannot run that (a speech model the helper does not serve, or a file that is not a speech model).
+    Unsupported {
+        detail: String,
+    },
+    /// Stopped by the app (`LlmClient::cancel`, `SttClient::cancel`).
     Cancelled,
     /// The graphics card failed and the processor could not finish the work either, or the helper was a processor
     /// helper that reported it.
@@ -66,6 +79,23 @@ impl EngineError {
             ErrorKind::GpuFailed { fell_back } => EngineError::GpuFailed { fell_back },
             ErrorKind::BadRequest => EngineError::BadRequest,
             ErrorKind::Internal => EngineError::Internal { message },
+        }
+    }
+}
+
+impl EngineError {
+    /// The error the speech helper reported, as the app sees it.
+    pub fn from_stt_helper(error: SttErrorKind, message: String) -> Self {
+        match error {
+            SttErrorKind::ModelMissing { path } => EngineError::ModelMissing { path },
+            SttErrorKind::BadModel => EngineError::BadModel,
+            SttErrorKind::OutOfMemory => EngineError::OutOfMemory,
+            SttErrorKind::TooLong { max_secs } => EngineError::TooLong { max_secs },
+            SttErrorKind::Unsupported { detail } => EngineError::Unsupported { detail },
+            SttErrorKind::GpuFailed { fell_back } => EngineError::GpuFailed { fell_back },
+            SttErrorKind::Cancelled => EngineError::Cancelled,
+            SttErrorKind::BadRequest => EngineError::BadRequest,
+            SttErrorKind::Internal => EngineError::Internal { message },
         }
     }
 }
@@ -127,5 +157,44 @@ mod tests {
             EngineError::from_helper(ErrorKind::BadSchema { detail: "d".into() }, String::new()),
             EngineError::BadSchema { detail: "d".into() }
         );
+    }
+
+    #[test]
+    fn every_speech_helper_kind_maps_to_its_own_error() {
+        let cases = [
+            (
+                SttErrorKind::ModelMissing { path: "/m".into() },
+                EngineError::ModelMissing { path: "/m".into() },
+            ),
+            (SttErrorKind::BadModel, EngineError::BadModel),
+            (SttErrorKind::OutOfMemory, EngineError::OutOfMemory),
+            (
+                SttErrorKind::TooLong { max_secs: 40 },
+                EngineError::TooLong { max_secs: 40 },
+            ),
+            (
+                SttErrorKind::Unsupported {
+                    detail: "whisper only".into(),
+                },
+                EngineError::Unsupported {
+                    detail: "whisper only".into(),
+                },
+            ),
+            (
+                SttErrorKind::GpuFailed { fell_back: false },
+                EngineError::GpuFailed { fell_back: false },
+            ),
+            (SttErrorKind::Cancelled, EngineError::Cancelled),
+            (SttErrorKind::BadRequest, EngineError::BadRequest),
+            (
+                SttErrorKind::Internal,
+                EngineError::Internal {
+                    message: "boom".into(),
+                },
+            ),
+        ];
+        for (kind, want) in cases {
+            assert_eq!(EngineError::from_stt_helper(kind, "boom".into()), want);
+        }
     }
 }

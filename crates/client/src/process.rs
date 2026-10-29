@@ -1,5 +1,7 @@
 //! One helper process: spawn it, read its events on a thread, keep the tail of what it wrote to stderr (only to tell
 //! "out of memory" apart when it dies; the tail is never logged or returned), and check it with a ping at startup.
+//!
+//! The AI helper and the speech helper share all of this; they differ only in their messages, which a [`Wire`] names.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
@@ -7,17 +9,85 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use voice_engine_protocol::stt::{self, SttEvent, SttRequest};
 use voice_engine_protocol::{Backend, Event, PROTOCOL_VERSION, Request, decode_event, encode};
 
+/// The messages one kind of helper speaks. Both helpers answer a ping with `ready`, carrying the backend and the
+/// protocol version; everything else is the client's business.
+pub trait Wire: 'static {
+    type Request;
+    type Event: Send + 'static;
+    fn ping() -> Self::Request;
+    fn encode(request: &Self::Request) -> String;
+    /// `None` for a line that is not an event (a stray library message): it is ignored.
+    fn decode(line: &str) -> Option<Self::Event>;
+    /// The backend and protocol version when `event` is `ready`.
+    fn ready(event: &Self::Event) -> Option<(Backend, u32)>;
+}
+
+/// The AI helper's messages.
+pub struct LlmWire;
+
+impl Wire for LlmWire {
+    type Request = Request;
+    type Event = Event;
+
+    fn ping() -> Request {
+        Request::Ping
+    }
+
+    fn encode(request: &Request) -> String {
+        encode(request)
+    }
+
+    fn decode(line: &str) -> Option<Event> {
+        decode_event(line).ok()
+    }
+
+    fn ready(event: &Event) -> Option<(Backend, u32)> {
+        match event {
+            Event::Ready { backend, protocol } => Some((backend.clone(), *protocol)),
+            _ => None,
+        }
+    }
+}
+
+/// The speech helper's messages.
+pub struct SttWire;
+
+impl Wire for SttWire {
+    type Request = SttRequest;
+    type Event = SttEvent;
+
+    fn ping() -> SttRequest {
+        SttRequest::Ping
+    }
+
+    fn encode(request: &SttRequest) -> String {
+        encode(request)
+    }
+
+    fn decode(line: &str) -> Option<SttEvent> {
+        stt::decode_event(line).ok()
+    }
+
+    fn ready(event: &SttEvent) -> Option<(Backend, u32)> {
+        match event {
+            SttEvent::Ready { backend, protocol } => Some((backend.clone(), *protocol)),
+            _ => None,
+        }
+    }
+}
+
 /// What the stdout thread hands over.
-enum Incoming {
-    Event(Event),
+enum Incoming<E> {
+    Event(E),
     /// stdout closed: the helper exited.
     Closed,
 }
 
-pub enum Recv {
-    Event(Event),
+pub enum Recv<E> {
+    Event(E),
     Closed,
     Timeout,
 }
@@ -39,15 +109,21 @@ pub enum StartFailure {
 /// Enough of stderr's end to recognise an out-of-memory death.
 const TAIL: usize = 4096;
 
-pub struct Process {
+/// A running helper of either kind.
+pub struct HelperProcess<W: Wire> {
     child: Child,
     stdin: Arc<Mutex<ChildStdin>>,
-    incoming: Receiver<Incoming>,
+    incoming: Receiver<Incoming<W::Event>>,
     stderr_tail: Arc<Mutex<Vec<u8>>>,
 }
 
-impl Process {
-    fn spawn(path: &Path, env: &[(String, String)]) -> Result<Process, String> {
+/// The AI helper's process (the name the AI client and its tests use).
+pub type Process = HelperProcess<LlmWire>;
+/// The speech helper's process.
+pub type SttProcess = HelperProcess<SttWire>;
+
+impl<W: Wire> HelperProcess<W> {
+    fn spawn(path: &Path, env: &[(String, String)]) -> Result<Self, String> {
         let mut cmd = Command::new(path);
         cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
             .stdin(Stdio::piped())
@@ -71,7 +147,7 @@ impl Process {
             for line in BufReader::new(stdout).lines() {
                 let Ok(line) = line else { break };
                 // A line that isn't an event (a stray library message) is ignored.
-                if let Ok(ev) = decode_event(&line)
+                if let Some(ev) = W::decode(&line)
                     && tx.send(Incoming::Event(ev)).is_err()
                 {
                     return;
@@ -97,7 +173,7 @@ impl Process {
             }
         });
 
-        Ok(Process {
+        Ok(HelperProcess {
             child,
             stdin: Arc::new(Mutex::new(stdin)),
             incoming,
@@ -110,25 +186,24 @@ impl Process {
         path: &Path,
         env: &[(String, String)],
         wait: Duration,
-    ) -> Result<(Process, Backend), StartFailure> {
-        let mut p = Process::spawn(path, env).map_err(StartFailure::CouldNotSpawn)?;
-        if p.send(&Request::Ping).is_err() {
+    ) -> Result<(Self, Backend), StartFailure> {
+        let mut p = Self::spawn(path, env).map_err(StartFailure::CouldNotSpawn)?;
+        if p.send(&W::ping()).is_err() {
             p.kill();
             return Err(StartFailure::Died);
         }
         match p.recv(wait) {
-            Recv::Event(Event::Ready { backend, protocol }) => {
-                if protocol != PROTOCOL_VERSION {
+            Recv::Event(ev) => match W::ready(&ev) {
+                Some((_, protocol)) if protocol != PROTOCOL_VERSION => {
                     p.kill();
                     Err(StartFailure::VersionMismatch { helper: protocol })
-                } else {
-                    Ok((p, backend))
                 }
-            }
-            Recv::Event(_) => {
-                p.kill();
-                Err(StartFailure::NotReady)
-            }
+                Some((backend, _)) => Ok((p, backend)),
+                None => {
+                    p.kill();
+                    Err(StartFailure::NotReady)
+                }
+            },
             Recv::Closed => {
                 p.kill();
                 Err(StartFailure::Died)
@@ -140,8 +215,8 @@ impl Process {
         }
     }
 
-    pub fn send(&self, request: &Request) -> std::io::Result<()> {
-        write_line(&self.stdin, &encode(request))
+    pub fn send(&self, request: &W::Request) -> std::io::Result<()> {
+        write_line(&self.stdin, &W::encode(request))
     }
 
     /// A handle another thread can use to send `cancel` while a request is running.
@@ -149,7 +224,7 @@ impl Process {
         Arc::clone(&self.stdin)
     }
 
-    pub fn recv(&self, timeout: Duration) -> Recv {
+    pub fn recv(&self, timeout: Duration) -> Recv<W::Event> {
         match self.incoming.recv_timeout(timeout) {
             Ok(Incoming::Event(ev)) => Recv::Event(ev),
             Ok(Incoming::Closed) | Err(RecvTimeoutError::Disconnected) => Recv::Closed,
@@ -170,7 +245,7 @@ impl Process {
     }
 }
 
-impl Drop for Process {
+impl<W: Wire> Drop for HelperProcess<W> {
     fn drop(&mut self) {
         self.kill();
     }

@@ -18,13 +18,13 @@ use voice_engine_protocol::{
 };
 
 /// How long a helper that was asked to stop may keep going before it is killed.
-const CANCEL_GRACE: Duration = Duration::from_secs(2);
+pub(crate) const CANCEL_GRACE: Duration = Duration::from_secs(2);
 /// A helper that dies at startup is started again this many times in all (Metal's shader cache can crash one when
 /// several start at the same moment).
-const START_TRIES: u32 = 3;
-const START_RETRY_PAUSE: Duration = Duration::from_millis(300);
+pub(crate) const START_TRIES: u32 = 3;
+pub(crate) const START_RETRY_PAUSE: Duration = Duration::from_millis(300);
 /// How often a waiting request looks at its limits and at `cancel`.
-const POLL: Duration = Duration::from_millis(100);
+pub(crate) const POLL: Duration = Duration::from_millis(100);
 
 #[derive(Debug, Clone)]
 pub struct Limits {

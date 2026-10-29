@@ -167,3 +167,94 @@ fn speaker_separation_prints_nothing_and_takes_its_errors_from_the_one_conversio
     }
     assert!(text.matches("from_parakeet(&e").count() >= 2);
 }
+
+/// A line that prints or logs. A macro or crate name starts a word ("catalog::" ends in "log::").
+fn logs_something(line: &str) -> bool {
+    LOG_MACROS.iter().any(|m| {
+        line.match_indices(m).any(|(at, _)| {
+            !line[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+        })
+    })
+}
+
+#[test]
+fn the_helper_logs_one_fixed_line_and_builds_its_messages_from_fixed_words() {
+    // helper.rs is the speech helper: it reads the audio and the vocabulary from stdin. Its only stderr line is the
+    // `<PREFIX>_GPU=fail` note (an environment variable's name), and the only message that formats anything in is
+    // the one for a request that did not parse, which takes serde's error class and column, never its text (serde
+    // quotes the value that did not fit, and that could be the vocabulary).
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/helper.rs");
+    let text = std::fs::read_to_string(path).unwrap();
+    let production = text.split("#[cfg(test)]").next().unwrap();
+    let logs: Vec<&str> = production
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .filter(|l| logs_something(l))
+        .collect();
+    assert_eq!(logs.len(), 1, "{logs:?}");
+    assert!(logs[0].contains("stopping on purpose"), "{}", logs[0]);
+
+    let formats: Vec<(usize, &str)> = production
+        .lines()
+        .enumerate()
+        .filter(|(_, l)| !l.trim_start().starts_with("//") && l.contains("format!("))
+        .collect();
+    assert_eq!(formats.len(), 1, "{formats:?}");
+    let around: Vec<&str> = production
+        .lines()
+        .skip(formats[0].0.saturating_sub(1))
+        .take(3)
+        .collect();
+    assert!(around.concat().contains("classify()"), "{around:?}");
+    // The two `to_string` calls: the engine's own fixed-word error text, and the model file's path for the
+    // `model_missing` kind (a catalog file name inside the app's model folder).
+    for line in production.lines().filter(|l| l.contains(".to_string()")) {
+        assert!(
+            line.contains("e.to_string()") || line.contains("display().to_string()"),
+            "{}",
+            line.trim()
+        );
+    }
+}
+
+#[test]
+fn the_client_prints_nothing_and_never_returns_the_helpers_stderr() {
+    // The client sees the person's audio and transcript on their way through. It has no log line at all (the app
+    // decides what to log from the error kinds), and the helper's stderr tail it keeps to recognise an out-of-memory
+    // death is read in one place and never copied out.
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../client/src");
+    let mut files = vec![];
+    rust_files(&src, &mut files);
+    let mut seen = 0;
+    for path in files {
+        if path.components().any(|c| c.as_os_str() == "bin") {
+            continue; // the fake helpers print on purpose
+        }
+        seen += 1;
+        let text = std::fs::read_to_string(&path).unwrap();
+        for (n, line) in text.lines().enumerate() {
+            if line.trim_start().starts_with("//") {
+                continue;
+            }
+            assert!(
+                !logs_something(line),
+                "{}:{}: the client logs: {}",
+                path.display(),
+                n + 1,
+                line.trim()
+            );
+        }
+    }
+    assert!(seen >= 5, "the scan found {seen} client source files");
+    let process = std::fs::read_to_string(src.join("process.rs")).unwrap();
+    let at = process
+        .find("pub fn died_of_memory(&self) -> bool")
+        .expect("died_of_memory moved");
+    let body = &process[at..];
+    let body = &body[..body.find("\n    }\n").unwrap()];
+    assert_eq!(process.matches("self.stderr_tail").count(), 1);
+    assert!(body.contains("self.stderr_tail"), "{body}");
+}
