@@ -14,6 +14,14 @@
   the schema applies to the answer only. The helper exits when its stdin closes (the app quit or crashed) whatever
   the idle policy. No user text is ever written to stderr; a test scans the source for it.
 - The apps' 12 reply schemas are part of the tests.
+- client: new crate `voice-engine-client`. `LlmClient` starts the AI helper, restarts it when it dies (a helper that
+  dies at startup is started again up to 3 times, for the Mac's Metal shader cache crash), retries a request once
+  when the helper exited just as it arrived, and reports every failure as an `EngineError` (the helper's kinds plus
+  `Crashed`, `VersionMismatch`, `TimedOut`, `CouldNotStart`). `cancel()` stops a reply and keeps the model (a helper
+  that ignores it is killed after 2 s). With a Vulkan helper configured it is tried first; if it fails, the
+  processor helper does the work, the result says `fell_back`, and the failure is remembered in a file per build and
+  driver until `clear_gpu_failure`. Limits (start, stall, total) are checked on every pass, so a helper that keeps
+  streaming progress is still stopped.
 - Known: on a Mac, several helpers starting at the same moment can make one die with SIGBUS inside Apple's Metal
   shader cache (not engine code). An app's client must restart a helper that dies at startup.
 

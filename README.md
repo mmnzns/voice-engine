@@ -30,6 +30,13 @@ checking replies themselves.
 On a Mac, starting several helpers at once can make one die with SIGBUS inside Apple's Metal shader cache; restart a
 helper that dies at startup.
 
+## The client
+
+`voice-engine-client` is what an app uses to talk to its AI helper: build an `LlmClient` with the helper paths and
+call `load`, `complete`, `embed`, `inspect`, `unload`, `set_idle` and `cancel` from any thread. Match failures on
+`EngineError`, never on text. Each result says which backend ran it and whether the graphics card failed during the
+call (`fell_back`): show "Graphics card failed, used processor" once, then keep passing the same config.
+
 ## Use it in an app
 
 ```toml
