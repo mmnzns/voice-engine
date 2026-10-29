@@ -91,7 +91,7 @@ fn whisper_cpps_own_log_is_switched_off() {
 fn error_messages_are_built_from_codes_not_from_what_was_said() {
     // Every `SpeechError::Internal(format!(...))` in the engines carries a whisper-rs error (a kind and a number),
     // never the audio, the prompt, the text or a file name.
-    for file in ["whisper_engine.rs", "vad.rs"] {
+    for file in ["whisper_engine.rs", "vad.rs", "parakeet_engine.rs"] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(file);
         let text = std::fs::read_to_string(path).unwrap();
         for (n, line) in text.lines().enumerate() {
@@ -105,4 +105,29 @@ fn error_messages_are_built_from_codes_not_from_what_was_said() {
             }
         }
     }
+}
+
+#[test]
+fn onnx_error_text_never_reaches_a_speech_error() {
+    // parakeet-rs and ONNX Runtime put paths (the model folder, an audio file) in their messages. The Parakeet engine
+    // turns each error into a kind or a fixed word, so no line that builds a `SpeechError::Internal` there formats
+    // anything into it.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/parakeet_engine.rs");
+    let text = std::fs::read_to_string(path).unwrap();
+    let mut seen = 0;
+    for (n, line) in text.lines().enumerate() {
+        if line.contains("SpeechError::Internal(") {
+            seen += 1;
+            assert!(
+                !line.contains("format!") && !line.contains("to_string()") && !line.contains('{'),
+                "parakeet_engine.rs:{}: an internal error that carries text from elsewhere: {}",
+                n + 1,
+                line.trim()
+            );
+        }
+    }
+    assert!(
+        seen >= 3,
+        "the scan found {seen} internal errors; did the code move?"
+    );
 }

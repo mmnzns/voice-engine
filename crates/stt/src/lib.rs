@@ -2,17 +2,37 @@
 //!
 //! * [`load`] and the [`Transcriber`] trait (`api`): one loaded model, audio in, timed segments and words out,
 //!   with `Timing::Segments` (Talaan's settings) or `Timing::Words` (Ensayo's). Whisper runs in process
-//!   ([`whisper_engine`]: Metal on the Mac, Vulkan with the `vulkan` feature, else the processor); the thread rule
-//!   is in [`threads`].
+//!   ([`whisper_engine`]: Metal on the Mac, Vulkan with the `vulkan` feature, else the processor); Parakeet,
+//!   Parakeet Unified and Nemotron run in process too ([`parakeet_engine`]: ONNX Runtime through parakeet-rs, one
+//!   chunk of up to the catalog's `chunk_secs`, 40 s, per call; longer audio is `SpeechError::TooLong`). The thread
+//!   rule is in [`threads`].
 //! * [`vad::detect`]: where the speech is in a track (whisper.cpp's Silero detector, always on the processor).
 //! * [`run_helper`]: the Windows GPU helper, which still speaks the v0.1.0 protocol and transcribes a chunk with
 //!   `transcribe` below, the same Whisper the apps run in process (it moves onto the new API with `SttClient`).
+//! * This crate never depends on `voice-engine-llm`: no llama.cpp is linked next to whisper.cpp, so an app can use
+//!   it in process (no duplicate ggml symbols).
 //!
-//! This crate never depends on `voice-engine-llm`: no llama.cpp is linked next to whisper.cpp, so an app can use
-//! it in process (no duplicate ggml symbols).
+//! # The graphics card (`LoadOptions::gpu`)
+//!
+//! * Whisper: Metal on the Mac, Vulkan with the `vulkan` feature.
+//! * Parakeet (the TDT models): DirectML through ONNX Runtime, on Windows, with this crate's `directml` feature.
+//!   If the provider does not start the model loads on the processor.
+//! * Everywhere else `gpu: true` runs the model on the processor. That is reported the same way as a card that
+//!   failed: `backend()` says `cpu` with `fell_back: true`. This is the case for every ONNX model on the Mac (nothing
+//!   here uses CoreML: parakeet-rs measures it slower than the processor for these graphs), for a Windows build
+//!   without the `directml` feature, and for the models the catalog gives no DirectML path (Parakeet Unified,
+//!   Nemotron). There is no card path to fall back from, but the app asked for one, so it is told, once, and can
+//!   pass `gpu: false` from then on.
+//!
+//! # Options the ONNX models ignore
+//!
+//! `ChunkOptions::keep_fillers` and `vocabulary` do nothing for Parakeet, Parakeet Unified and Nemotron: they
+//! transcribe fillers as heard and have no prompt (the catalog's `keeps_fillers` is measured separately).
+//! `language` is a prompt for Nemotron only ("fr" becomes "fr-FR"); the other two ignore it.
 
 mod api;
 mod helper;
+pub mod parakeet_engine;
 pub mod threads;
 pub mod vad;
 pub mod whisper_engine;

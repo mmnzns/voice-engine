@@ -22,6 +22,13 @@ voice-engine-models.workspace = true
 serde_json.workspace = true
 # raw-api: ggml's device list (whisper_rs::whisper_rs_sys), to choose the GPU.
 whisper-rs = { version = "0.16.0", features = ["raw-api"] }
+# Parakeet, Parakeet Unified and Nemotron (ONNX). The same pins as Talaan and Ensayo: parakeet-rs 0.3.8 does not
+# build against ort 2.0.0-rc.14 (Session::builder changed); keep rc.13 until it does. parakeet-rs's default features
+# switch ort's own defaults back on (download-binaries: a static ONNX Runtime fetched once into the ort cache at
+# build time, no DLL to ship), whatever `default-features = false` says here; that is what both apps build today.
+# `sortformer` (speaker separation) is added by the task that needs it.
+parakeet-rs = "0.3.8"
+ort = { version = "=2.0.0-rc.13", default-features = false }
 
 # Metal on the Mac, in process. Cargo unifies the features with the entry above.
 [target.'cfg(target_os = "macos")'.dependencies]
@@ -36,3 +43,6 @@ dirs.workspace = true
 # Windows GPU build: needs the Vulkan SDK (VULKAN_SDK) to build and vulkan-1.dll to run. Never linked into an app's
 # main program.
 vulkan = ["whisper-rs/vulkan"]
+# Windows only: Parakeet on the graphics card through ONNX Runtime's DirectML provider (`gpu: true`), with the
+# processor as the fallback. Without it, or on the Mac, `gpu: true` runs on the processor and says so.
+directml = ["ort/directml"]

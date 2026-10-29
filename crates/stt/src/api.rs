@@ -25,8 +25,9 @@ use voice_engine_models::catalog::{Kind, ModelInfo};
 /// How to load a model. Per load, so an app can fall back to the processor for one model only.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LoadOptions {
-    /// Metal on the Mac, Vulkan or DirectML on Windows. When the device cannot be used the model loads on the
-    /// processor and [`Transcriber::backend`] says `fell_back` (no error).
+    /// Metal on the Mac (Whisper), Vulkan (Whisper) or DirectML (Parakeet, with the `directml` feature) on Windows.
+    /// When the device cannot be used, or the model has no path to it here (the ONNX models on the Mac), the model
+    /// loads on the processor and [`Transcriber::backend`] says `fell_back` (no error).
     pub gpu: bool,
     /// `None`: the engine's rule (`threads::default_threads`). `Some(n)`: the app's own setting (at least 1).
     pub threads: Option<usize>,
@@ -122,6 +123,9 @@ pub enum SpeechError {
     OutOfMemory,
     /// Not available here (a kind this build cannot run, or a file that is not a speech model).
     Unsupported(String),
+    /// The audio is longer than the model takes in one call (Parakeet, Parakeet Unified and Nemotron: the catalog's
+    /// `chunk_secs`, 40 s). Nothing was decoded; the app cuts the audio and calls again.
+    TooLong { max_secs: u32 },
     /// Anything else; the string is the engine's own error code, never user data.
     Internal(String),
 }
@@ -133,6 +137,12 @@ impl fmt::Display for SpeechError {
             SpeechError::BadModel => f.write_str("the speech model file could not be read"),
             SpeechError::OutOfMemory => f.write_str("not enough memory to load the speech model"),
             SpeechError::Unsupported(what) => write!(f, "not supported: {what}"),
+            SpeechError::TooLong { max_secs } => {
+                write!(
+                    f,
+                    "the audio is longer than the {max_secs} s this model takes at once"
+                )
+            }
             SpeechError::Internal(what) => write!(f, "speech engine error: {what}"),
         }
     }
@@ -142,8 +152,9 @@ impl std::error::Error for SpeechError {}
 
 /// Loads a speech model from its folder `dir` (as the shared store lays it out: the catalog's file names).
 ///
-/// Whisper runs in process. The ONNX kinds (Parakeet, Parakeet Unified, Nemotron) return `Unsupported` until they
-/// land (Task 3).
+/// Whisper and the ONNX kinds (Parakeet, Parakeet Unified, Nemotron) run in process; the folder holds the catalog's
+/// files for the model. Voice detection, speaker separation, embeddings and the local AI are not speech models
+/// (`Unsupported`).
 pub fn load(
     model: &ModelInfo,
     dir: &Path,
@@ -158,9 +169,10 @@ pub fn load(
             let engine = crate::whisper_engine::WhisperEngine::load(&dir.join(file.name), opts)?;
             Ok(Box::new(engine))
         }
-        Kind::Parakeet | Kind::ParakeetUnified | Kind::Nemotron => Err(SpeechError::Unsupported(
-            "this model kind is not available in this build".into(),
-        )),
+        Kind::Parakeet | Kind::ParakeetUnified | Kind::Nemotron => {
+            let engine = crate::parakeet_engine::ParakeetEngine::load(model, dir, opts)?;
+            Ok(Box::new(engine))
+        }
         Kind::Vad | Kind::Diarization | Kind::Embedding | Kind::Llm => {
             Err(SpeechError::Unsupported("not a speech model".into()))
         }
