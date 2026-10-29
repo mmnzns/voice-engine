@@ -55,7 +55,7 @@ use std::ffi::CStr;
 use voice_engine_protocol::gpu::{Device, DeviceKind, bytes_to_mb};
 use whisper_rs::whisper_rs_sys as sys;
 
-/// Text that engines produce for non-speech ("[BLANK_AUDIO]", "(music)", "*laughs*") or nothing at all.
+/// Text that engines produce for non-speech (`[BLANK_AUDIO]`, `(music)`, `*laughs*`) or nothing at all.
 pub fn is_noise(text: &str) -> bool {
     let t = text.trim();
     if t.is_empty() {

@@ -22,6 +22,29 @@
   processor helper does the work, the result says `fell_back`, and the failure is remembered in a file per build and
   driver until `clear_gpu_failure`. Limits (start, stall, total) are checked on every pass, so a helper that keeps
   streaming progress is still stopped.
+- stt: the speech API. `load(model, dir, LoadOptions { gpu, threads })` gives a `Box<dyn Transcriber>`;
+  `transcribe(audio, &ChunkOptions { language, timing, keep_fillers, vocabulary })` gives a `Transcript` (segments, each
+  with its timed words, the language, `stopped_early_at_ms`); `backend()` says where it runs (`metal`, `vulkan`,
+  `directml` or `cpu`) and `fell_back` when the graphics card was asked for and not used (also for ONNX models on the
+  Mac, which have no card path). `Transcriber` has a `Send` supertrait, so a loaded model can sit behind a mutex or
+  move to a worker thread. Whisper (Metal on the Mac, Vulkan with the `vulkan` feature, any length in one call),
+  Parakeet, Parakeet Unified and Nemotron (ONNX Runtime through parakeet-rs, one chunk of up to `chunk_secs`, 40 s;
+  longer is `TooLong`). `Timing::Segments` is Talaan's settings and `Timing::Words` is Ensayo's; both return segments
+  and words. `vocabulary` is Whisper's initial prompt (it nudges, it does not force a spelling; the engine ends the
+  list with a full stop to keep capitals and punctuation); `keep_fillers` adds whisper.cpp's filler prompt. Decoding
+  that stops with 2 s or more of audio left is resumed from there (up to 8 passes) and reported in
+  `stopped_early_at_ms`. `SpeechError` has kinds: `ModelMissing`, `BadModel`, `OutOfMemory`, `Unsupported(String)`,
+  `TooLong { max_secs }` and `Internal(String)`.
+- stt: new modules `api`, `threads` (the thread rule: on the processor three quarters of the logical cores, 2 to 12;
+  on a graphics card all of them, 2 to 8; `LoadOptions::threads` overrides it), `whisper_engine`, `parakeet_engine`,
+  `vad` (`vad::detect`: Silero through whisper.cpp, Talaan's settings, always on the processor), `diarize`
+  (`diarize::load` and `Diarizer::run`: up to 8 speakers every 10 ms from NVIDIA's Nemotron 3 Diarization through
+  parakeet-rs `sortformer`, with the 10-minute warm-up, and a workaround for parakeet-rs 0.3.8's "non-contiguous
+  layout" failure on some track lengths) and `words` (`words::clean`, from Ensayo). New dependencies: whisper-rs
+  0.16.0, parakeet-rs 0.3.8 and ort =2.0.0-rc.13. `tests/no_llama.rs` fails if the stt crate can reach llama.cpp or
+  `voice-engine-llm`.
+- stt: new crate features: `vulkan` (Whisper on the Windows graphics card, for the helper build) and `directml`
+  (Parakeet TDT on the Windows graphics card, in process). Nothing uses CoreML.
 - stt helper on the Transcript API, protocol 2, **breaking for anyone who had adopted the v0.1.0 speech messages**
   (nobody had): `load { model_id, model_dir, kind, gpu, threads }` (the catalog says which file in the folder is the
   model), `transcribe { audio_b64, options }` (language, timing, keep_fillers, vocabulary), `unload`, `ping`,
