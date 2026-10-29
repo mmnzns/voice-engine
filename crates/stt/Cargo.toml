@@ -26,8 +26,8 @@ whisper-rs = { version = "0.16.0", features = ["raw-api"] }
 # build against ort 2.0.0-rc.14 (Session::builder changed); keep rc.13 until it does. parakeet-rs's default features
 # switch ort's own defaults back on (download-binaries: a static ONNX Runtime fetched once into the ort cache at
 # build time, no DLL to ship), whatever `default-features = false` says here; that is what both apps build today.
-# `sortformer` (speaker separation) is added by the task that needs it.
-parakeet-rs = "0.3.8"
+# `sortformer` is speaker separation (`diarize.rs`, Talaan's feature set).
+parakeet-rs = { version = "0.3.8", features = ["sortformer"] }
 ort = { version = "=2.0.0-rc.13", default-features = false }
 
 # Metal on the Mac, in process. Cargo unifies the features with the entry above.

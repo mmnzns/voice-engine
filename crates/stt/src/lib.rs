@@ -7,6 +7,9 @@
 //!   chunk of up to the catalog's `chunk_secs`, 40 s, per call; longer audio is `SpeechError::TooLong`). The thread
 //!   rule is in [`threads`].
 //! * [`vad::detect`]: where the speech is in a track (whisper.cpp's Silero detector, always on the processor).
+//! * [`diarize::load`] and [`diarize::Diarizer::run`]: who is talking, every 10 ms, for up to 8 speakers (NVIDIA's
+//!   Nemotron 3 Diarization through parakeet-rs's `sortformer`, always on the processor, on the ONNX thread rule).
+//!   Naming speakers and turning frames into turns is the app's.
 //! * [`run_helper`]: the Windows GPU helper, which still speaks the v0.1.0 protocol and transcribes a chunk with
 //!   `transcribe` below, the same Whisper the apps run in process (it moves onto the new API with `SttClient`).
 //! * This crate never depends on `voice-engine-llm`: no llama.cpp is linked next to whisper.cpp, so an app can use
@@ -31,6 +34,7 @@
 //! `language` is a prompt for Nemotron only ("fr" becomes "fr-FR"); the other two ignore it.
 
 mod api;
+pub mod diarize;
 mod helper;
 pub mod parakeet_engine;
 pub mod threads;

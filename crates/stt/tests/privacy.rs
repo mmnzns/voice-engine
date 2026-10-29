@@ -91,7 +91,12 @@ fn whisper_cpps_own_log_is_switched_off() {
 fn error_messages_are_built_from_codes_not_from_what_was_said() {
     // Every `SpeechError::Internal(format!(...))` in the engines carries a whisper-rs error (a kind and a number),
     // never the audio, the prompt, the text or a file name.
-    for file in ["whisper_engine.rs", "vad.rs", "parakeet_engine.rs"] {
+    for file in [
+        "whisper_engine.rs",
+        "vad.rs",
+        "parakeet_engine.rs",
+        "diarize.rs",
+    ] {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(file);
         let text = std::fs::read_to_string(path).unwrap();
         for (n, line) in text.lines().enumerate() {
@@ -110,24 +115,55 @@ fn error_messages_are_built_from_codes_not_from_what_was_said() {
 #[test]
 fn onnx_error_text_never_reaches_a_speech_error() {
     // parakeet-rs and ONNX Runtime put paths (the model folder, an audio file) in their messages. The Parakeet engine
-    // turns each error into a kind or a fixed word, so no line that builds a `SpeechError::Internal` there formats
-    // anything into it.
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/parakeet_engine.rs");
-    let text = std::fs::read_to_string(path).unwrap();
-    let mut seen = 0;
-    for (n, line) in text.lines().enumerate() {
-        if line.contains("SpeechError::Internal(") {
-            seen += 1;
-            assert!(
-                !line.contains("format!") && !line.contains("to_string()") && !line.contains('{'),
-                "parakeet_engine.rs:{}: an internal error that carries text from elsewhere: {}",
-                n + 1,
-                line.trim()
-            );
+    // and speaker separation turn each error into a kind or a fixed word, so no line that builds a
+    // `SpeechError::Internal` there formats anything into it.
+    for (file, at_least) in [("parakeet_engine.rs", 3), ("diarize.rs", 2)] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(file);
+        let text = std::fs::read_to_string(path).unwrap();
+        let mut seen = 0;
+        for (n, line) in text.lines().enumerate() {
+            if line.contains("SpeechError::Internal(") {
+                seen += 1;
+                assert!(
+                    !line.contains("format!")
+                        && !line.contains("to_string()")
+                        && !line.contains('{'),
+                    "{file}:{}: an internal error that carries text from elsewhere: {}",
+                    n + 1,
+                    line.trim()
+                );
+            }
         }
+        assert!(
+            seen >= at_least,
+            "the scan found {seen} internal errors in {file}; did the code move?"
+        );
     }
-    assert!(
-        seen >= 3,
-        "the scan found {seen} internal errors; did the code move?"
-    );
+}
+
+#[test]
+fn speaker_separation_prints_nothing_and_takes_its_errors_from_the_one_conversion() {
+    // diarize.rs has no log line at all, and every ONNX error goes through `from_parakeet` (kinds only).
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/diarize.rs");
+    let text = std::fs::read_to_string(path).unwrap();
+    for line in text.lines().filter(|l| !l.trim_start().starts_with("//")) {
+        // "catalog::" ends in "log::": a macro or crate name starts a word.
+        let logs = LOG_MACROS.iter().any(|m| {
+            line.match_indices(m).any(|(at, _)| {
+                !line[..at]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_alphanumeric() || c == '_')
+            })
+        });
+        assert!(!logs, "diarize.rs logs: {}", line.trim());
+        assert!(
+            !line.contains("map_err(|e| SpeechError")
+                && !line.contains("e.to_string()")
+                && !line.contains("{e"),
+            "diarize.rs builds an error from an engine's text: {}",
+            line.trim()
+        );
+    }
+    assert!(text.matches("from_parakeet(&e").count() >= 2);
 }

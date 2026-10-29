@@ -1,4 +1,4 @@
-//! Helpers the real-model tests share (`real_whisper.rs`, `real_parakeet.rs`): one lock so only one test loads a
+//! Helpers the real-model tests share (`real_whisper.rs`, `real_parakeet.rs`, `real_diarize.rs`): one lock so only one test loads a
 //! model at a time, the models folder, speech made with the macOS `say` command, and small text helpers.
 //! Only ever reads the models folder.
 
@@ -22,17 +22,21 @@ pub fn models_dir() -> PathBuf {
     }
 }
 
-/// 16 kHz mono f32 samples of `text` spoken by the macOS `say` command.
+/// 16 kHz mono f32 samples of `text` spoken by the macOS `say` command in its default voice.
 pub fn say(text: &str) -> Vec<f32> {
+    say_with(None, text)
+}
+
+/// The same, in the named voice (`say -v`), when one is given.
+pub fn say_with(voice: Option<&str>, text: &str) -> Vec<f32> {
     let dir = tempfile::tempdir().unwrap();
     let aiff = dir.path().join("clip.aiff");
     let wav = dir.path().join("clip.wav");
-    let ok = Command::new("say")
-        .arg("-o")
-        .arg(&aiff)
-        .arg(text)
-        .status()
-        .unwrap();
+    let mut cmd = Command::new("say");
+    if let Some(voice) = voice {
+        cmd.arg("-v").arg(voice);
+    }
+    let ok = cmd.arg("-o").arg(&aiff).arg(text).status().unwrap();
     assert!(ok.success(), "say failed");
     let ok = Command::new("afconvert")
         .args(["-f", "WAVE", "-d", "LEF32@16000", "-c", "1"])

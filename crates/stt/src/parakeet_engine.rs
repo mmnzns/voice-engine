@@ -368,7 +368,7 @@ pub fn load_on_best_provider<T>(
 
 /// A parakeet-rs error as a kind, never its text (it can carry paths). `loading`: while the model loads, an ONNX
 /// Runtime refusal of a file is a bad model; while decoding it is an internal error.
-fn from_parakeet(e: &parakeet_rs::Error, loading: bool) -> SpeechError {
+pub(crate) fn from_parakeet(e: &parakeet_rs::Error, loading: bool) -> SpeechError {
     use ort::error::ErrorCode;
     match e {
         parakeet_rs::Error::Io(io) if io.kind() == std::io::ErrorKind::NotFound => {
