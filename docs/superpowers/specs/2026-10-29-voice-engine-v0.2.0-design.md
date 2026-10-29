@@ -1,6 +1,7 @@
 # voice-engine v0.2.0 design
 
-Date: 2026-10-29. Status: draft for Miguel's review. Source of requirements: the Notion page "Voice Apps Engine
+Date: 2026-10-29. Status: approved by Miguel; revised the same day with the three app chats' review notes (marked
+"review" below). Revision history: v1 approved; v2 adds the review items. Source of requirements: the Notion page "Voice Apps Engine
 Sync", sections "What the engine is, and is not", "Decisions" and "Engine v0.2.0: what it must do" (item codes such
 as `E-A1` below point there).
 
@@ -41,6 +42,8 @@ list (decided: the list is built in).
 | Delete: the model leaves this app; the file is erased when no app uses it | Miguel | 2026-10-29 |
 | Live text dropped; cloud speech stays Parlato only | Miguel | 2026-10-29 |
 | No model-sharing setting: with one folder there is nothing to turn off | this spec | 2026-10-29 |
+| Granite 4.2 3B stays in the catalog; Qwen 2.5 3B, Llama 3.2 3B, Gemma 2 2B and Phi-3.5 mini are dropped (not in the catalog; an existing file keeps working as an imported GGUF) | Miguel | 2026-10-29 |
+| No user text in any engine log or file: prompts, replies, transcripts, words and audio never reach a log; sizes and timings may | Ensayo and Talaan rule, adopted | 2026-10-29 |
 
 Ownership rule (unchanged): no code from Parlato, Parla, VoiceInk or any GPL source. Code comes from Talaan and
 Ensayo (MIT) and from upstream (llama.cpp, whisper.cpp, parakeet-rs, ONNX Runtime, the models' own docs). Facts
@@ -86,8 +89,12 @@ Crates:
 | Mac | `~/Library/Application Support/Craft Concepts Digital/Models/` |
 | Windows | `%LOCALAPPDATA%\Craft Concepts Digital\Models\` |
 
-`VOICE_ENGINE_MODELS_DIR` overrides it (tests, and an app's own test data folder such as `TALAAN_DATA_DIR`).
-Neither app is sandboxed on the Mac, so all three can read and write it.
+`SharedStore::open(app)` uses this folder. `SharedStore::open_at(app, dir)` uses any folder the app passes in
+instead (review, T-C1): a test or a dev build run from a copied data folder (Talaan's `TALAAN_DATA_DIR` rule, where
+real data is read-only) passes `<that folder>/models`, and in that mode the one-time move never runs and nothing
+outside that folder is read or written. The engine's own tests use `open_at` with a temporary folder.
+`VOICE_ENGINE_MODELS_DIR` is honoured by `open` as well, for running an installed app against a test folder by
+hand. Neither app is sandboxed on the Mac, so all three can read and write the shared folder.
 
 ### 5.2 Layout
 
@@ -108,13 +115,17 @@ One layout for every kind of model (Ensayo's `models/llm/` split goes away). Mod
 
 API (`voice_engine_models::SharedStore`, opened with the calling `App`):
 
-- `status(id)` returns `Installed { dir, users, used_by_me }`, `Downloading { fraction, by_me }`,
-  `Partial { fraction }` or `Missing`. "Installed and not used by me" is how an app shows "Already on this
-  computer": one click (`use_model`) adds it, with no download.
+- `status(id)` returns `Installed { dir, users, used_by_me }`, `Downloading { fraction, bytes, by_me }`,
+  `Partial { fraction, bytes, cancelled: bool }` or `Missing`. "Installed and not used by me" is how an app shows
+  "Already on this computer": one click (`use_model`) adds it, with no download. `Partial` is what Talaan's "43%
+  downloaded, Resume" and Ensayo's percentage read; `cancelled` is true when the person stopped it (the `.cancelled`
+  marker, 5.5), so Cancel never shows as a failure or as "partly downloaded" (review, E-C4, T-C3).
 - `use_model(id)` writes `users/<id>/<app>`.
 - `download(id, cancel, progress)` writes the user marker first, takes `locks/<id>.download` exclusively and runs
-  the downloader (5.5). If another app holds the lock, the call returns `DownloadingElsewhere` and the app shows that
-  download's progress (read from the `.part` sizes) until it completes.
+  the downloader (5.5). `progress` is called with `Progress { fraction, bytes, total }` over the whole model (every
+  file together, so a progress bar and a time estimate work across files). If another app holds the lock, the call
+  returns `DownloadingElsewhere` and the app shows that download's progress (read from the `.part` sizes) until it
+  completes.
 - `open(id)` returns a `ModelHandle` holding a shared lock on `locks/<id>.use` for as long as the model is loaded.
   The app keeps the handle next to its loaded model and drops it on unload.
 - `release(id)` removes this app's user marker. If no users remain, it tries an exclusive lock on
@@ -132,9 +143,11 @@ crash never leaves a model stuck. The Windows rule that an open file can't be de
 
 ### 5.4 One-time move
 
-`SharedStore::move_in(&self)` runs on each app's first start on v0.2.0 and is safe to run again (it skips work
-already done and is safe if interrupted: each file is renamed or linked on its own, the `moved/<app>` marker is
-written last).
+`SharedStore::move_in(&self, used)` runs on each app's first start on v0.2.0, before the app opens any model or
+starts any helper (the app calls it first thing; the engine refuses to move a file that is locked or open, leaves
+it for the next start, and reports it). It is safe to run again (it skips work already done and is safe if
+interrupted: each file is renamed or linked on its own, the `moved/<app>` marker is written last). It never runs
+on a store opened with `open_at` (5.1).
 
 1. **This app's own old folders** (table below). For each catalog model complete there (every file, exact size):
    - Not in the shared folder: rename each file into `<id>/` (same volume: instant). Then create a hard link from
@@ -152,13 +165,21 @@ written last).
    currently point to, wherever they were found.
 4. A hard link that fails (another volume, a file system without them) is skipped for other apps' folders; for the
    app's own files the rename still happens, and the old path is simply left empty.
+5. A GGUF found in Parlato's `LlmModels/` that is not in the catalog (one of the four dropped models) is not moved
+   or deleted: it is registered as an imported GGUF (5.6) at its current path and reported to the app as such, so
+   it keeps working as the person's selected model (review, P-C1).
+6. Talaan on Windows may have its models in `%APPDATA%\Talaan\models` (old), in
+   `%LOCALAPPDATA%\com.craftconceptsdigital.talaan\models` (1.1 and later), or in both, since Talaan's own move can
+   be half done (a folder it couldn't rename is copied in the background and the old copy stays until the next
+   launch). Both are scanned; a model complete in both is moved once and the other copy is linked back (review,
+   T-C1).
 
 Old folders (the only place the engine still knows about the apps' old layouts; `apps.rs` becomes `legacy.rs`):
 
 | App | Mac | Windows |
 | --- | --- | --- |
-| Talaan | `Talaan/models/<id>/` | `%LOCALAPPDATA%\com.craftconceptsdigital.talaan\models\<id>\`, and the older `%APPDATA%` folder |
-| Ensayo | `com.craftconceptsdigital.ensayo/models/<id>/`, AI in `models/llm/<id>/` | same under `%LOCALAPPDATA%` |
+| Talaan | `Talaan/models/<id>/` | `%LOCALAPPDATA%\com.craftconceptsdigital.talaan\models\<id>\`, and the older `%APPDATA%\Talaan\models\<id>\` |
+| Ensayo | `com.craftconceptsdigital.ensayo/models/<id>/`, AI in `models/llm/<id>/`; ids `whisper-tiny`, `whisper-base`, `whisper-small`, `whisper-medium`, `whisper-large-v2`, `whisper-large-v3`, `whisper-turbo`, `parakeet-v2`, `parakeet-v3`, `parakeet-ultra`, `parakeet-unified-en`, `nemotron-3.5`, `vad`, `qwen3.5-4b`, `qwen3.5-9b` (same file names as Talaan) | same under `%LOCALAPPDATA%` |
 | Parlato | `com.craftconceptsdigital.parlato/Models/<file>`, `ParakeetModels/<folder>/`, `LlmModels/<parlato id>.gguf` | same under `%LOCALAPPDATA%` |
 
 Parlato's folder and file names per catalog model (for example which `ParakeetModels/<folder>` is `parakeet-v3`, and
@@ -173,6 +194,11 @@ or answers 416, a web page in place of the file is an error, sha256 computed whi
 size before the rename, cancel checked every 200 ms, 30 s without data is `Stalled` (the `.part` is kept, so Retry
 resumes), `partial_fraction` for leftovers. Blocking API with a cancel flag and a progress callback; reqwest 0.12
 with rustls, the version both apps already link.
+
+The downloader's errors are kinds (`DownloadError`): `Offline` (no connection or DNS), `Refused { status }` (the
+source answered with an error or a web page), `DiskFull`, `Checksum { file }` (size or sha256 didn't match),
+`Stalled`, `Cancelled`, `Io`. Cancelled and Stalled are not failures for the screens: the `.part` stays and
+`status` reports `Partial` (review, T-C3).
 
 "Installed" means every file present with its exact size (hashes are checked at download, as today).
 
@@ -202,8 +228,8 @@ pub struct ModelInfo {
     pub files: &'static [ModelFile], // name, pinned url, size, sha256
     pub gpu: GpuSupport,             // mac_metal, windows_vulkan, windows_directml
     pub keeps_fillers: Option<bool>, // speech: measured (section 9.4); None until measured
+    pub chunk_secs: Option<u32>,     // speech: the chunk length it works best with (Parakeet 40; Whisper None: any length)
     pub llm: Option<LlmInfo>,        // context_max, context_8gb, context_16gb, thinks
-    pub offered: bool,               // false: recognised and runnable, not offered for new downloads
 }
 ```
 
@@ -214,9 +240,9 @@ Contents:
   Base, Small and Medium; full-size Whisper Large v2, v3 and v3 Turbo; full-size Parakeet v2, v3 and Unified. Every
   file pinned to a commit with size and sha256, as today.
 - Voice detection (Silero v6.2.0), speaker separation (Nemotron diarization v3) and search (Qwen3 Embedding 0.6B).
-- Local AI: Qwen 3.5 4B and 9B; Granite 4.2 3B; Parlato's four older models (Qwen 2.5 3B, Llama 3.2 3B, Gemma 2 2B,
-  Phi-3.5 mini) with `offered: false` until Miguel decides (so Parlato's existing downloads are still recognised,
-  moved and runnable either way).
+- Local AI: Qwen 3.5 4B and 9B, and Granite 4.2 3B (decided 2026-10-29). Parlato's four older models are not in the
+  catalog and must not be added; an existing file is kept as an imported GGUF (5.4, item 5). Every id is stable, so
+  the apps store it in their settings; Talaan's local model menu lists every entry.
 
 The catalog never says which model is recommended. Each app keeps its own list order and recommendation text. Tests
 keep today's rules (every url pinned, names match, sizes plausible) and add: ids unique across all kinds, every
@@ -233,8 +259,9 @@ Requests (new ones in bold):
 | --- | --- | --- |
 | `ping` | `ready` | Unchanged; reports protocol 2 |
 | `devices` | `devices` | Unchanged |
-| **`configure { idle_secs }`** | `configured` | `idle_secs: null` = never exit (Parlato); a number = exit that long after the last request (Ensayo: a couple of minutes). Default stays 120 s. The `<PREFIX>_LLM_IDLE_SECS` variable stays for tests. (P-A1, E-A5) |
-| **`load { model_path, n_ctx, gpu }`** | `loaded { seconds, n_ctx_train, backend }` | Loads without generating. (P-A2, E-A3) |
+| **`configure { idle_secs }`** | `configured` | `idle_secs: null` = never exit while the app runs (Parlato); a number = exit that long after the last request (Ensayo: a couple of minutes). Default stays 120 s. Can be sent at any time, as often as wanted, without a restart or unloading the model (Parlato's "Keep models ready" setting). The `<PREFIX>_LLM_IDLE_SECS` variable stays for tests. (P-A1, E-A5, review) |
+| **`load { model_path, n_ctx, gpu }`** | `loaded { seconds, n_ctx_train, backend }` | Loads without generating. Loading a different path replaces the loaded model: that is how an app switches models without a restart (review, E-A11). (P-A2, E-A3) |
+| **`unload`** | `unloaded` | Frees the model's memory now, the helper keeps running. (review, E-A11) |
 | `complete { …, thinking, thinking_budget, seed }` | `done` | New fields below |
 | **`cancel`** | `error { kind: "cancelled" }` for the running request | The helper and its model stay loaded. Ignored when nothing is running. (P-A3, E-A4) |
 | `embed` | `embedded` | Unchanged; keeps working on the processor in a GPU build (T-B) |
@@ -242,6 +269,14 @@ Requests (new ones in bold):
 
 Cancel: stdin is already read on its own thread. While writing a reply the helper checks for a waiting line after
 every token; `cancel` stops the reply, any other request that arrives meanwhile is queued and run next.
+
+Lifetime: the helper exits when its stdin closes, which happens when the app that started it exits or crashes,
+whatever the idle policy; "never exit" means never exit while the app runs. So an update or a crash never leaves a
+helper running (review, E-A10). The helper binary's name is the app's choice (Ensayo: the Tauri sidecar
+`ensayo-llm`); the engine's README says how to name it per target triple (section 10).
+
+Logs: the helper writes nothing but sizes, timings and error kinds to stderr; never a prompt, a reply, or any part of
+one. llama.cpp's own logging stays off. A source-scan test keeps it so (review, E-A12).
 
 New `complete` fields:
 
@@ -272,8 +307,12 @@ Errors: `error { kind, message, … }` with a fixed set of kinds the apps match 
 | `bad_request` | |
 | `internal` | |
 
-`crashed`, `gpu_failed`, `version_mismatch` and `timed_out` are added by the client (section 8), which is the one
-that sees a process die.
+| `gpu_failed` | `fell_back: bool` |
+
+`crashed`, `version_mismatch` and `timed_out` are added by the client (section 8), which is the one that sees a
+process die; `gpu_failed` is in the protocol so both the helper (a device that refuses to load) and the client (a
+GPU helper that died, replaced by the processor one) can report it, and the app can show "Graphics card failed,
+used processor" once and stop trying the card (review, P-A).
 
 Reply shapes: any JSON Schema the apps send goes through llama.cpp's converter. The engine's tests convert Ensayo's
 11 schemas and Talaan's summary schema (copied into `crates/llm/tests/schemas/`, MIT) and fail on any error. The
@@ -291,9 +330,10 @@ Blocking API, safe to call from a worker thread (Ensayo), wrapped by each app in
   limits })`. Starts the helper on first use, checks `ready` and that the protocol matches (else
   `version_mismatch`), sends `configure`, and restarts it after a crash or an idle exit (retrying a request once when
   the helper had just exited for idling).
-- `load`, `complete`, `embed`, `inspect` return `Result<_, EngineError>` with every kind from section 7 plus
-  `crashed`, `out_of_memory` (from the stderr tail when the process dies), `gpu_failed`, `version_mismatch`,
-  `timed_out`. Progress through a callback.
+- `load`, `unload`, `complete`, `embed`, `inspect`, `configure` return `Result<_, EngineError>` with every kind
+  from section 7 plus `crashed`, `out_of_memory` (from the stderr tail when the process dies), `version_mismatch`,
+  `timed_out`. Progress through a callback. Every reply says where it ran (`Backend`), so the app can show "used
+  processor" after a fallback.
 - `cancel()` from any thread sends `cancel`; if the helper doesn't answer in 2 s, it is killed and restarted.
 - GPU: on Windows, try the Vulkan helper first, fall back to the processor helper, and remember a failure per app
   version and graphics driver in the app's `gpu_failures` file so it isn't retried every time (Talaan's `gpu.json`).
@@ -304,31 +344,59 @@ Blocking API, safe to call from a worker thread (Ensayo), wrapped by each app in
 
 ## 9. Speech runtimes
 
-The engine transcribes one chunk (16 kHz mono, up to 40 s) with a loaded model and returns timed text. The app does
-everything around it.
+The engine transcribes one piece of audio (16 kHz mono) with a loaded model and returns timed text: the segments the
+model produced and the words inside them, both with times. The app does everything around it. Whisper takes audio
+of any length in one call (whisper.cpp cuts it into 30 s windows itself; Parlato sends whole dictations and imported
+files). Parakeet and Nemotron take one chunk up to `chunk_secs` (40 s) and return timed words for any chunk length,
+15 s windows included (Parlato keeps its own overlapping windows for long audio). (review, P-A)
 
 ### 9.1 API
 
 ```rust
 pub fn load(model: &ModelInfo, dir: &Path, opts: LoadOptions) -> Result<Box<dyn Transcriber>, SpeechError>;
 
-pub struct LoadOptions { pub gpu: bool, pub threads: Option<usize> }
-
-pub trait Transcriber {
-    fn transcribe(&mut self, chunk: &[f32], opts: &ChunkOptions) -> Result<Transcript, SpeechError>;
-    fn backend(&self) -> Backend;
+pub struct LoadOptions {
+    pub gpu: bool,                // Metal on the Mac, Vulkan or DirectML on Windows; falls back to the processor
+    pub threads: Option<usize>,   // None: the engine's rule (9.2); Some: the app's own setting, per model
 }
 
-pub struct ChunkOptions { pub language: Option<String>, pub timing: Timing, pub keep_fillers: bool }
+pub trait Transcriber {
+    fn transcribe(&mut self, audio: &[f32], opts: &ChunkOptions) -> Result<Transcript, SpeechError>;
+    /// Where it runs now (after a fallback: the processor, with `fell_back` true).
+    fn backend(&self) -> SpeechBackend;
+}
+
+pub struct ChunkOptions {
+    pub language: Option<String>,     // a hint ("fr"); None lets the model detect
+    pub timing: Timing,
+    pub keep_fillers: bool,
+    pub vocabulary: Vec<String>,      // the app's custom words, spelled as the person wants them (Whisper's initial prompt)
+}
 pub enum Timing { Segments, Words }
-pub struct Transcript { pub segments: Vec<Segment>, pub language: Option<String> }
+pub struct Transcript {
+    pub segments: Vec<Segment>,       // what the model produced, in order, each with its words
+    pub language: Option<String>,     // the language the model settled on
+    pub stopped_early_at_ms: Option<u64>, // Whisper stopped decoding with 2 s or more of audio left after this point
+}
 pub struct Segment { pub start_ms: u64, pub end_ms: u64, pub text: String, pub words: Vec<Word> }
 pub struct Word { pub text: String, pub start_ms: u64, pub end_ms: u64 }
+pub struct SpeechBackend { pub backend: String, pub device: Option<String>, pub fell_back: bool }
 ```
 
-Times are on the chunk's clock; the app adds the chunk's offset, as today. A loaded `Transcriber` stays loaded until
+Times are on the audio's clock; the app adds the chunk's offset, as today. A loaded `Transcriber` stays loaded until
 the app drops it, so "load when recording starts" and "stay loaded between answers" are the app calling `load`
-early and keeping the object. (E-B4)
+early and keeping the object; an idle unload is the app dropping it after its own timer (Parlato's "Keep models
+ready", from right away to hours). (E-B4, review) Every result carries both segments and words, in `Segments` mode
+and in `Words` mode: Talaan's echo removal and merge work on timed sentences, Ensayo's checks on timed words
+(review, T-B). Audio shorter than 1 s is padded with silence for Whisper, never an error; words past the end of the
+real audio are clamped to it. When Whisper stops decoding with speech left (2 s or more after the last word), the
+engine resumes from the last word itself, as Ensayo does today, and `stopped_early_at_ms` says where that happened
+(review, E-B). The language hint is passed to Whisper as is and to Nemotron as its prompt form ("fr" to "fr-FR").
+
+Graphics card per load: `gpu: true` tries Metal (Mac), Vulkan or DirectML (Windows); if the device fails to load
+the model, the engine loads on the processor, `SpeechError::GpuFailed` is not returned but `backend().fell_back` is
+true, so the app can say "Graphics card failed, used processor" once and pass `gpu: false` from then on (review,
+P-A, E-B8). Voice detection always runs on the processor.
 
 ### 9.2 Whisper
 
@@ -337,9 +405,17 @@ early and keeping the object. (E-B4)
   the app produces today. Language `None` means detect. (E-B1, goal 4)
 - Metal on the Mac, in process, with flash attention, as Talaan does today: this crate enables whisper-rs's `metal`
   feature on macOS. (E-B3, T-B)
-- Threads: on the processor, three quarters of the logical cores, 2 to 12, on every system; on Metal or a GPU, all
-  logical cores, 2 to 8. (T-A1)
-- The Windows Vulkan helper stays as in v0.1.0, gains the timing mode, and is driven by `SttClient`.
+- Threads, the engine's default: on the processor, three quarters of the logical cores, 2 to 12, on every system; on
+  Metal or a GPU, all logical cores, 2 to 8. The same default applies to Parakeet, Nemotron and speaker separation
+  (ONNX Runtime's intra-op threads). `LoadOptions::threads` overrides it per model: Parlato has a speech-threads
+  setting and measured Whisper Base fastest at 6 threads and Parakeet Ultra at 12 on an M3 Pro. (T-A1, T-B, review)
+- `vocabulary` becomes whisper.cpp's initial prompt (the words joined with commas), so custom words are spelled as
+  the person wants (review, P-A).
+- The Windows Vulkan helper stays as in v0.1.0, gains the timing mode, vocabulary and any-length audio, and is driven
+  by `SttClient`.
+- This crate never links llama.cpp (the AI runs in the helper), so an app can use it in process without the ggml
+  duplicate-symbol clash Parlato has today between whisper and llama (review, P-A). `voice-engine-llm` is only ever
+  built into a helper binary.
 
 ### 9.3 Parakeet, Nemotron, speaker separation, voice detection
 
@@ -349,11 +425,16 @@ early and keeping the object. (E-B4)
   uses parakeet-rs sentence timestamps (Talaan), `Timing::Words` word timestamps (Ensayo). (T-B, E-B)
 - On the graphics card on Windows: ONNX Runtime's DirectML provider behind the `directml` feature, used when
   `gpu: true` and falling back to the processor if it fails to start; `backend()` says which ran. (P-C2)
-- Speaker separation (Nemotron diarization through parakeet-rs `sortformer`) moves from Talaan's `diarize.rs`: the
-  model run returns speaker turns; naming speakers stays in Talaan. (T-B)
-- Voice detection: Talaan's `vad.rs` (whisper.cpp's Silero VAD, 4 threads, processor, threshold 0.5, 250 ms minimum
-  speech, 300 ms minimum silence) as `vad::detect(model_dir, samples) -> Vec<(start_ms, end_ms)>`. Chunking stays in
-  the apps.
+- Nemotron 3.5 is a normal model here (one chunk in, timed words out), not streaming. (review, E-B)
+- Speaker separation runs in the engine (review, T-B): `diarize::load(model_dir, threads) -> Diarizer` and
+  `Diarizer::run(track: &[f32]) -> Vec<SpeakerFrame>` (per-frame speaker activity for up to 8 speakers), with the
+  model's speaker memory warmed up first and the track fed in order, as Talaan's `diarize.rs` does today through
+  parakeet-rs's `sortformer` feature (MIT). Naming speakers and turning frames into turns stays in Talaan. The engine
+  owns parakeet-rs and ONNX Runtime, so Talaan's own copy goes away when it moves.
+- Voice detection: Talaan's `vad.rs` (whisper.cpp's Silero VAD, threshold 0.5, 250 ms minimum speech, 300 ms minimum
+  silence) as `vad::detect(model_dir, samples) -> Vec<(start_ms, end_ms)>`, a whole track in, speech spans out,
+  always on the processor on a small fixed thread count (4; more is 20 to 30 times slower, measured by Talaan; 2 was
+  fastest on Parlato's M3 Pro, so the count is a constant the apps don't set). Chunking stays in the apps.
 
 ### 9.4 Fillers
 
@@ -363,10 +444,13 @@ is measured on a test recording with fillers before the tag, with and without th
 
 ### 9.5 Speed
 
-A `bench` example prints load time and real-time factor per model on the computer it runs on. The bar before
+A `bench` example prints load time and real-time factor per model on the computer it runs on. The bars before
 tagging: Whisper Large v3 Turbo about 25x real time on Metal on the Mac; Parakeet Ultra about 50x on a Windows
-processor. (E-B3) It also prints a 50-words-in, 50-out cleanup with Qwen 3.5 4B, thinking off: load time and reply
-time on the Mac (Metal) and on a Windows processor, for Parlato's choice of default. (P-B2)
+processor (E-B3); and on an M3 Pro on the processor with 29 s of audio, Whisper Base about 0.50 s and Parakeet Ultra
+about 0.43 s, Parlato's floor (review, P-A). It also prints a 50-words-in, 50-out cleanup with Qwen 3.5 4B and with
+Granite 4.2 3B, thinking off: load time and reply time on the Mac (Metal) and on a Windows processor, for Parlato's
+choice of default; the helper with Granite must not be slower than Parlato 0.14.1's built-in cleanup measured the
+same way (review, P-B2).
 
 ## 10. Builds the apps can ship
 
@@ -375,7 +459,13 @@ time on the Mac (Metal) and on a Windows processor, for Parlato's choice of defa
   the exact `[env]` block for an app's `.cargo/config.toml`, and CI builds a release with it and checks the CMake
   cache for `GGML_NATIVE:BOOL=OFF`. (P-A6, E-A9)
 - macOS 11 or later on Apple silicon (`MACOSX_DEPLOYMENT_TARGET=11.0` in CI and in the README block). (E-A9)
-- CI adds Windows on ARM64 (`windows-11-arm`): build and test. (P-A5)
+- CI adds Windows on ARM64 (`windows-11-arm`): build and test every crate, the speech crate (whisper.cpp and ONNX
+  Runtime) included, with clang-cl and Ninja as Parlato's ARM64 build does. (P-A5, review)
+- A helper build recipe each app's CI can run from the pinned tag, with nothing copied from the engine repo by hand
+  (review, P-A5): `scripts/build-helper.sh` and `.ps1` take the app's prefix and the target triple
+  (`x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc`, `aarch64-apple-darwin`), build the app's 3-line helper crate
+  in release with the CPU baseline above, and write it as a Tauri sidecar name: `<name>-<target triple>[.exe]`. The
+  README shows the GitHub Actions steps.
 - The release checklist (README) includes running both helpers inside a self-signed, not notarized .app on the Mac.
   (E-A9)
 - Pinned native libraries, written in the README and the change log, changed only together: llama-cpp-sys-2
@@ -388,12 +478,21 @@ In CI (Windows x64, Windows ARM64, Mac), no large downloads:
 - Protocol 2: every request and event round-trips as one line; old messages still read; every error kind.
 - Grammar: the 12 app schemas convert without error.
 - Thinking: `strip_think` cases (closed, unclosed, missing opening tag, none).
+- Privacy: a source scan of every crate fails if a log or print line can carry user text (prompt, reply, transcript,
+  word, audio); the real-model tests also capture the helper's stderr and assert the prompt text is not in it.
+- Lifetime: the helper exits when stdin closes even with `idle_secs: null`; `unload` frees the model and the helper
+  keeps answering; `configure` twice in a row takes effect both times.
 - Shared store, with temporary folders: users, use locks across two `SharedStore`s standing in for two apps, release
-  with and without other users, `collect`, a crash simulated by dropping a handle, downloads by another app.
-- One-time move: each app's old layouts on both systems, a model in two apps' folders, an interrupted move run
-  again, a failed hard link.
+  with and without other users, `collect`, a crash simulated by dropping a handle, downloads by another app,
+  `Partial` with `cancelled` true and false, `open_at` never moves and never touches a path outside its folder.
+- One-time move: each app's old layouts on both systems, a model in two apps' folders, Talaan's two Windows folders
+  at once, an interrupted move run again, a failed hard link, a locked file left for next time, a dropped Parlato
+  GGUF kept as an import.
 - Downloader against a local test server: resume, a server that ignores Range, 416, a web page, wrong size, wrong
-  sha256, cancel, stall.
+  sha256, cancel, stall, each `DownloadError` kind, progress over several files adding up to 1.
+- Speech, with a 3 s synthetic clip and tiny models where CI can hold them: segments and words both present in both
+  modes, a 0.4 s clip padded not refused, words clamped to the audio length, `vocabulary` reaches whisper.cpp's
+  prompt, `threads: Some(n)` is what the context gets, `fell_back` set when `gpu: true` on a build without a GPU.
 - Catalog consistency; thread rule; client with a fake helper (crash, idle exit then retry, version mismatch, cancel
   timeout, GPU fallback memory).
 
@@ -404,8 +503,10 @@ PC:
   the 12 schemas gives a reply that passes the app's own check; the same request twice gives the same reply; cancel
   mid-reply then a new request works without a reload; `load` then `complete` reports `load_seconds: 0`.
 - Whisper Turbo and Parakeet Ultra: word timings present and ordered; Segments mode text identical to Talaan's
-  current output and Words mode identical to Ensayo's on the same clip; fillers measured.
-- `bench` numbers, written to the Notion page.
+  current output and Words mode identical to Ensayo's on the same clip; fillers measured; a 3-minute clip through
+  Whisper in one call; a 15 s window through Parakeet returns timed words; speaker separation on a two-voice clip
+  gives two speakers.
+- `bench` numbers (speech and both AI models), written to the Notion page.
 
 ## 12. Build order
 
@@ -437,6 +538,12 @@ Each step lands on `main` with CI green; the Notion items are ticked as they lan
 | P-B3, P-B4 Granite, GGUF by path | 6, 5.6 |
 | P-C1, E-C1, T-C1 shared folder, Parlato's names, Talaan's old Roaming folder | 5 |
 | P-C2 Parlato variants, Parakeet on the Windows GPU | 6, 9.3 |
+| P-A review: any-length Whisper, custom words, Parakeet windows, app thread count, unload and idle, GPU fallback reported, no llama in the speech crate, idle policy changeable live, Granite in the speed test, ARM64 for speech, helper build recipe, speech speed floor | 9, 9.1, 9.2, 7, 9.5, 10 |
+| E-A10 to E-A12 review: helper name and lifetime, model switching, no user text in logs | 7 |
+| E-B review: Nemotron as a normal model, language in and out, short chunks, early stop, GPU per load | 9.1, 9.3 |
+| E-C4, E-C5 review: progress as numbers, cancelled state, Ensayo's folders | 5.3, 5.4 |
+| T-B review: sentences as well as words, speaker separation runtime, voice detection threads, ONNX thread rule | 9.1, 9.2, 9.3 |
+| T-C1, T-C3 review: Talaan's two Windows folders and a half-done move, the move before any model opens, a test folder override, download progress and error kinds | 5.1, 5.4, 5.5 |
 | E-A1, T-B schemas | 7 |
 | E-A6, T-B errors as kinds, GPU failure | 7, 8 |
 | E-A7 token counts | 7 `done` |
