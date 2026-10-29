@@ -1132,7 +1132,7 @@ fn the_real_check_treats_a_file_that_cannot_be_opened_for_write_as_in_use() {
 fn a_file_held_open_on_windows_is_left_for_the_next_start() {
     use std::os::windows::fs::OpenOptionsExt;
     let w = World::new();
-    let file = w.talaan().join("vad/ggml-silero-v6.2.0.bin");
+    let file = w.talaan_windows().join("vad/ggml-silero-v6.2.0.bin");
     put_file(&file, 885_098, b"");
     // No sharing at all: what an app with the model loaded looks like to the file system.
     let held = fs::OpenOptions::new()
