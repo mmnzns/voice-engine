@@ -188,3 +188,137 @@ fn the_idle_time_can_be_changed_before_and_after_the_helper_starts() {
     client.set_idle(None).unwrap();
     client.set_idle(Some(60)).unwrap();
 }
+
+fn with_gpu(mut cfg: LlmConfig, gpu_mode: &str, failures: &std::path::Path) -> LlmConfig {
+    cfg.gpu_helper = Some(fake());
+    cfg.gpu_env = vec![("FAKE_MODE".into(), gpu_mode.into())];
+    cfg.gpu_failures = Some(failures.to_path_buf());
+    cfg
+}
+
+#[test]
+fn the_graphics_card_helper_is_used_when_it_works() {
+    let _t = turn();
+    let (d, st) = state();
+    let client = LlmClient::new(with_gpu(
+        config("", &st),
+        "gpu_ok",
+        &d.path().join("gpu.txt"),
+    ));
+    let out = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(out.backend.backend, "vulkan");
+    assert!(!out.fell_back);
+}
+
+#[test]
+fn a_graphics_card_helper_that_dies_hands_the_request_to_the_processor_and_is_remembered() {
+    let _t = turn();
+    let (d, st) = state();
+    let failures = d.path().join("gpu.txt");
+    let client = LlmClient::new(with_gpu(config("", &st), "gpu_die", &failures));
+    let out = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(out.value.text, "hi");
+    assert_eq!(out.backend.backend, "cpu");
+    assert!(out.fell_back, "the app is told the card failed, once");
+    assert_eq!(
+        std::fs::read_to_string(&failures).unwrap().trim(),
+        "test-build"
+    );
+
+    // A new client (the app restarted) with the same build and driver doesn't try the card again.
+    let again = LlmClient::new(with_gpu(config("", &st), "gpu_die", &failures));
+    let out = again.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(out.backend.backend, "cpu");
+    assert!(!out.fell_back);
+
+    // A new build (or driver) gets a fresh try.
+    let mut newer = with_gpu(config("", &st), "gpu_die", &failures);
+    newer.gpu_key = "next-build".into();
+    let out = LlmClient::new(newer)
+        .complete(completion(), &mut |_| {})
+        .unwrap();
+    assert!(
+        out.fell_back,
+        "the new key tried the card again and it failed again"
+    );
+
+    // The app's "try the graphics card again" button.
+    voice_engine_client::clear_gpu_failure(&failures);
+    assert!(!failures.exists());
+}
+
+#[test]
+fn a_graphics_card_error_from_the_helper_also_falls_back() {
+    let _t = turn();
+    let (d, st) = state();
+    let client = LlmClient::new(with_gpu(
+        config("", &st),
+        "gpu_error",
+        &d.path().join("gpu.txt"),
+    ));
+    let out = client.complete(completion(), &mut |_| {}).unwrap();
+    assert!(out.fell_back);
+    assert_eq!(out.backend.backend, "cpu");
+}
+
+#[test]
+fn cancel_stops_the_request_and_the_helper_keeps_going() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = LlmClient::new(config("slow", &st));
+    let result = std::thread::scope(|s| {
+        let worker = s.spawn(|| client.complete(completion(), &mut |_| {}));
+        std::thread::sleep(Duration::from_millis(500));
+        client.cancel();
+        worker.join().unwrap()
+    });
+    assert_eq!(result.unwrap_err(), EngineError::Cancelled);
+}
+
+#[test]
+fn a_helper_that_ignores_cancel_is_stopped_after_the_grace_period() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = LlmClient::new(config("ignore_cancel", &st));
+    let began = Instant::now();
+    let result = std::thread::scope(|s| {
+        let worker = s.spawn(|| client.complete(completion(), &mut |_| {}));
+        std::thread::sleep(Duration::from_millis(300));
+        client.cancel();
+        worker.join().unwrap()
+    });
+    assert_eq!(result.unwrap_err(), EngineError::Cancelled);
+    assert!(began.elapsed() < Duration::from_secs(8));
+    // A fresh helper serves the next call.
+    assert!(client.load("/m.gguf", 512, true, &mut |_| {}).is_ok());
+}
+
+#[test]
+fn cancel_with_nothing_running_does_nothing() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = LlmClient::new(config("", &st));
+    client.cancel();
+    assert_eq!(
+        client
+            .complete(completion(), &mut |_| {})
+            .unwrap()
+            .value
+            .text,
+        "hi"
+    );
+}
+
+#[test]
+fn a_helper_that_keeps_streaming_still_hits_the_total_limit() {
+    let _t = turn();
+    let (_d, st) = state();
+    let mut cfg = config("ignore_cancel", &st);
+    // It writes progress every 50 ms forever, so the stall limit never trips; only the total limit can stop it.
+    cfg.limits.total = Duration::from_millis(700);
+    let client = LlmClient::new(cfg);
+    let began = Instant::now();
+    let e = client.complete(completion(), &mut |_| {}).unwrap_err();
+    assert_eq!(e, EngineError::TimedOut);
+    assert!(began.elapsed() < Duration::from_secs(8));
+}

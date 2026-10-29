@@ -316,6 +316,22 @@ impl LlmClient {
         let mut last_event = Instant::now();
         let mut answered = false;
         loop {
+            // Checked on every pass, not only when the helper is quiet: a helper that keeps streaming progress while
+            // ignoring `cancel` (or running past the total limit) must still be stopped.
+            let asked = *self.cancel_asked.lock().unwrap_or_else(|e| e.into_inner());
+            if asked.is_some_and(|t| t.elapsed() > CANCEL_GRACE) {
+                // It was told to stop and didn't: stop it for good.
+                return Err(Attempt::Failed {
+                    error: EngineError::Cancelled,
+                    kill: true,
+                });
+            }
+            if last_event.elapsed() > limits.stall || began.elapsed() > limits.total {
+                return Err(Attempt::Failed {
+                    error: EngineError::TimedOut,
+                    kill: true,
+                });
+            }
             match r.process.recv(POLL) {
                 Recv::Event(Event::Error { message, error }) => {
                     return Err(Attempt::Failed {
@@ -332,22 +348,7 @@ impl LlmClient {
                     }
                 }
                 Recv::Closed => return Err(Attempt::Died { answered }),
-                Recv::Timeout => {
-                    let asked = *self.cancel_asked.lock().unwrap_or_else(|e| e.into_inner());
-                    if asked.is_some_and(|t| t.elapsed() > CANCEL_GRACE) {
-                        // It was told to stop and didn't: stop it for good.
-                        return Err(Attempt::Failed {
-                            error: EngineError::Cancelled,
-                            kill: true,
-                        });
-                    }
-                    if last_event.elapsed() > limits.stall || began.elapsed() > limits.total {
-                        return Err(Attempt::Failed {
-                            error: EngineError::TimedOut,
-                            kill: true,
-                        });
-                    }
-                }
+                Recv::Timeout => {}
             }
         }
     }
