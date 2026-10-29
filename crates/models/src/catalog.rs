@@ -1,33 +1,100 @@
-//! The speech model catalog: what each model is, its files, sizes, hashes and where they download from.
+//! The model catalog: every model the engine can fetch (speech, voice detection, speaker separation, search, local
+//! AI), with its files, sizes, hashes, licence and what runs it. The catalog never recommends; which model an app
+//! offers first is the app's business.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EngineKind {
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Kind {
+    /// Whisper (whisper.cpp ggml files).
+    Whisper,
     /// Parakeet TDT (v2, v3, Ultra).
     Parakeet,
     /// Parakeet Unified (English).
     ParakeetUnified,
     /// Nemotron ASR (multilingual).
     Nemotron,
-    Whisper,
-    /// A GGUF model for the local summary AI (run by the llm helper).
-    Llm,
+    /// Voice activity detection (Silero).
+    Vad,
     /// Speaker separation for the Them track.
     Diarization,
-    /// Text embeddings for Ask's search (run by the llm helper).
+    /// Text embeddings for search by meaning (run by the llm helper).
     Embedding,
+    /// A GGUF model for the local AI (run by the llm helper).
+    Llm,
 }
 
-impl EngineKind {
+impl Kind {
     /// A model that turns speech into text (the ones an app offers as speech models).
     pub fn is_speech(self) -> bool {
         matches!(
             self,
-            EngineKind::Parakeet
-                | EngineKind::ParakeetUnified
-                | EngineKind::Nemotron
-                | EngineKind::Whisper
+            Kind::Whisper | Kind::Parakeet | Kind::ParakeetUnified | Kind::Nemotron
         )
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Licence {
+    pub spdx: &'static str,
+    pub url: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GpuSupport {
+    pub mac_metal: bool,
+    pub windows_vulkan: bool,
+    pub windows_directml: bool,
+}
+
+/// What an app shows for a local AI model. Context sizes are in tokens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LlmInfo {
+    /// The longest context the model was trained for (read from the GGUF header).
+    pub context_max: u32,
+    /// The longest context that fits on a computer with 8 GB of memory, weights included (measured, Task 4).
+    pub context_8gb: u32,
+    /// The same for 16 GB.
+    pub context_16gb: u32,
+    /// Its chat template has a thinking step.
+    pub thinks: bool,
+}
+
+pub mod licences {
+    use super::Licence;
+    pub const MIT: Licence = Licence {
+        spdx: "MIT",
+        url: "https://opensource.org/license/mit",
+    };
+    pub const APACHE_2: Licence = Licence {
+        spdx: "Apache-2.0",
+        url: "https://www.apache.org/licenses/LICENSE-2.0",
+    };
+    pub const CC_BY_4: Licence = Licence {
+        spdx: "CC-BY-4.0",
+        url: "https://creativecommons.org/licenses/by/4.0/",
+    };
+    pub const OPENMDW_1_1: Licence = Licence {
+        spdx: "OpenMDW-1.1",
+        url: "https://openmdw.ai/license/1-1/",
+    };
+}
+
+pub mod gpu {
+    use super::GpuSupport;
+    pub const WHISPER_AND_LLM: GpuSupport = GpuSupport {
+        mac_metal: true,
+        windows_vulkan: true,
+        windows_directml: false,
+    };
+    pub const PARAKEET_TDT: GpuSupport = GpuSupport {
+        mac_metal: false,
+        windows_vulkan: false,
+        windows_directml: true,
+    };
+    pub const NONE: GpuSupport = GpuSupport {
+        mac_metal: false,
+        windows_vulkan: false,
+        windows_directml: false,
+    };
 }
 
 #[derive(Debug)]
@@ -43,15 +110,26 @@ pub struct ModelInfo {
     pub id: &'static str,
     pub name: &'static str,
     pub maker: &'static str,
+    /// Plain sentence, names no app, makes no recommendation.
     pub note: &'static str,
-    pub engine: EngineKind,
+    pub kind: Kind,
     /// Shown by the app ("25 European languages").
     pub languages: &'static str,
+    pub english_only: bool,
     /// 1..3, for the dots the app shows.
     pub speed: u8,
     pub accuracy: u8,
+    pub licence: Licence,
     pub files: &'static [ModelFile],
-    /// Folders, relative to another app's data folder, that may already hold these exact files.
+    pub gpu: GpuSupport,
+    /// Speech: whether it keeps "um" and "uh" when asked to. None until measured (spec 9.4).
+    pub keeps_fillers: Option<bool>,
+    /// Speech: the longest chunk to send (seconds). None: any length (Whisper).
+    pub chunk_secs: Option<u32>,
+    /// Local AI only.
+    pub llm: Option<LlmInfo>,
+    /// Folders, relative to another app's data folder, that may already hold these exact files (step 4 replaces
+    /// this with the shared folder).
     pub reuse_dirs: &'static [&'static str],
 }
 
@@ -59,25 +137,43 @@ impl ModelInfo {
     pub fn size(&self) -> u64 {
         self.files.iter().map(|f| f.size).sum()
     }
+
+    pub fn is_speech(&self) -> bool {
+        self.kind.is_speech()
+    }
 }
 
-#[cfg(test)]
-const PARAKEET_V3: &str = "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce/";
-#[cfg(test)]
-const WHISPER: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/";
+pub fn all() -> &'static [ModelInfo] {
+    CATALOG
+}
 
-/// Speech models, in the order an app lists them: the three recommended ones first (setup shows those and
-/// hides the rest behind "Show all models"), then the other Whisper sizes and NVIDIA models.
+pub fn speech() -> impl Iterator<Item = &'static ModelInfo> {
+    CATALOG.iter().filter(|m| m.is_speech())
+}
+
+pub fn local_ai() -> impl Iterator<Item = &'static ModelInfo> {
+    CATALOG.iter().filter(|m| m.kind == Kind::Llm)
+}
+
+pub fn find(id: &str) -> Option<&'static ModelInfo> {
+    CATALOG.iter().find(|m| m.id == id)
+}
+
+/// Every model, speech first, in a stable order. Which one an app recommends is the app's business.
 pub static CATALOG: &[ModelInfo] = &[
+    // Whisper Turbo: on real calls it was more complete and accurate than Parakeet (which skipped stretches and
+    // misheard more), covers Filipino, and at ~13x real time an hour-long call takes a few minutes.
     ModelInfo {
         id: "whisper-turbo",
         name: "Whisper Large Turbo",
         maker: "OpenAI",
         note: "Most accurate. 99 languages, including Filipino.",
-        engine: EngineKind::Whisper,
+        kind: Kind::Whisper,
         languages: "99 languages",
+        english_only: false,
         speed: 2,
         accuracy: 3,
+        licence: licences::MIT,
         files: &[ModelFile {
             name: "ggml-large-v3-turbo-q5_0.bin",
             url: concat!(
@@ -87,6 +183,10 @@ pub static CATALOG: &[ModelInfo] = &[
             size: 574_041_195,
             sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
         }],
+        gpu: gpu::WHISPER_AND_LLM,
+        keeps_fillers: None,
+        chunk_secs: None,
+        llm: None,
         reuse_dirs: &["Models"],
     },
     ModelInfo {
@@ -94,10 +194,12 @@ pub static CATALOG: &[ModelInfo] = &[
         name: "Parakeet",
         maker: "NVIDIA",
         note: "Good for quick notes in 25 European languages.",
-        engine: EngineKind::Parakeet,
+        kind: Kind::Parakeet,
         languages: "25 European languages",
+        english_only: false,
         speed: 3,
         accuracy: 1,
+        licence: licences::CC_BY_4,
         files: &[
             ModelFile {
                 name: "encoder-model.int8.onnx",
@@ -145,6 +247,10 @@ pub static CATALOG: &[ModelInfo] = &[
                 sha256: "666903c76b9798caf2c210afd4f6cd60b08a8dbf9800ec8d7a3bc0d2148ac466",
             },
         ],
+        gpu: gpu::PARAKEET_TDT,
+        keeps_fillers: None,
+        chunk_secs: Some(40),
+        llm: None,
         reuse_dirs: &["ParakeetModels/parakeet-tdt-0.6b-v3-int8"],
     },
     ModelInfo {
@@ -152,10 +258,12 @@ pub static CATALOG: &[ModelInfo] = &[
         name: "Whisper Small",
         maker: "OpenAI",
         note: "A smaller download that works on older computers. Lower accuracy.",
-        engine: EngineKind::Whisper,
+        kind: Kind::Whisper,
         languages: "99 languages",
+        english_only: false,
         speed: 3,
         accuracy: 1,
+        licence: licences::MIT,
         files: &[ModelFile {
             name: "ggml-small.bin",
             url: concat!(
@@ -165,6 +273,10 @@ pub static CATALOG: &[ModelInfo] = &[
             size: 487_601_967,
             sha256: "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
         }],
+        gpu: gpu::WHISPER_AND_LLM,
+        keeps_fillers: None,
+        chunk_secs: None,
+        llm: None,
         reuse_dirs: &["Models"],
     },
     ModelInfo {
@@ -172,10 +284,12 @@ pub static CATALOG: &[ModelInfo] = &[
         name: "Whisper Large v3",
         maker: "OpenAI",
         note: "Whisper’s largest model. Very accurate, slower than Turbo.",
-        engine: EngineKind::Whisper,
+        kind: Kind::Whisper,
         languages: "99 languages",
+        english_only: false,
         speed: 1,
         accuracy: 3,
+        licence: licences::MIT,
         files: &[ModelFile {
             name: "ggml-large-v3-q5_0.bin",
             url: concat!(
@@ -185,6 +299,10 @@ pub static CATALOG: &[ModelInfo] = &[
             size: 1_081_140_203,
             sha256: "d75795ecff3f83b5faa89d1900604ad8c780abd5739fae406de19f23ecd98ad1",
         }],
+        gpu: gpu::WHISPER_AND_LLM,
+        keeps_fillers: None,
+        chunk_secs: None,
+        llm: None,
         reuse_dirs: &["Models"],
     },
     ModelInfo {
@@ -192,10 +310,12 @@ pub static CATALOG: &[ModelInfo] = &[
         name: "Whisper Large v2",
         maker: "OpenAI",
         note: "The earlier large model. Some voices and accents come out better.",
-        engine: EngineKind::Whisper,
+        kind: Kind::Whisper,
         languages: "99 languages",
+        english_only: false,
         speed: 1,
         accuracy: 3,
+        licence: licences::MIT,
         files: &[ModelFile {
             name: "ggml-large-v2-q5_0.bin",
             url: concat!(
@@ -205,6 +325,10 @@ pub static CATALOG: &[ModelInfo] = &[
             size: 1_080_732_091,
             sha256: "3a214837221e4530dbc1fe8d734f302af393eb30bd0ed046042ebf4baf70f6f2",
         }],
+        gpu: gpu::WHISPER_AND_LLM,
+        keeps_fillers: None,
+        chunk_secs: None,
+        llm: None,
         reuse_dirs: &["Models"],
     },
     ModelInfo {
@@ -212,10 +336,12 @@ pub static CATALOG: &[ModelInfo] = &[
         name: "Whisper Medium",
         maker: "OpenAI",
         note: "Between Small and Large: good accuracy at a moderate speed.",
-        engine: EngineKind::Whisper,
+        kind: Kind::Whisper,
         languages: "99 languages",
+        english_only: false,
         speed: 1,
         accuracy: 2,
+        licence: licences::MIT,
         files: &[ModelFile {
             name: "ggml-medium.bin",
             url: concat!(
@@ -225,6 +351,10 @@ pub static CATALOG: &[ModelInfo] = &[
             size: 1_533_763_059,
             sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
         }],
+        gpu: gpu::WHISPER_AND_LLM,
+        keeps_fillers: None,
+        chunk_secs: None,
+        llm: None,
         reuse_dirs: &["Models"],
     },
     ModelInfo {
@@ -232,10 +362,12 @@ pub static CATALOG: &[ModelInfo] = &[
         name: "Whisper Base",
         maker: "OpenAI",
         note: "Very small and fast. Rough on names and accents.",
-        engine: EngineKind::Whisper,
+        kind: Kind::Whisper,
         languages: "99 languages",
+        english_only: false,
         speed: 3,
         accuracy: 1,
+        licence: licences::MIT,
         files: &[ModelFile {
             name: "ggml-base.bin",
             url: concat!(
@@ -245,6 +377,10 @@ pub static CATALOG: &[ModelInfo] = &[
             size: 147_951_465,
             sha256: "60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
         }],
+        gpu: gpu::WHISPER_AND_LLM,
+        keeps_fillers: None,
+        chunk_secs: None,
+        llm: None,
         reuse_dirs: &["Models"],
     },
     ModelInfo {
@@ -252,10 +388,12 @@ pub static CATALOG: &[ModelInfo] = &[
         name: "Whisper Tiny",
         maker: "OpenAI",
         note: "The smallest. For trying the app out or very old computers.",
-        engine: EngineKind::Whisper,
+        kind: Kind::Whisper,
         languages: "99 languages",
+        english_only: false,
         speed: 3,
         accuracy: 1,
+        licence: licences::MIT,
         files: &[ModelFile {
             name: "ggml-tiny.bin",
             url: concat!(
@@ -265,6 +403,10 @@ pub static CATALOG: &[ModelInfo] = &[
             size: 77_691_713,
             sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
         }],
+        gpu: gpu::WHISPER_AND_LLM,
+        keeps_fillers: None,
+        chunk_secs: None,
+        llm: None,
         reuse_dirs: &["Models"],
     },
     ModelInfo {
@@ -272,10 +414,12 @@ pub static CATALOG: &[ModelInfo] = &[
         name: "Parakeet Ultra",
         maker: "NVIDIA",
         note: "Parakeet v3 further trained by Moondream for better accuracy. 25 European languages.",
-        engine: EngineKind::Parakeet,
+        kind: Kind::Parakeet,
         languages: "25 European languages",
+        english_only: false,
         speed: 3,
         accuracy: 2,
+        licence: licences::CC_BY_4,
         files: &[
             ModelFile {
                 name: "encoder-model.int8.onnx",
@@ -323,6 +467,10 @@ pub static CATALOG: &[ModelInfo] = &[
                 sha256: "666903c76b9798caf2c210afd4f6cd60b08a8dbf9800ec8d7a3bc0d2148ac466",
             },
         ],
+        gpu: gpu::PARAKEET_TDT,
+        keeps_fillers: None,
+        chunk_secs: Some(40),
+        llm: None,
         reuse_dirs: &["ParakeetModels/parakeet-ultra-0.6b-int8"],
     },
     ModelInfo {
@@ -330,10 +478,12 @@ pub static CATALOG: &[ModelInfo] = &[
         name: "Parakeet v2",
         maker: "NVIDIA",
         note: "English only. Fast and very accurate in English.",
-        engine: EngineKind::Parakeet,
+        kind: Kind::Parakeet,
         languages: "English",
+        english_only: true,
         speed: 3,
         accuracy: 2,
+        licence: licences::CC_BY_4,
         files: &[
             ModelFile {
                 name: "encoder-model.int8.onnx",
@@ -381,6 +531,10 @@ pub static CATALOG: &[ModelInfo] = &[
                 sha256: "666903c76b9798caf2c210afd4f6cd60b08a8dbf9800ec8d7a3bc0d2148ac466",
             },
         ],
+        gpu: gpu::PARAKEET_TDT,
+        keeps_fillers: None,
+        chunk_secs: Some(40),
+        llm: None,
         reuse_dirs: &["ParakeetModels/parakeet-tdt-0.6b-v2-int8"],
     },
     ModelInfo {
@@ -388,10 +542,12 @@ pub static CATALOG: &[ModelInfo] = &[
         name: "Parakeet Unified",
         maker: "NVIDIA",
         note: "English only. NVIDIA’s newer English model, with punctuation.",
-        engine: EngineKind::ParakeetUnified,
+        kind: Kind::ParakeetUnified,
         languages: "English",
+        english_only: true,
         speed: 3,
         accuracy: 2,
+        licence: licences::CC_BY_4,
         files: &[
             ModelFile {
                 name: "encoder.int8.onnx",
@@ -430,6 +586,10 @@ pub static CATALOG: &[ModelInfo] = &[
                 sha256: "07d4e5a63840a53ab2d4d106d2874768143fb3fbdd47938b3910d2da05bfb0a9",
             },
         ],
+        gpu: gpu::NONE,
+        keeps_fillers: None,
+        chunk_secs: Some(40),
+        llm: None,
         reuse_dirs: &["ParakeetModels/parakeet-unified-en-0.6b-int8"],
     },
     ModelInfo {
@@ -437,10 +597,12 @@ pub static CATALOG: &[ModelInfo] = &[
         name: "Nemotron 3.5",
         maker: "NVIDIA",
         note: "NVIDIA’s newest, 35 languages. A larger download.",
-        engine: EngineKind::Nemotron,
+        kind: Kind::Nemotron,
         languages: "35 languages",
+        english_only: false,
         speed: 2,
         accuracy: 2,
+        licence: licences::OPENMDW_1_1,
         files: &[
             ModelFile {
                 name: "encoder.onnx",
@@ -479,111 +641,195 @@ pub static CATALOG: &[ModelInfo] = &[
                 sha256: "ce3895e40806f02a26c3a225161b96ef682d6c0054bae32a245dec4258d7d291",
             },
         ],
+        gpu: gpu::NONE,
+        keeps_fillers: None,
+        chunk_secs: Some(40),
+        llm: None,
         reuse_dirs: &["ParakeetModels/nemotron-3.5-asr-streaming-0.6b"],
     },
+    // Silero voice activity detection, used with every model. Downloaded with the first model.
+    ModelInfo {
+        id: "vad",
+        name: "Silero VAD",
+        maker: "Silero",
+        note: "",
+        kind: Kind::Vad,
+        languages: "",
+        english_only: false,
+        speed: 3,
+        accuracy: 3,
+        licence: licences::MIT,
+        files: &[ModelFile {
+            name: "ggml-silero-v6.2.0.bin",
+            url: "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v6.2.0.bin",
+            size: 885_098,
+            sha256: "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987",
+        }],
+        gpu: gpu::NONE,
+        keeps_fillers: None,
+        chunk_secs: None,
+        llm: None,
+        reuse_dirs: &["Models"],
+    },
+    // Speaker separation (named speakers): NVIDIA Nemotron 3 Diarization, ONNX export for parakeet-rs.
+    ModelInfo {
+        id: "diarization",
+        name: "Speaker separation",
+        maker: "NVIDIA",
+        note: "Tells the other people on a call apart: Speaker 1, 2, 3. Up to 8 people.",
+        kind: Kind::Diarization,
+        languages: "Any language",
+        english_only: false,
+        speed: 3,
+        accuracy: 2,
+        licence: licences::OPENMDW_1_1,
+        files: &[ModelFile {
+            name: "nemotron3_diar_v3.onnx",
+            url: "https://huggingface.co/altunenes/parakeet-rs/resolve/4d2a8bc71f5c896ec40faa59732e6716295edaf2/nemotron-3-diarization/nemotron3_diar_v3.onnx",
+            size: 400_506_656,
+            sha256: "915e4fa23b0192ed9fadeb1cdd26847df986d50c92012d177be28d0343bbe03a",
+        }],
+        gpu: gpu::NONE,
+        keeps_fillers: None,
+        chunk_secs: None,
+        llm: None,
+        reuse_dirs: &[],
+    },
+    // Search by meaning: Qwen3-Embedding 0.6B, 100+ languages.
+    ModelInfo {
+        id: "search",
+        name: "Search by meaning",
+        maker: "Qwen",
+        note: "Lets Ask find answers phrased differently from the question, in 100+ languages.",
+        kind: Kind::Embedding,
+        languages: "100+ languages",
+        english_only: false,
+        speed: 3,
+        accuracy: 2,
+        licence: licences::APACHE_2,
+        files: &[ModelFile {
+            name: "Qwen3-Embedding-0.6B-Q8_0.gguf",
+            url: "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/370f27d7550e0def9b39c1f16d3fbaa13aa67728/Qwen3-Embedding-0.6B-Q8_0.gguf",
+            size: 639_150_592,
+            sha256: "06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439",
+        }],
+        gpu: gpu::NONE,
+        keeps_fillers: None,
+        chunk_secs: None,
+        llm: None,
+        reuse_dirs: &[],
+    },
+    ModelInfo {
+        id: "qwen3.5-4b",
+        name: "Qwen3.5 4B",
+        maker: "Qwen",
+        note: "Small and quick enough for a laptop.",
+        kind: Kind::Llm,
+        languages: "Many languages",
+        english_only: false,
+        speed: 3,
+        accuracy: 2,
+        licence: licences::APACHE_2,
+        files: &[ModelFile {
+            name: "Qwen3.5-4B-Q4_K_M.gguf",
+            url: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf",
+            size: 2_740_937_888,
+            sha256: "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4",
+        }],
+        gpu: gpu::WHISPER_AND_LLM,
+        keeps_fillers: None,
+        chunk_secs: None,
+        // Placeholder zeros until the context sizes are measured.
+        llm: Some(LlmInfo {
+            context_max: 0,
+            context_8gb: 0,
+            context_16gb: 0,
+            thinks: true,
+        }),
+        reuse_dirs: &[],
+    },
+    ModelInfo {
+        id: "qwen3.5-9b",
+        name: "Qwen3.5 9B",
+        maker: "Qwen",
+        note: "Larger and a little more thorough; needs 16 GB of memory and takes about twice as long.",
+        kind: Kind::Llm,
+        languages: "Many languages",
+        english_only: false,
+        speed: 2,
+        accuracy: 3,
+        licence: licences::APACHE_2,
+        files: &[ModelFile {
+            name: "Qwen3.5-9B-Q4_K_M.gguf",
+            url: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/3885219b6810b007914f3a7950a8d1b469d598a5/Qwen3.5-9B-Q4_K_M.gguf",
+            size: 5_680_522_464,
+            sha256: "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8",
+        }],
+        gpu: gpu::WHISPER_AND_LLM,
+        keeps_fillers: None,
+        chunk_secs: None,
+        // Placeholder zeros until the context sizes are measured.
+        llm: Some(LlmInfo {
+            context_max: 0,
+            context_8gb: 0,
+            context_16gb: 0,
+            thinks: true,
+        }),
+        reuse_dirs: &[],
+    },
 ];
-
-/// Silero voice activity detection, used with every model. Downloaded with the first model.
-pub static VAD: ModelInfo = ModelInfo {
-    id: "vad",
-    name: "Silero VAD",
-    maker: "Silero",
-    note: "",
-    engine: EngineKind::Whisper,
-    languages: "",
-    speed: 3,
-    accuracy: 3,
-    files: &[ModelFile {
-        name: "ggml-silero-v6.2.0.bin",
-        url: "https://huggingface.co/ggml-org/whisper-vad/resolve/9ffd54a1e1ee413ddf265af9913beaf518d1639b/ggml-silero-v6.2.0.bin",
-        size: 885_098,
-        sha256: "2aa269b785eeb53a82983a20501ddf7c1d9c48e33ab63a41391ac6c9f7fb6987",
-    }],
-    reuse_dirs: &["Models"],
-};
-
-/// Whisper Turbo: on real calls it was more complete and accurate than Parakeet (which skipped stretches and
-/// misheard more), covers Filipino, and at ~13x real time an hour-long call takes a few minutes.
-/// Speaker separation (named speakers): NVIDIA Nemotron 3 Diarization, ONNX export for parakeet-rs.
-pub static DIARIZATION: ModelInfo = ModelInfo {
-    id: "diarization",
-    name: "Speaker separation",
-    maker: "NVIDIA",
-    note: "Tells the other people on a call apart: Speaker 1, 2, 3. Up to 8 people.",
-    engine: EngineKind::Diarization,
-    languages: "Any language",
-    speed: 3,
-    accuracy: 2,
-    files: &[ModelFile {
-        name: "nemotron3_diar_v3.onnx",
-        url: "https://huggingface.co/altunenes/parakeet-rs/resolve/4d2a8bc71f5c896ec40faa59732e6716295edaf2/nemotron-3-diarization/nemotron3_diar_v3.onnx",
-        size: 400_506_656,
-        sha256: "915e4fa23b0192ed9fadeb1cdd26847df986d50c92012d177be28d0343bbe03a",
-    }],
-    reuse_dirs: &[],
-};
-
-/// Ask's search by meaning: Qwen3-Embedding 0.6B, 100+ languages. Without it Ask searches by keywords.
-pub static SEARCH: ModelInfo = ModelInfo {
-    id: "search",
-    name: "Search by meaning",
-    maker: "Qwen",
-    note: "Lets Ask find answers phrased differently from the question, in 100+ languages.",
-    engine: EngineKind::Embedding,
-    languages: "100+ languages",
-    speed: 3,
-    accuracy: 2,
-    files: &[ModelFile {
-        name: "Qwen3-Embedding-0.6B-Q8_0.gguf",
-        url: "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/370f27d7550e0def9b39c1f16d3fbaa13aa67728/Qwen3-Embedding-0.6B-Q8_0.gguf",
-        size: 639_150_592,
-        sha256: "06507c7b42688469c4e7298b0a1e16deff06caf291cf0a5b278c308249c3e439",
-    }],
-    reuse_dirs: &[],
-};
-
-/// The default both Talaan and Ensayo use today. Each app may pick its own.
-pub const DEFAULT_MODEL: &str = "whisper-turbo";
-
-pub fn find(id: &str) -> Option<&'static ModelInfo> {
-    if id == VAD.id {
-        return Some(&VAD);
-    }
-    if id == DIARIZATION.id {
-        return Some(&DIARIZATION);
-    }
-    if id == SEARCH.id {
-        return Some(&SEARCH);
-    }
-    CATALOG.iter().find(|m| m.id == id)
-}
-
-// Keep the URL prefixes referenced so a typo in one of the concat! literals above shows up in tests.
-#[cfg(test)]
-const PREFIXES: [&str; 2] = [PARAKEET_V3, WHISPER];
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const PARAKEET_V3: &str = "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce/";
+    const WHISPER: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/";
+
     #[test]
     fn catalog_is_consistent() {
-        assert!(find(DEFAULT_MODEL).is_some());
-        for m in CATALOG.iter().chain(std::iter::once(&VAD)) {
+        assert!(!all().is_empty());
+        for m in all() {
             assert!(!m.files.is_empty(), "{}", m.id);
             for f in m.files {
                 assert_eq!(f.sha256.len(), 64, "{}", f.name);
+                assert!(
+                    f.sha256.chars().all(|c| c.is_ascii_hexdigit()),
+                    "{}",
+                    f.name
+                );
                 assert!(f.url.ends_with(f.name), "{}", f.url);
                 assert!(f.url.starts_with("https://huggingface.co/"), "{}", f.url);
             }
         }
+        let ids: std::collections::HashSet<_> = all().iter().map(|m| m.id).collect();
+        assert_eq!(ids.len(), all().len(), "duplicate model id");
+        assert!(find("whisper-turbo").is_some());
+        assert!(find("qwen3.5-4b").is_some());
+        assert!(find("nope").is_none());
         let v3 = find("parakeet-v3").unwrap();
-        assert!(v3.files.iter().all(|f| f.url.starts_with(PREFIXES[0])));
-        assert!(CATALOG.iter().all(|m| m.engine.is_speech()));
-        let ids: std::collections::HashSet<_> = CATALOG.iter().map(|m| m.id).collect();
-        assert_eq!(ids.len(), CATALOG.len(), "duplicate model id");
-        for m in CATALOG.iter().filter(|m| m.engine == EngineKind::Whisper) {
-            assert!(m.files.iter().all(|f| f.url.starts_with(PREFIXES[1])));
+        assert!(v3.files.iter().all(|f| f.url.starts_with(PARAKEET_V3)));
+        for m in all().iter().filter(|m| m.kind == Kind::Whisper) {
+            assert!(
+                m.files.iter().all(|f| f.url.starts_with(WHISPER)),
+                "{}",
+                m.id
+            );
         }
+        for m in local_ai() {
+            assert_eq!(m.files.len(), 1, "{}: one GGUF file", m.id);
+            let f = &m.files[0];
+            assert!(f.name.ends_with(".gguf"), "{}", f.name);
+            assert!(
+                f.url.contains("/resolve/") && !f.url.contains("/resolve/main/"),
+                "{}: pinned to a commit",
+                m.id
+            );
+            assert!(f.size > 1_000_000_000, "{}", m.id);
+        }
+        assert_eq!(
+            find("qwen3.5-4b").map(|m| m.files[0].name),
+            Some("Qwen3.5-4B-Q4_K_M.gguf")
+        );
     }
 }

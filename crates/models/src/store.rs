@@ -103,7 +103,7 @@ pub fn complete(dir: &Path, m: &ModelInfo) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::catalog::{EngineKind, ModelFile, ModelInfo};
+    use crate::catalog::{Kind, ModelFile, ModelInfo, gpu, licences};
     use crate::{App, Layout, OtherRoot};
     use std::fs;
 
@@ -112,16 +112,22 @@ mod tests {
         name: "Fake",
         maker: "Test",
         note: "",
-        engine: EngineKind::Whisper,
+        kind: Kind::Whisper,
         languages: "",
+        english_only: false,
         speed: 1,
         accuracy: 1,
+        licence: licences::MIT,
         files: &[ModelFile {
             name: "a.bin",
             url: "https://example.com/a.bin",
             size: 10,
             sha256: "",
         }],
+        gpu: gpu::NONE,
+        keeps_fillers: None,
+        chunk_secs: None,
+        llm: None,
         reuse_dirs: &["Models"],
     };
 
