@@ -24,6 +24,14 @@
   streaming progress is still stopped.
 - Known: on a Mac, several helpers starting at the same moment can make one die with SIGBUS inside Apple's Metal
   shader cache (not engine code). An app's client must restart a helper that dies at startup.
+- Catalog: one catalog for every kind of model (speech, voice detection, speaker separation, search, local AI).
+  `Kind` replaces `EngineKind` and has a `Vad` variant. New fields: licence, GPU support (Mac Metal, Windows Vulkan,
+  Windows DirectML), English-only, chunk length, fillers, and the local AI context sizes (`LlmInfo`). Ten new speech
+  variants: English-only Whisper Tiny, Base, Small and Medium; full-size Whisper Large v2, Large v3 and Turbo;
+  full-size Parakeet v2, v3 and Unified. New local model: Granite 4.2 3B. Parlato's four older local models are not
+  offered (an existing file is kept as an imported GGUF by the shared-folder move, step 4). Removed: `llm_catalog`,
+  `EngineKind`, `DEFAULT_MODEL` and the `VAD`, `DIARIZATION` and `SEARCH` statics. An app migrating uses
+  `catalog::find`, `catalog::speech()`, `catalog::local_ai()` and `Kind`.
 
 ## v0.1.0 (2026-10-28)
 

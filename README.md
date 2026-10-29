@@ -37,6 +37,26 @@ call `load`, `complete`, `embed`, `inspect`, `unload`, `set_idle` and `cancel` f
 `EngineError`, never on text. Each result says which backend ran it and whether the graphics card failed during the
 call (`fell_back`): show "Graphics card failed, used processor" once, then keep passing the same config.
 
+## Catalog
+
+`voice-engine-models` has one catalog for every kind of model. Each entry has a `Kind`: `Whisper`, `Parakeet`,
+`ParakeetUnified`, `Nemotron` (the four speech kinds, `Kind::is_speech`), `Vad` (Silero voice detection),
+`Diarization` (speaker separation), `Embedding` (search by meaning) and `Llm` (local AI).
+
+Every entry carries: `id`, `name`, `maker`, `note`, `kind`, `languages`, `english_only`, `speed` and `accuracy` (1 to
+3), `licence` (SPDX name and link), `files` (each with a url pinned to a commit, size and sha256), `gpu` (which of Mac
+Metal, Windows Vulkan and Windows DirectML run it), `keeps_fillers` (None until measured), `chunk_secs` (the longest
+chunk to send; None means any length), `llm` (local AI only: `context_max`, `context_8gb`, `context_16gb`, `thinks`)
+and `reuse_dirs`. Look models up with `catalog::find`, `catalog::all()`, `catalog::speech()` and `catalog::local_ai()`.
+
+The catalog never recommends a model. Which one an app offers first is the app's business.
+
+To check the catalog against Hugging Face (every url, size and sha256), run:
+
+```
+python3 tools/verify-catalog.py
+```
+
 ## Use it in an app
 
 ```toml

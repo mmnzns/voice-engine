@@ -1285,4 +1285,122 @@ mod tests {
         assert_eq!(find("parakeet-v3-full").unwrap().files.len(), 6);
         assert_eq!(find("parakeet-unified-en-full").unwrap().files.len(), 4);
     }
+
+    #[test]
+    fn every_entry_has_the_fields_the_apps_show() {
+        for m in all() {
+            assert!(!m.name.is_empty(), "{}: name", m.id);
+            assert!(!m.maker.is_empty(), "{}: maker", m.id);
+            // Silero has no note and no languages to show; every other entry has both.
+            if m.kind != Kind::Vad {
+                assert!(!m.note.is_empty(), "{}: note", m.id);
+                assert!(!m.languages.is_empty(), "{}: languages", m.id);
+            }
+            assert!(
+                !m.licence.spdx.is_empty() && m.licence.url.starts_with("https://"),
+                "{}: licence",
+                m.id
+            );
+            assert!(
+                (1..=3).contains(&m.speed) && (1..=3).contains(&m.accuracy),
+                "{}: speed and accuracy are 1 to 3",
+                m.id
+            );
+            assert!(!m.files.is_empty(), "{}", m.id);
+            for f in m.files {
+                assert_eq!(f.sha256.len(), 64, "{}", f.name);
+                assert!(
+                    f.sha256
+                        .chars()
+                        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+                    "{}: sha256 is lower-case hex",
+                    f.name
+                );
+                assert!(f.size > 0, "{}", f.name);
+                assert!(
+                    f.url.ends_with(&format!("/{}", f.name)),
+                    "{}: url ends with the file name",
+                    f.url
+                );
+                let (_, rest) = f
+                    .url
+                    .split_once("/resolve/")
+                    .unwrap_or_else(|| panic!("{} is not a Hugging Face resolve url", f.url));
+                let rev = rest.split('/').next().unwrap();
+                assert!(
+                    rev.len() == 40 && rev.chars().all(|c| c.is_ascii_hexdigit()),
+                    "{} is not pinned to a commit",
+                    f.url
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ids_are_unique_and_kinds_agree_with_fields() {
+        let mut seen = std::collections::HashSet::new();
+        for m in all() {
+            assert!(seen.insert(m.id), "duplicate id {}", m.id);
+            assert_eq!(m.kind == Kind::Llm, m.llm.is_some(), "{}", m.id);
+            match m.kind {
+                Kind::Parakeet | Kind::ParakeetUnified | Kind::Nemotron => {
+                    assert_eq!(m.chunk_secs, Some(40), "{}", m.id)
+                }
+                Kind::Whisper => assert_eq!(m.chunk_secs, None, "{}", m.id),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn local_ai_numbers_are_measured_not_placeholders() {
+        let ids: Vec<_> = local_ai().map(|m| m.id).collect();
+        assert_eq!(ids, ["qwen3.5-4b", "qwen3.5-9b", "granite-4.2-3b"]);
+        for m in local_ai() {
+            let l = m.llm.unwrap();
+            assert!(l.context_8gb >= 4096, "{}", m.id);
+            assert!(
+                l.context_8gb <= l.context_16gb && l.context_16gb <= l.context_max,
+                "{}",
+                m.id
+            );
+        }
+    }
+
+    #[test]
+    fn the_four_dropped_local_models_are_not_offered() {
+        for id in [
+            "qwen2.5-3b-instruct-q4",
+            "llama-3.2-3b-instruct-q4",
+            "gemma-2-2b-it-q4",
+            "phi-3.5-mini-instruct-q4",
+        ] {
+            assert!(find(id).is_none(), "{id}");
+        }
+        for m in all() {
+            for f in m.files {
+                for dropped in ["Llama-3.2", "gemma-2", "Phi-3.5", "Qwen2.5"] {
+                    assert!(
+                        !f.url.contains(dropped),
+                        "{}: {} is a dropped model",
+                        m.id,
+                        dropped
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_speech_entry_says_where_it_runs() {
+        for m in speech().filter(|m| m.kind == Kind::Whisper) {
+            assert!(
+                m.gpu.mac_metal && m.gpu.windows_vulkan && !m.gpu.windows_directml,
+                "{}",
+                m.id
+            );
+        }
+        assert!(find("vad").unwrap().gpu == gpu::NONE);
+        assert!(find("parakeet-ultra").unwrap().gpu.windows_directml);
+    }
 }
