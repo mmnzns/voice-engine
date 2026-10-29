@@ -12,7 +12,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        # windows-11-arm is Windows ARM64 (aarch64-pc-windows-msvc): the helpers and the speech crate must build and run
+        # there too, for Snapdragon PCs. The free ARM64 runner is available because this repository is public.
+        os: [windows-latest, macos-latest, windows-11-arm]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -20,6 +22,31 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      # Windows ARM64 needs clang-cl and Ninja (both are on the runner image: LLVM in C:\Program Files\LLVM, Ninja in
+      # C:\Tools\Ninja). MSVC's own `cl` does not build it: whisper.cpp's and llama.cpp's ggml-cpu stop at configure time
+      # with "MSVC is not supported for ARM, use clang" (ggml/src/ggml-cpu/CMakeLists.txt). The Visual Studio environment is
+      # loaded for the ARM64 target (INCLUDE, LIB, the Windows SDK) because Ninja, unlike the Visual Studio generator,
+      # does not find them itself.
+      - name: Visual Studio environment (Windows ARM64)
+        if: runner.os == 'Windows' && runner.arch == 'ARM64'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: arm64
+      - name: clang-cl and Ninja (Windows ARM64)
+        if: runner.os == 'Windows' && runner.arch == 'ARM64'
+        shell: pwsh
+        run: |
+          $clang = (Get-Command clang-cl -ErrorAction Stop).Source
+          $ninja = (Get-Command ninja -ErrorAction Stop).Source
+          Write-Host "clang-cl: $clang"; & $clang --version
+          Write-Host "ninja: $ninja"; & $ninja --version
+          # The cc and cmake crates take the compiler from CC/CXX and the generator from CMAKE_GENERATOR.
+          "CC=$clang" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "CXX=$clang" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "CMAKE_GENERATOR=Ninja" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          # llama-cpp-sys-2 compiles its wrapper_common.cpp with the cc crate, which does not pass /EHsc to clang-cl:
+          # "cannot use 'try' with exceptions disabled". CXXFLAGS is read by the cc and cmake crates.
+          "CXXFLAGS=/EHsc" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
@@ -33,6 +60,11 @@ jobs:
         shell: pwsh
         run: |
           # Asks cargo where each CMake cache is (the out_dir of the build script that ran), then reads it.
+          # x64: GGML_NATIVE off and the AVX2 baseline. ARM64 (windows-11-arm): GGML_NATIVE off only, because GGML_AVX2 is
+          # an x86 option and is not in the cache there. The ARM64 baseline is ggml's own: with GGML_NATIVE off and no
+          # GGML_CPU_ARM_ARCH, ggml-cpu adds no -march/-mcpu at all, so clang uses its default for aarch64-pc-windows-msvc
+          # (armv8-a with NEON; no dot-product or i8mm kernels), whatever the build machine's CPU is. llama-cpp-sys-2
+          # sets GGML_CPU_ARM_ARCH only for aarch64 Linux and Android, and whisper.cpp only when told; nothing to set.
           $x64 = $env:RUNNER_ARCH -eq 'X64'
           $failed = $false
           foreach ($pair in @(@('llama-cpp-sys-2', 'voice-engine-llm'), @('whisper-rs-sys', 'voice-engine-stt'))) {
@@ -62,6 +94,15 @@ jobs:
                 Write-Host "FAIL  ${helper}: $crate needs $($check.Pattern), its cache has: $has ($cache)"
                 $failed = $true
               }
+            }
+            if (-not $x64) {
+              # ARM64: show which -march/-mcpu flags ggml-cpu compiled with (none is the expected answer: clang's own
+              # armv8-a default) and fail if one of them is "native", which would be the build machine's CPU.
+              $ninjaFile = Join-Path $out 'build\build.ninja'
+              $arch = @(Select-String -Path $ninjaFile -Pattern '-m(arch|cpu)=\S+' -AllMatches -ErrorAction SilentlyContinue |
+                ForEach-Object { $_.Matches.Value } | Sort-Object -Unique)
+              Write-Host "INFO  ${helper}: $crate compiled with -march/-mcpu flags: $(if ($arch) { $arch -join ' ' } else { '(none: the compiler default, armv8-a)' })"
+              if ($arch -match 'native') { Write-Host "FAIL  ${helper}: $crate compiled for the build machine's CPU"; $failed = $true }
             }
           }
           if ($failed) { exit 1 }
