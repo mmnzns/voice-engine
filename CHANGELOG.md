@@ -2,6 +2,15 @@
 
 ## Unreleased (v0.2.0)
 
+- build: the native libraries have a fixed CPU baseline. `.cargo/config.toml` sets `GGML_NATIVE=OFF`, the x86 baseline
+  `GGML_AVX/AVX2/FMA/F16C/BMI2=ON` (Intel Haswell and AMD Excavator, 2013 and 2015, and newer) and
+  `MACOSX_DEPLOYMENT_TARGET=11.0`, and passes `-C target-feature=+avx2,+fma,+f16c,+bmi2` for `x86_64-pc-windows-msvc`.
+  Before this, whisper.cpp was built with `GGML_NATIVE=ON` (the build machine's own CPU) and both libraries with
+  `-mmacosx-version-min=` set to the build Mac's macOS (27.0 on a macOS 27 Mac) instead of 11.0. Cargo does not read
+  this file for an app that uses the engine as a git dependency: the README section "Build settings an app must copy"
+  says what to copy. New: `scripts/check-baseline.sh` (fails unless the CMake caches say `GGML_NATIVE:BOOL=OFF` and, on
+  a Mac, macOS 11.0), run by CI on macOS, with a PowerShell check of `GGML_NATIVE` and `GGML_AVX2` on Windows. CI also
+  runs on pushes to `v0.2.0-step-*` branches.
 - protocol 2 (`PROTOCOL_VERSION` 2): `configure` (idle time, or never exit while the app runs; can be sent at any
   time), `load` (load now, answers `loaded` with the load time and the model's trained context; a different path
   replaces the loaded model), `unload` (frees the model, the helper keeps running), `cancel` (stops the reply, the

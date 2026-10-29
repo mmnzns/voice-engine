@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'v0.2.0-step-*']
   pull_request:
   # Actions > CI > Run workflow: also builds the Vulkan GPU versions (windows-gpu, below).
   workflow_dispatch:
@@ -23,6 +23,47 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      # The native libraries must be built for a fixed CPU baseline (.cargo/config.toml), not this runner's CPU. The debug
+      # profile reuses the build above; the CMake configuration is the same in release.
+      - name: Check the native baseline (macOS)
+        if: runner.os == 'macOS'
+        run: scripts/check-baseline.sh debug
+      - name: Check the native baseline (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Asks cargo where each CMake cache is (the out_dir of the build script that ran), then reads it.
+          $x64 = $env:RUNNER_ARCH -eq 'X64'
+          $failed = $false
+          foreach ($pair in @(@('llama-cpp-sys-2', 'voice-engine-llm'), @('whisper-rs-sys', 'voice-engine-stt'))) {
+            $crate, $helper = $pair
+            $json = cargo build -p $helper --message-format=json
+            if ($LASTEXITCODE -ne 0) { throw "cargo build -p $helper failed" }
+            $out = $json | ForEach-Object { try { $_ | ConvertFrom-Json } catch { } } |
+              Where-Object { $_.reason -eq 'build-script-executed' -and $_.package_id -like "*#$crate@*" } |
+              Select-Object -Last 1 -ExpandProperty out_dir
+            $cache = if ($out) { Join-Path $out 'build\CMakeCache.txt' } else { '' }
+            if (-not $cache -or -not (Test-Path $cache)) {
+              Write-Host "FAIL  ${helper}: no CMake cache for $crate (build script out_dir: '$out')"
+              Write-Host "Every CMakeCache.txt under target:"
+              Get-ChildItem -Path target -Recurse -Filter CMakeCache.txt -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
+              $failed = $true
+              continue
+            }
+            $lines = Get-Content $cache
+            $checks = @(@('GGML_NATIVE', '^GGML_NATIVE:BOOL=OFF$'))
+            if ($x64) { $checks += , @('GGML_AVX2', '^GGML_AVX2:[A-Z]+=ON$') }
+            foreach ($check in $checks) {
+              $name, $pattern = $check
+              if ($lines -match $pattern) {
+                Write-Host "PASS  ${helper}: $crate $name ok ($cache)"
+              } else {
+                Write-Host "FAIL  ${helper}: $crate wants $pattern, cache has: $($lines -match "^${name}:")"
+                $failed = $true
+              }
+            }
+          }
+          if ($failed) { exit 1 }
 
   # The Vulkan builds of the llm and stt crates, with the Vulkan SDK. Manual only: the shaders take a while.
   windows-gpu:

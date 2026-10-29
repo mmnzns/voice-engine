@@ -289,6 +289,42 @@ fn main() {
 }
 ```
 
+## Build settings an app must copy
+
+llama.cpp and whisper.cpp are built from source by CMake while an app compiles. Left alone they are compiled for the
+computer that builds them (the newest instructions of the build machine's CPU, and the build machine's macOS as the
+minimum), so a release made on a new CI runner or a new Mac can crash with "illegal instruction" or not start on an
+older one. The engine's own `.cargo/config.toml` fixes that:
+
+```toml
+[env]
+GGML_NATIVE = { value = "OFF", force = true }            # no "optimize for this CPU"; read by whisper-rs-sys and llama-cpp-sys-2
+GGML_AVX = { value = "ON", force = true }                # the x86 baseline: AVX2 + FMA + F16C + BMI2 (2013 and newer)
+GGML_AVX2 = { value = "ON", force = true }
+GGML_FMA = { value = "ON", force = true }
+GGML_F16C = { value = "ON", force = true }
+GGML_BMI2 = { value = "ON", force = true }
+MACOSX_DEPLOYMENT_TARGET = { value = "11.0", force = true }   # the first macOS for Apple silicon; read by cc, cmake and rustc
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+avx2,+fma,+f16c,+bmi2"]   # llama-cpp-sys-2 turns these into GGML_AVX2, GGML_FMA, ...
+```
+
+**Cargo reads `.cargo/config.toml` only for the workspace it builds.** An app that depends on the engine as a git
+dependency does not get these lines, and nothing warns it: it builds the libraries for its own build machine. So an app
+that links `voice-engine-llm` or `voice-engine-stt` (the helper programs, or the speech crate in process) copies the block
+above into its own `.cargo/config.toml` (for a Tauri app, next to `Cargo.toml` in `src-tauri/`; commit it, unlike the
+patch file in the next section), or sets the same variables in its release workflow, or builds the helpers with the
+reusable workflow described in `docs/building-helpers.md` (added in this same v0.2.0 step), which carries them.
+The rustflags line is for Windows x64 only (the Windows ARM64 build is covered in a later step of v0.2.0).
+
+Two things to know. A build script does not run again when one of these values changes, so after editing them run
+`cargo clean -p whisper-rs-sys -p llama-cpp-sys-2` (with `--release` for release builds). And `RUSTFLAGS` set in the
+environment replaces the `rustflags` line in the file instead of adding to it; put the `target-feature` flag in it too.
+`scripts/check-baseline.sh` (Mac and Linux) builds the two helpers and fails unless the CMake caches say
+`GGML_NATIVE:BOOL=OFF` and, on a Mac, the libraries were compiled for macOS 11.0 and the binaries say so; CI runs it,
+and a PowerShell check does the same for `GGML_NATIVE` and `GGML_AVX2` on Windows x64.
+
 ## Try an engine change in an app before tagging
 
 Put this in the app's `src-tauri/.cargo/config.toml` (git-ignored, never committed):

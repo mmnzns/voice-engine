@@ -1,0 +1,38 @@
+# Build settings that make the native libraries (llama.cpp and whisper.cpp, both built by CMake from build scripts)
+# run on any computer of the same family, never only on the one that built them. Cargo reads this file only for the
+# workspace it is building: an app that depends on the engine as a git dependency does NOT get it and must copy these
+# lines (README, "Build settings an app must copy").
+#
+# A build script is not re-run when one of these values changes. After editing them, run
+# `cargo clean -p whisper-rs-sys -p llama-cpp-sys-2` (add `--release` for release builds; whisper-rs-sys has no
+# rerun-if-env-changed).
+
+[env]
+# Read by whisper-rs-sys's build.rs, which forwards every GGML_* variable to CMake, and by llama-cpp-sys-2's build.rs,
+# which forwards them too but then sets GGML_NATIVE itself (OFF unless `target-cpu=native` is in the Rust flags).
+# Without it whisper.cpp's CMake defaults GGML_NATIVE to ON and compiles for the build machine's own CPU
+# (a runner or a developer's newer processor), which crashes with "illegal instruction" on an older one.
+# `force = true`: a GGML_NATIVE already in the shell must not win.
+GGML_NATIVE = { value = "OFF", force = true }
+
+# With GGML_NATIVE off, whisper.cpp's CMake turns the x86 instruction sets on by default, but only when it is not
+# cross-compiling and SOURCE_DATE_EPOCH is unset; naming them makes the baseline explicit. The baseline is AVX2 + FMA +
+# F16C + BMI2 (Intel Haswell 2013 / AMD Excavator 2015 and newer). llama-cpp-sys-2 turns the same four on from the Rust
+# target features below, whisper-rs-sys only through these variables. On Apple silicon and ARM64 CMake ignores them.
+GGML_AVX = { value = "ON", force = true }
+GGML_AVX2 = { value = "ON", force = true }
+GGML_FMA = { value = "ON", force = true }
+GGML_F16C = { value = "ON", force = true }
+GGML_BMI2 = { value = "ON", force = true }
+
+# Read by the cc and cmake crates and by CMake (CMAKE_OSX_DEPLOYMENT_TARGET) when they compile llama.cpp and
+# whisper.cpp for the Mac. Unset, they use the macOS of the build machine (`-mmacosx-version-min=27.0` on a Mac
+# running macOS 27) and the app would not start on older systems. 11.0 is the first macOS for Apple silicon, and what
+# rustc itself links for aarch64-apple-darwin.
+MACOSX_DEPLOYMENT_TARGET = { value = "11.0", force = true }
+
+[target.x86_64-pc-windows-msvc]
+# Read by llama-cpp-sys-2's build.rs through CARGO_CFG_TARGET_FEATURE: avx2, fma, f16c and bmi2 become
+# GGML_AVX2, GGML_FMA, GGML_F16C and GGML_BMI2 = ON for llama.cpp (when `target-cpu=native` is absent, it also sets
+# GGML_NATIVE = OFF). Rust code in the helpers is compiled with the same instructions. Not used on ARM64.
+rustflags = ["-C", "target-feature=+avx2,+fma,+f16c,+bmi2"]
