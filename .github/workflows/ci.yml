@@ -51,14 +51,15 @@ jobs:
               continue
             }
             $lines = Get-Content $cache
-            $checks = @(@('GGML_NATIVE', '^GGML_NATIVE:BOOL=OFF$'))
-            if ($x64) { $checks += , @('GGML_AVX2', '^GGML_AVX2:[A-Z]+=ON$') }
+            $checks = @(@{ Name = 'GGML_NATIVE'; Pattern = '^GGML_NATIVE:BOOL=OFF$' })
+            if ($x64) { $checks += @{ Name = 'GGML_AVX2'; Pattern = '^GGML_AVX2:[A-Z]+=ON$' } }
             foreach ($check in $checks) {
-              $name, $pattern = $check
-              if ($lines -match $pattern) {
-                Write-Host "PASS  ${helper}: $crate $name ok ($cache)"
+              $found = @($lines | Where-Object { $_ -match $check.Pattern })
+              if ($found.Count -gt 0) {
+                Write-Host "PASS  ${helper}: $crate has $($found[0]) ($cache)"
               } else {
-                Write-Host "FAIL  ${helper}: $crate wants $pattern, cache has: $($lines -match "^${name}:")"
+                $has = @($lines | Where-Object { $_ -match "^$($check.Name):" }) -join ' '
+                Write-Host "FAIL  ${helper}: $crate needs $($check.Pattern), its cache has: $has ($cache)"
                 $failed = $true
               }
             }
