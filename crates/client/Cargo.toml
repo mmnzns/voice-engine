@@ -1,0 +1,24 @@
+[package]
+name = "voice-engine-client"
+description = "The app side of the voice-engine helpers: starts them, restarts them, speaks the protocol, reports failures as kinds"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "voice_engine_client"
+path = "src/lib.rs"
+
+# A fake AI helper with scripted failures, for this crate's own tests (tests/client.rs).
+[[bin]]
+name = "fake-llm-helper"
+path = "tests/fake_helper.rs"
+test = false
+
+[dependencies]
+voice-engine-protocol.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
