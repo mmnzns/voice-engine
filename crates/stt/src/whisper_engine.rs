@@ -81,7 +81,8 @@ pub fn pad_audio(samples: &[f32]) -> Cow<'_, [f32]> {
     Cow::Owned(audio)
 }
 
-/// whisper.cpp's initial prompt: the filler prompt first when asked, then the custom words joined with ", ".
+/// whisper.cpp's initial prompt: the filler prompt first when asked, then the custom words joined with ", " and ended
+/// with a full stop (measured: without it Whisper copies the prompt's bare style and drops capitals and full stops).
 /// `None` when there is nothing to say. Null bytes are removed (whisper-rs panics on them) and blank words dropped.
 pub fn build_prompt(vocabulary: &[String], keep_fillers: bool) -> Option<String> {
     let words: Vec<String> = vocabulary
@@ -94,7 +95,7 @@ pub fn build_prompt(vocabulary: &[String], keep_fillers: bool) -> Option<String>
         parts.push(FILLER_PROMPT.to_string());
     }
     if !words.is_empty() {
-        parts.push(words.join(", "));
+        parts.push(format!("{}.", words.join(", ")));
     }
     if parts.is_empty() {
         None

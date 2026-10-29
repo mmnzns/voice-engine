@@ -124,11 +124,11 @@ fn the_prompt_is_none_without_vocabulary_or_fillers() {
 }
 
 #[test]
-fn vocabulary_alone_is_the_words_joined_with_commas() {
+fn vocabulary_alone_is_the_words_joined_with_commas_and_a_full_stop() {
     let words = vec!["Zorblax".to_string(), "Mogo".to_string()];
     assert_eq!(
         build_prompt(&words, false).as_deref(),
-        Some("Zorblax, Mogo")
+        Some("Zorblax, Mogo.")
     );
 }
 
@@ -146,7 +146,7 @@ fn fillers_come_first_then_the_vocabulary() {
     let words = vec!["Zorblax".to_string(), "Mogo".to_string()];
     assert_eq!(
         build_prompt(&words, true).as_deref(),
-        Some(format!("{FILLER_PROMPT} Zorblax, Mogo").as_str())
+        Some(format!("{FILLER_PROMPT} Zorblax, Mogo.").as_str())
     );
 }
 
@@ -159,7 +159,7 @@ fn blank_entries_and_null_bytes_never_reach_whisper_cpp() {
         "Mogo".to_string(),
     ];
     let prompt = build_prompt(&words, false).unwrap();
-    assert_eq!(prompt, "Zorblax, Mogo");
+    assert_eq!(prompt, "Zorblax, Mogo.");
     assert!(!prompt.contains('\0'));
 }
 
