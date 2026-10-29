@@ -188,3 +188,37 @@ fn load_and_complete_with_a_missing_file_say_model_missing() {
     let _ = wait_exit(&mut child, Duration::from_secs(20));
     let _ = child.kill();
 }
+
+#[test]
+fn unload_with_nothing_loaded_answers_unloaded_and_the_helper_keeps_going() {
+    let mut child = spawn(None);
+    let mut stdin = child.stdin.take().unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let line = ask(&mut stdin, &mut out, r#"{"op":"unload"}"#);
+    assert_eq!(line.trim(), r#"{"event":"unloaded"}"#);
+    let line = ask(&mut stdin, &mut out, r#"{"op":"ping"}"#);
+    assert!(line.contains("ready"), "{line}");
+    drop(stdin);
+    let _ = wait_exit(&mut child, Duration::from_secs(20));
+    let _ = child.kill();
+}
+
+#[test]
+fn never_exit_still_exits_when_the_app_is_gone() {
+    // "Never exit" means never exit while the app runs: closing stdin (the app quit or crashed) must still end it,
+    // so an update or a crash never leaves a helper behind.
+    let mut child = spawn(None);
+    let mut stdin = child.stdin.take().unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let line = ask(
+        &mut stdin,
+        &mut out,
+        r#"{"op":"configure","idle_secs":null}"#,
+    );
+    assert!(line.contains("configured"), "{line}");
+    drop(stdin);
+    assert!(
+        wait_exit(&mut child, Duration::from_secs(20)).is_some_and(|s| s.success()),
+        "the helper must exit when its stdin closes, even configured to never idle out"
+    );
+}
