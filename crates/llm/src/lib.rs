@@ -13,6 +13,8 @@ mod failure;
 mod generate;
 mod inbox;
 mod model;
+#[allow(dead_code)]
+mod think;
 
 use failure::Failure;
 use generate::{EMBED_MAX_TOKENS, complete, embed};
