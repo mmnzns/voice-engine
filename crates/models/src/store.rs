@@ -2,8 +2,8 @@
 //! reuse is on. A copy in another app's folder is used in place and read only; this code never writes, moves or
 //! deletes anything there.
 
-use crate::apps::{App, OtherRoot};
 use crate::catalog::ModelInfo;
+use crate::legacy::{App, OtherRoot};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -13,9 +13,9 @@
 //! if an app crashes. Lock files are never deleted (deleting one while another process has it open would let a
 //! third process lock a new file at the same path).
 
-use crate::apps::App;
 use crate::catalog::{self, ModelInfo};
 use crate::download::{self, DownloadError, IDLE, Progress};
+use crate::legacy::App;
 use std::collections::HashSet;
 use std::fmt;
 use std::fs::{self, File, OpenOptions, TryLockError};
@@ -119,8 +119,19 @@ impl ModelHandle {
 pub struct SharedStore {
     app: App,
     root: PathBuf,
+    /// Where the apps' old folders are. None for a store opened with `open_at` (or the models-dir override): such a
+    /// store never moves anything in.
+    pub(crate) old_folders: Option<OldFolders>,
     /// Models this instance is downloading right now (`Downloading.by_me`).
     downloading: Mutex<HashSet<String>>,
+}
+
+/// Where this computer keeps the apps' data, for the one-time move.
+#[derive(Debug, Clone)]
+pub(crate) struct OldFolders {
+    pub(crate) local_data: PathBuf,
+    pub(crate) roaming: Option<PathBuf>,
+    pub(crate) windows: bool,
 }
 
 /// Part files this old with no download running are leftovers (`collect`).
@@ -130,7 +141,7 @@ const STALE_PART: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 const LOCK_TRIES: u32 = 5;
 const LOCK_RETRY: Duration = Duration::from_millis(25);
 
-fn app_name(app: App) -> &'static str {
+pub(crate) fn app_name(app: App) -> &'static str {
     match app {
         App::Talaan => "talaan",
         App::Ensayo => "ensayo",
@@ -140,7 +151,7 @@ fn app_name(app: App) -> &'static str {
 
 /// A model id is one plain path component. Anything else (`..`, `.engine`, a separator) is refused before it can
 /// reach a path that gets erased.
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     let mut chars = id.chars();
     chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
         && id
@@ -179,7 +190,33 @@ impl SharedStore {
         }
         let dir = SharedStore::default_dir()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no local app data folder"))?;
-        SharedStore::open_at(app, dir)
+        let mut store = SharedStore::open_at(app, dir)?;
+        // Only the real folder moves anything in; `local_data` exists because `default_dir` found it.
+        store.old_folders = dirs::data_local_dir().map(|local_data| OldFolders {
+            local_data,
+            roaming: dirs::data_dir(),
+            windows: cfg!(target_os = "windows"),
+        });
+        Ok(store)
+    }
+
+    /// A store at `shared` that moves models in from old app folders under `local_data` (and `roaming`), laid out
+    /// as on Windows or the Mac. For tests of `move_in`; apps use `open`.
+    #[doc(hidden)]
+    pub fn for_move_test(
+        app: App,
+        shared: &Path,
+        local_data: &Path,
+        roaming: Option<&Path>,
+        windows: bool,
+    ) -> io::Result<SharedStore> {
+        let mut store = SharedStore::open_at(app, shared.to_path_buf())?;
+        store.old_folders = Some(OldFolders {
+            local_data: local_data.to_path_buf(),
+            roaming: roaming.map(Path::to_path_buf),
+            windows,
+        });
+        Ok(store)
     }
 
     /// Any folder the app passes in. Creates `dir/.engine`; nothing outside `dir` is read or written.
@@ -190,6 +227,7 @@ impl SharedStore {
         Ok(SharedStore {
             app,
             root: dir,
+            old_folders: None,
             downloading: Mutex::default(),
         })
     }
@@ -208,15 +246,19 @@ impl SharedStore {
         self.root.join(id)
     }
 
+    pub(crate) fn app(&self) -> App {
+        self.app
+    }
+
     fn engine(&self) -> PathBuf {
         self.root.join(".engine")
     }
 
-    fn users_dir(&self, id: &str) -> PathBuf {
+    pub(crate) fn users_dir(&self, id: &str) -> PathBuf {
         self.engine().join("users").join(id)
     }
 
-    fn marker(&self, id: &str, app: App) -> PathBuf {
+    pub(crate) fn marker(&self, id: &str, app: App) -> PathBuf {
         self.users_dir(id).join(app_name(app))
     }
 
@@ -249,13 +291,18 @@ impl SharedStore {
     /// Writes this app's user marker. Holds the `.use` lock shared for the instant, so an erase (which holds it
     /// exclusively while it re-checks the users) either sees this marker or finishes before it is written.
     fn add_user(&self, id: &str) -> io::Result<()> {
+        self.add_user_as(id, self.app)
+    }
+
+    /// `add_user` for any app: the one-time move marks the apps whose old folders hold a model.
+    pub(crate) fn add_user_as(&self, id: &str, app: App) -> io::Result<()> {
         if !valid_id(id) {
             return Err(invalid_id());
         }
         let lock = self.lock_file(id, "use")?;
         lock.lock_shared()?;
         fs::create_dir_all(self.users_dir(id))?;
-        File::create(self.marker(id, self.app))?;
+        File::create(self.marker(id, app))?;
         Ok(())
     }
 
