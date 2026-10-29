@@ -78,26 +78,31 @@ fn no_log_line_mentions_user_text() {
 
 #[test]
 fn whisper_cpps_own_log_is_switched_off() {
-    // whisper.cpp prints the model path and the device list to stderr by default.
-    let engine = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/whisper_engine.rs");
-    let text = std::fs::read_to_string(engine).unwrap();
-    assert!(text.contains("install_logging_hooks()"));
+    // whisper.cpp prints the model path and the device list to stderr by default; the voice detector is whisper.cpp
+    // too.
+    for file in ["whisper_engine.rs", "vad.rs"] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(file);
+        let text = std::fs::read_to_string(path).unwrap();
+        assert!(text.contains("install_logging_hooks()"), "{file}");
+    }
 }
 
 #[test]
 fn error_messages_are_built_from_codes_not_from_what_was_said() {
-    // Every `SpeechError::Internal(format!(...))` in the engine carries a whisper-rs error (a kind and a number),
-    // never the audio, the prompt or the text.
-    let engine = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/whisper_engine.rs");
-    let text = std::fs::read_to_string(engine).unwrap();
-    for (n, line) in text.lines().enumerate() {
-        if line.contains("SpeechError::Internal(format!") {
-            assert!(
-                line.contains("{e}"),
-                "whisper_engine.rs:{}: an error message that is not just the engine's error: {}",
-                n + 1,
-                line.trim()
-            );
+    // Every `SpeechError::Internal(format!(...))` in the engines carries a whisper-rs error (a kind and a number),
+    // never the audio, the prompt, the text or a file name.
+    for file in ["whisper_engine.rs", "vad.rs"] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join(file);
+        let text = std::fs::read_to_string(path).unwrap();
+        for (n, line) in text.lines().enumerate() {
+            if line.contains("SpeechError::Internal(format!") {
+                assert!(
+                    line.contains("{e}"),
+                    "{file}:{}: an error message that is not just the engine's error: {}",
+                    n + 1,
+                    line.trim()
+                );
+            }
         }
     }
 }

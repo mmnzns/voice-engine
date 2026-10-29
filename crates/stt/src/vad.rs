@@ -1,0 +1,120 @@
+//! Voice detection: where in a track is there speech. Only speech needs to go to a speech model: silence costs
+//! time and makes models invent text ("Thank you." on a quiet line).
+//!
+//! [`detect`] takes a whole track (16 kHz mono) and returns the speech spans as `(start_ms, end_ms)` on the audio's
+//! own clock, in order, never overlapping, never past the end of the audio. It is whisper.cpp's Silero detector
+//! (through whisper-rs), ported from Talaan's `transcriber/vad.rs` (MIT) with its settings: threshold 0.5, 250 ms
+//! minimum speech, 300 ms minimum silence, no padding (the apps pad and cut their own chunks).
+//!
+//! It always runs on the processor, on a small fixed thread count the apps do not set (see `THREADS`). The model
+//! is the catalog's `vad` entry (`ggml-silero-v6.2.0.bin`) in `model_dir`; it is under 1 MB, so each call loads it
+//! and drops it again, and the function keeps no state.
+//!
+//! Edge cases, as in Talaan: empty audio and audio shorter than one frame (512 samples, 32 ms) have no speech and
+//! never reach the detector; audio with no speech gives an empty list, not an error.
+//!
+//! Errors are kinds: [`SpeechError::ModelMissing`] when the file is not there, [`SpeechError::BadModel`] when it is
+//! there but cannot be loaded. No message carries audio or a file name.
+
+use crate::api::SpeechError;
+use std::path::Path;
+use voice_engine_models::catalog;
+
+/// Silero's frame at 16 kHz: whisper.cpp reads the audio 512 samples (32 ms) at a time, and audio shorter than
+/// that cannot hold the 250 ms of speech a span needs.
+pub const FRAME_SAMPLES: usize = 512;
+
+/// Threads for the detector. Fixed, and 4 on purpose: Talaan measured that more threads make voice detection
+/// 20 to 30 times slower (16 threads took 9 to 13 s on a track that takes 0.3 to 0.5 s with 4), and on Parlato's
+/// M3 Pro 2 threads were the fastest. The work is a small recurrent model run frame by frame, so threads only add
+/// synchronisation. Apps do not set this.
+const THREADS: i32 = 4;
+
+/// Threshold above which a frame counts as speech.
+const THRESHOLD: f32 = 0.5;
+/// A span shorter than this is dropped (clicks, coughs).
+const MIN_SPEECH_MS: i32 = 250;
+/// Silence shorter than this does not end a span (a breath inside a sentence).
+const MIN_SILENCE_MS: i32 = 300;
+
+/// whisper.cpp's time (centiseconds, a float) in whole milliseconds, rounded to the nearest. `None` for a value
+/// that is not a time (NaN, infinite, negative).
+pub fn centis_to_ms(centiseconds: f32) -> Option<u64> {
+    if !centiseconds.is_finite() || centiseconds < 0.0 {
+        return None;
+    }
+    Some((centiseconds as f64 * 10.0).round() as u64)
+}
+
+/// The detector's raw spans (`(start, end)` in centiseconds) as clean spans in milliseconds: converted, clamped to
+/// the real audio (whisper.cpp counts whole frames, so the last span can end after the audio does), those that are
+/// empty, backwards or not times dropped, sorted, and spans that overlap or touch merged into one.
+pub fn spans_from_centiseconds(raw: &[(f32, f32)], audio_ms: u64) -> Vec<(u64, u64)> {
+    let mut spans: Vec<(u64, u64)> = raw
+        .iter()
+        .filter_map(|&(a, b)| {
+            let start = centis_to_ms(a)?;
+            let end = centis_to_ms(b)?.min(audio_ms);
+            (end > start).then_some((start, end))
+        })
+        .collect();
+    spans.sort_unstable();
+    let mut merged: Vec<(u64, u64)> = Vec::with_capacity(spans.len());
+    for (start, end) in spans {
+        match merged.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
+        }
+    }
+    merged
+}
+
+/// Audio too short to hold a frame: no speech, no need to load anything.
+pub fn is_shorter_than_a_frame(samples: &[f32]) -> bool {
+    samples.len() < FRAME_SAMPLES
+}
+
+/// The speech spans of `samples` (16 kHz mono) as `(start_ms, end_ms)`, in order, on the audio's clock. Empty when
+/// there is no speech. `model_dir` is the folder of the catalog's `vad` model.
+pub fn detect(model_dir: &Path, samples: &[f32]) -> Result<Vec<(u64, u64)>, SpeechError> {
+    let name = catalog::find("vad")
+        .and_then(|m| m.files.first())
+        .map(|f| f.name)
+        .ok_or_else(|| SpeechError::Internal("the catalog has no voice detection model".into()))?;
+    let file = model_dir.join(name);
+    if !file.is_file() {
+        return Err(SpeechError::ModelMissing);
+    }
+    if is_shorter_than_a_frame(samples) {
+        return Ok(vec![]);
+    }
+    // whisper.cpp and ggml log to stderr by default (with the model path); errors come back as kinds.
+    whisper_rs::install_logging_hooks();
+    // whisper-rs takes the path as text; one that is not text cannot be passed, and is not a missing file.
+    let path = file
+        .to_str()
+        .ok_or_else(|| SpeechError::Unsupported("the model path is not valid text".into()))?;
+    let mut ctx_params = whisper_rs::WhisperVadContextParams::new();
+    ctx_params.set_n_threads(THREADS);
+    ctx_params.set_use_gpu(false);
+    let mut ctx =
+        whisper_rs::WhisperVadContext::new(path, ctx_params).map_err(|_| SpeechError::BadModel)?;
+    let mut params = whisper_rs::WhisperVadParams::new();
+    params.set_threshold(THRESHOLD);
+    params.set_min_speech_duration(MIN_SPEECH_MS);
+    params.set_min_silence_duration(MIN_SILENCE_MS);
+    params.set_speech_pad(0);
+    let segments = ctx
+        .segments_from_samples(params, samples)
+        .map_err(|e| SpeechError::Internal(format!("voice detection failed: {e}")))?;
+    let raw: Vec<(f32, f32)> = (0..segments.num_segments())
+        .filter_map(|i| {
+            Some((
+                segments.get_segment_start_timestamp(i)?,
+                segments.get_segment_end_timestamp(i)?,
+            ))
+        })
+        .collect();
+    let audio_ms = samples.len() as u64 * 1000 / 16_000;
+    Ok(spans_from_centiseconds(&raw, audio_ms))
+}

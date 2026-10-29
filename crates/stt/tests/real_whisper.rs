@@ -3,7 +3,9 @@
 //! The model is `whisper-turbo` from `$VOICE_ENGINE_TEST_MODELS` (default: Talaan's models folder,
 //! `~/Library/Application Support/Talaan/models`), only ever read. Speech is made with the macOS `say` command in a
 //! temporary folder and converted with `afconvert` to 16 kHz mono f32. Every test here goes through one lock: the
-//! Metal shader cache can SIGBUS when several processes (or contexts) start at once.
+//! Metal shader cache can SIGBUS when several processes (or contexts) start at once. The voice detection tests
+//! (`vad/ggml-silero-v6.2.0.bin`, from the same folder) live here too, behind the same lock and the same `say`
+//! helper.
 
 #![cfg(target_os = "macos")]
 
@@ -13,6 +15,7 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
 use voice_engine_models::catalog::find;
 use voice_engine_stt::threads::{ThreadKind, default_threads, logical_cores};
+use voice_engine_stt::vad;
 use voice_engine_stt::whisper_engine::WhisperEngine;
 use voice_engine_stt::words::clean;
 use voice_engine_stt::{ChunkOptions, LoadOptions, Timing, Transcriber, Transcript, load};
@@ -678,4 +681,127 @@ fn a_missing_file_and_a_broken_file_give_kinds() {
         .err(),
         Some(voice_engine_stt::SpeechError::BadModel)
     );
+}
+
+// ---- voice detection (`vad::detect`, the catalog's `vad` model) ----
+
+fn vad_dir() -> PathBuf {
+    let m = find("vad").unwrap();
+    let dir = models_dir().join("vad");
+    let file = dir.join(m.files[0].name);
+    assert!(
+        file.is_file(),
+        "the voice detection test model is not at {}",
+        file.display()
+    );
+    dir
+}
+
+/// `lead_ms` of silence, `speech`, `tail_ms` of silence (16 kHz).
+fn silence_speech_silence(lead_ms: u64, speech: &[f32], tail_ms: u64) -> Vec<f32> {
+    let mut audio = vec![0.0f32; (lead_ms * 16) as usize];
+    audio.extend_from_slice(speech);
+    audio.extend(std::iter::repeat_n(0.0f32, (tail_ms * 16) as usize));
+    audio
+}
+
+/// A continuous phrase (no full stop in the middle, so no pause long enough to end a span).
+const PHRASE: &str = "This is a short test of the voice detection in the speech engine";
+
+#[test]
+#[ignore]
+fn voice_detection_finds_one_span_around_speech_between_silences() {
+    let _g = guard();
+    let speech = say(PHRASE);
+    let (lead, tail) = (2_000u64, 2_000u64);
+    let audio = silence_speech_silence(lead, &speech, tail);
+    let t0 = Instant::now();
+    let spans = vad::detect(&vad_dir(), &audio).unwrap();
+    eprintln!(
+        "{} ms of audio (speech {lead}..{} ms): spans {spans:?} in {:?}",
+        ms(&audio),
+        lead + ms(&speech),
+        t0.elapsed()
+    );
+    assert_eq!(spans.len(), 1, "{spans:?}");
+    let (start, end) = spans[0];
+    let speech_end = lead + ms(&speech);
+    assert!(
+        start.abs_diff(lead) <= 300,
+        "the span starts at {start} ms, the speech at {lead} ms"
+    );
+    assert!(
+        end.abs_diff(speech_end) <= 300,
+        "the span ends at {end} ms, the speech at {speech_end} ms"
+    );
+    assert!(start < end && end <= ms(&audio));
+}
+
+#[test]
+#[ignore]
+fn voice_detection_gives_no_span_for_silence_and_for_quiet_noise() {
+    let _g = guard();
+    let dir = vad_dir();
+    let silence = vec![0.0f32; 16_000 * 5];
+    assert_eq!(vad::detect(&dir, &silence).unwrap(), vec![]);
+    // Very quiet pseudo-random hiss (a fixed generator, so the test is repeatable).
+    let mut x = 12345u32;
+    let hiss: Vec<f32> = (0..16_000 * 5)
+        .map(|_| {
+            x = x.wrapping_mul(1664525).wrapping_add(1013904223);
+            ((x >> 8) as f32 / (1u32 << 24) as f32 - 0.5) * 0.002
+        })
+        .collect();
+    assert_eq!(vad::detect(&dir, &hiss).unwrap(), vec![]);
+}
+
+#[test]
+#[ignore]
+fn voice_detection_keeps_two_bursts_apart_and_in_order() {
+    let _g = guard();
+    let speech = say(PHRASE);
+    let gap_ms = 3_000u64;
+    let mut audio = silence_speech_silence(1_000, &speech, gap_ms);
+    audio.extend_from_slice(&speech);
+    audio.extend(std::iter::repeat_n(0.0f32, 16_000));
+    let spans = vad::detect(&vad_dir(), &audio).unwrap();
+    eprintln!("two bursts: {spans:?} in {} ms", ms(&audio));
+    assert_eq!(spans.len(), 2, "{spans:?}");
+    let second_start = 1_000 + ms(&speech) + gap_ms;
+    assert!(spans[0].1 < spans[1].0, "{spans:?}");
+    assert!(spans[0].0.abs_diff(1_000) <= 300, "{spans:?}");
+    assert!(spans[1].0.abs_diff(second_start) <= 300, "{spans:?}");
+    assert!(
+        spans[1].1.abs_diff(second_start + ms(&speech)) <= 300,
+        "{spans:?}"
+    );
+}
+
+#[test]
+#[ignore]
+fn voice_detection_edge_cases_on_the_real_model() {
+    let _g = guard();
+    let dir = vad_dir();
+    assert_eq!(vad::detect(&dir, &[]).unwrap(), vec![]);
+    assert_eq!(vad::detect(&dir, &[0.5; 100]).unwrap(), vec![]);
+    // 100 ms of speech is more than a frame but under the 250 ms minimum: the detector drops it.
+    let speech = say(PHRASE);
+    assert_eq!(vad::detect(&dir, &speech[..16_000 / 10]).unwrap(), vec![]);
+    // A three minute track (speech, a pause, speech, ...) runs in one call and stays on the clock.
+    let mut long = vec![];
+    while long.len() < 16_000 * 180 {
+        long.extend_from_slice(&speech);
+        long.extend(std::iter::repeat_n(0.0f32, 16_000 * 2));
+    }
+    let t0 = Instant::now();
+    let spans = vad::detect(&dir, &long).unwrap();
+    eprintln!(
+        "{} s of audio: {} spans in {:?}",
+        long.len() / 16_000,
+        spans.len(),
+        t0.elapsed()
+    );
+    assert!(spans.len() >= 10, "{}", spans.len());
+    assert!(spans.windows(2).all(|w| w[0].1 < w[1].0));
+    assert!(spans.iter().all(|&(a, b)| a < b && b <= ms(&long)));
 }

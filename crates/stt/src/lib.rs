@@ -4,6 +4,7 @@
 //!   with `Timing::Segments` (Talaan's settings) or `Timing::Words` (Ensayo's). Whisper runs in process
 //!   ([`whisper_engine`]: Metal on the Mac, Vulkan with the `vulkan` feature, else the processor); the thread rule
 //!   is in [`threads`].
+//! * [`vad::detect`]: where the speech is in a track (whisper.cpp's Silero detector, always on the processor).
 //! * [`run_helper`]: the Windows GPU helper, which still speaks the v0.1.0 protocol and transcribes a chunk with
 //!   `transcribe` below, the same Whisper the apps run in process (it moves onto the new API with `SttClient`).
 //!
@@ -13,6 +14,7 @@
 mod api;
 mod helper;
 pub mod threads;
+pub mod vad;
 pub mod whisper_engine;
 pub mod words;
 
