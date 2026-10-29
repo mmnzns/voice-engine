@@ -1122,11 +1122,14 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
         chunk_secs: None,
-        // Placeholder zeros until the context sizes are measured.
+        // Measured with the helper on the processor, 18 GB M-series Mac, 2026-10-29 (table in SOURCES.md).
+        // Rule: context_8gb is the largest tested n_ctx with a peak size of at most 5 GiB, context_16gb the largest
+        // with at most 11 GiB (4096 when even 8192 does not fit), both capped at context_max. The sweep went up to
+        // 131072 tokens.
         llm: Some(LlmInfo {
-            context_max: 0,
-            context_8gb: 0,
-            context_16gb: 0,
+            context_max: 262144,
+            context_8gb: 65536,
+            context_16gb: 131072,
             thinks: true,
         }),
         reuse_dirs: &[],
@@ -1135,7 +1138,7 @@ pub static CATALOG: &[ModelInfo] = &[
         id: "qwen3.5-9b",
         name: "Qwen3.5 9B",
         maker: "Qwen",
-        note: "Larger and a little more thorough; needs 16 GB of memory and takes about twice as long.",
+        note: "Larger and a little more thorough; needs 16 GB of memory and takes about twice as long. On 8 GB of memory only a context of 4096 tokens fits.",
         kind: Kind::Llm,
         languages: "Many languages",
         english_only: false,
@@ -1151,11 +1154,46 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
         chunk_secs: None,
-        // Placeholder zeros until the context sizes are measured.
+        // Measured with the helper on the processor, 18 GB M-series Mac, 2026-10-29 (table in SOURCES.md).
+        // Rule: context_8gb is the largest tested n_ctx with a peak size of at most 5 GiB, context_16gb the largest
+        // with at most 11 GiB (4096 when even 8192 does not fit), both capped at context_max. The sweep went up to
+        // 131072 tokens.
         llm: Some(LlmInfo {
-            context_max: 0,
-            context_8gb: 0,
-            context_16gb: 0,
+            context_max: 262144,
+            context_8gb: 4096,
+            context_16gb: 131072,
+            thinks: true,
+        }),
+        reuse_dirs: &[],
+    },
+    ModelInfo {
+        id: "granite-4.2-3b",
+        name: "Granite 4.2 3B",
+        maker: "IBM",
+        note: "A small model of 3 billion parameters; the download is about 2.2 GB.",
+        kind: Kind::Llm,
+        languages: "Many languages",
+        english_only: false,
+        speed: 3,
+        accuracy: 2,
+        licence: licences::APACHE_2,
+        files: &[ModelFile {
+            name: "granite-4.2-3b-Q4_K_M.gguf",
+            url: "https://huggingface.co/ibm-granite/granite-4.2-3b-GGUF/resolve/c40945d71cd90f249a56985e8155551a9188dc30/granite-4.2-3b-Q4_K_M.gguf",
+            size: 2_244_011_552,
+            sha256: "e0406663965846ae22a403456eb826ccce5f450840491f71952f18a7cb78e7d5",
+        }],
+        gpu: gpu::WHISPER_AND_LLM,
+        keeps_fillers: None,
+        chunk_secs: None,
+        // Measured with the helper on the processor, 18 GB M-series Mac, 2026-10-29 (table in SOURCES.md).
+        // Rule: context_8gb is the largest tested n_ctx with a peak size of at most 5 GiB, context_16gb the largest
+        // with at most 11 GiB (4096 when even 8192 does not fit), both capped at context_max. The sweep went up to
+        // 131072 tokens.
+        llm: Some(LlmInfo {
+            context_max: 131072,
+            context_8gb: 32768,
+            context_16gb: 65536,
             thinks: true,
         }),
         reuse_dirs: &[],
