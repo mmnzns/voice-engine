@@ -5,6 +5,16 @@ use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// The tests take turns. macOS compiles Metal shaders through a system cache file; several helpers starting at once
+/// can crash one of them (SIGBUS inside Apple's MTLCompilerFSCache, found by running these tests together). An app
+/// starting a helper at the same moment as another app's must expect that too, so the client restarts a helper that
+/// dies at startup (voice-engine-client, step 2).
+static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+    ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 fn spawn(idle_secs: Option<&str>) -> std::process::Child {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_voice-engine-llm"));
     cmd.stdin(Stdio::piped())
@@ -32,6 +42,7 @@ fn wait_exit(
 
 #[test]
 fn it_answers_a_ping_and_exits_when_stdin_closes() {
+    let _turn = one_at_a_time();
     let mut child = spawn(None);
     let mut stdin = child.stdin.take().unwrap();
     let mut out = BufReader::new(child.stdout.take().unwrap());
@@ -50,6 +61,7 @@ fn it_answers_a_ping_and_exits_when_stdin_closes() {
 
 #[test]
 fn it_exits_by_itself_when_idle() {
+    let _turn = one_at_a_time();
     let mut child = spawn(Some("1"));
     let mut stdin = child.stdin.take().unwrap();
     let mut out = BufReader::new(child.stdout.take().unwrap());
@@ -68,6 +80,7 @@ fn it_exits_by_itself_when_idle() {
 
 #[test]
 fn a_bad_line_is_an_error_event_not_a_crash() {
+    let _turn = one_at_a_time();
     let mut child = spawn(None);
     let mut stdin = child.stdin.take().unwrap();
     let mut out = BufReader::new(child.stdout.take().unwrap());
@@ -99,6 +112,7 @@ fn ask(stdin: &mut impl Write, out: &mut impl BufRead, request: &str) -> String 
 
 #[test]
 fn configure_never_keeps_it_running_past_the_idle_time() {
+    let _turn = one_at_a_time();
     let mut child = spawn(Some("1"));
     let mut stdin = child.stdin.take().unwrap();
     let mut out = BufReader::new(child.stdout.take().unwrap());
@@ -120,6 +134,7 @@ fn configure_never_keeps_it_running_past_the_idle_time() {
 
 #[test]
 fn configure_can_change_while_the_helper_runs() {
+    let _turn = one_at_a_time();
     // An app's "keep models ready" setting flips the policy live; each change must take effect, no restart.
     let mut child = spawn(None);
     let mut stdin = child.stdin.take().unwrap();
@@ -144,6 +159,7 @@ fn configure_can_change_while_the_helper_runs() {
 
 #[test]
 fn configure_a_short_idle_time_and_it_exits() {
+    let _turn = one_at_a_time();
     let mut child = spawn(None);
     let mut stdin = child.stdin.take().unwrap();
     let mut out = BufReader::new(child.stdout.take().unwrap());
@@ -155,6 +171,7 @@ fn configure_a_short_idle_time_and_it_exits() {
 
 #[test]
 fn a_cancel_with_nothing_running_is_ignored() {
+    let _turn = one_at_a_time();
     let mut child = spawn(None);
     let mut stdin = child.stdin.take().unwrap();
     let mut out = BufReader::new(child.stdout.take().unwrap());
@@ -171,6 +188,7 @@ fn a_cancel_with_nothing_running_is_ignored() {
 
 #[test]
 fn load_and_complete_with_a_missing_file_say_model_missing() {
+    let _turn = one_at_a_time();
     let mut child = spawn(None);
     let mut stdin = child.stdin.take().unwrap();
     let mut out = BufReader::new(child.stdout.take().unwrap());
@@ -191,6 +209,7 @@ fn load_and_complete_with_a_missing_file_say_model_missing() {
 
 #[test]
 fn unload_with_nothing_loaded_answers_unloaded_and_the_helper_keeps_going() {
+    let _turn = one_at_a_time();
     let mut child = spawn(None);
     let mut stdin = child.stdin.take().unwrap();
     let mut out = BufReader::new(child.stdout.take().unwrap());
@@ -205,6 +224,7 @@ fn unload_with_nothing_loaded_answers_unloaded_and_the_helper_keeps_going() {
 
 #[test]
 fn never_exit_still_exits_when_the_app_is_gone() {
+    let _turn = one_at_a_time();
     // "Never exit" means never exit while the app runs: closing stdin (the app quit or crashed) must still end it,
     // so an update or a crash never leaves a helper behind.
     let mut child = spawn(None);
