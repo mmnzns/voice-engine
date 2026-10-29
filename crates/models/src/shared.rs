@@ -122,6 +122,8 @@ pub struct SharedStore {
     /// Where the apps' old folders are. None for a store opened with `open_at` (or the models-dir override): such a
     /// store never moves anything in.
     pub(crate) old_folders: Option<OldFolders>,
+    /// Made by `read_only`: looks, never writes.
+    read_only: bool,
     /// Models this instance is downloading right now (`Downloading.by_me`).
     downloading: Mutex<HashSet<String>>,
 }
@@ -228,8 +230,34 @@ impl SharedStore {
             app,
             root: dir,
             old_folders: None,
+            read_only: false,
             downloading: Mutex::default(),
         })
+    }
+
+    /// A view of the folder at `dir` that creates nothing, not even `dir` or `.engine`, for showing "what is on this
+    /// computer" (`status`, `list`, `root`, `model_dir`) without touching the folder. A folder that does not exist
+    /// reads as every model missing. Every call that would write (`use_model`, `download`, `hold`, `release`,
+    /// `release_all`, `collect`, `move_in`) is refused with `PermissionDenied`, or does nothing for `move_in`.
+    pub fn read_only(app: App, dir: PathBuf) -> SharedStore {
+        SharedStore {
+            app,
+            root: dir,
+            old_folders: None,
+            read_only: true,
+            downloading: Mutex::default(),
+        }
+    }
+
+    fn writable(&self) -> io::Result<()> {
+        if self.read_only {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "this view of the model folder is read only",
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     /// Mac: `<Application Support>/Craft Concepts Digital/Models`; Windows:
@@ -268,6 +296,7 @@ impl SharedStore {
 
     /// Opens (creating it if needed) a lock file.
     fn lock_file(&self, id: &str, kind: &str) -> io::Result<File> {
+        self.writable()?;
         let path = self.lock_path(id, kind);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -296,6 +325,7 @@ impl SharedStore {
 
     /// `add_user` for any app: the one-time move marks the apps whose old folders hold a model.
     pub(crate) fn add_user_as(&self, id: &str, app: App) -> io::Result<()> {
+        self.writable()?;
         if !valid_id(id) {
             return Err(invalid_id());
         }
@@ -454,6 +484,7 @@ impl SharedStore {
     /// `NotUsing`: this app had no marker, and either other apps use the model or there is no folder at all.
     /// With no marker and no users but a folder (a leftover), the leftover is erased like any unused model.
     pub fn release(&self, id: &str) -> io::Result<Released> {
+        self.writable()?;
         if !valid_id(id) {
             return Err(invalid_id());
         }
@@ -479,6 +510,7 @@ impl SharedStore {
     /// `release` for every model this app uses: "Delete all data" in an app calls this instead of removing a
     /// folder. Goes on after an error and returns the first one.
     pub fn release_all(&self) -> io::Result<()> {
+        self.writable()?;
         let mut first_error = None;
         for id in self.tracked_ids() {
             if !self.marker(&id, self.app).is_file() {
@@ -495,6 +527,7 @@ impl SharedStore {
     /// is writing. Only touches model folders (catalog ids and ids some app has used) and `.engine` inside the
     /// store root. Each app calls it at start. Goes on after an error and returns the first one.
     pub fn collect(&self) -> io::Result<()> {
+        self.writable()?;
         let mut first_error = None;
         let mut note = |r: io::Result<()>| {
             if let Err(e) = r {

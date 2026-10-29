@@ -125,7 +125,6 @@ fn local_model(
         keeps_fillers: None,
         chunk_secs: None,
         llm: None,
-        reuse_dirs: &[],
     }))
 }
 
@@ -770,4 +769,68 @@ fn the_test_helper_refuses_the_real_folder() {
     } else {
         panic!("real shared model folder (none on this system)");
     }
+}
+
+#[test]
+fn a_read_only_view_shows_what_is_there_and_creates_and_changes_nothing() {
+    // A folder that does not exist: every model is missing and it is not created.
+    let parent = tempfile::tempdir().unwrap();
+    let absent = parent.path().join("models");
+    let view = SharedStore::read_only(App::Talaan, absent.clone());
+    assert!(
+        view.list()
+            .iter()
+            .all(|(_, status)| *status == Status::Missing)
+    );
+    assert!(!absent.exists(), "looking must not create the folder");
+
+    // A folder with a model in it: seen as installed, with its users, and nothing is added, removed or locked.
+    let (tmp, talaan, ensayo) = two_stores();
+    install(&talaan, vad());
+    ensayo.use_model("vad").unwrap();
+    let before = tree(tmp.path());
+    let view = SharedStore::read_only(App::Talaan, tmp.path().to_path_buf());
+    assert_eq!(
+        installed_users(view.status("vad")),
+        (vec![App::Ensayo], false)
+    );
+    assert_eq!(view.list().len(), voice_engine_models::catalog::all().len());
+    assert_eq!(tree(tmp.path()), before);
+
+    // Every call that would write is refused and leaves the folder as it was.
+    for denied in [
+        view.use_model("vad").map_err(|e| e.to_string()),
+        view.release("vad")
+            .map(|_| ())
+            .map_err(|e| e.kind().to_string()),
+        view.release_all().map_err(|e| e.kind().to_string()),
+        view.collect().map_err(|e| e.kind().to_string()),
+    ] {
+        assert!(denied.is_err());
+    }
+    assert!(view.hold("vad").is_err());
+    assert!(view.download("vad", &not_cancelled(), &mut ignore).is_err());
+    assert!(
+        view.move_in(&["vad"]).unwrap().already_done,
+        "a view never moves"
+    );
+    assert_eq!(tree(tmp.path()), before);
+}
+
+/// Every path under `dir` with its size and modified time.
+fn tree(dir: &Path) -> Vec<(PathBuf, u64, SystemTime)> {
+    let mut out = Vec::new();
+    let mut todo = vec![dir.to_path_buf()];
+    while let Some(d) = todo.pop() {
+        for e in fs::read_dir(&d).unwrap() {
+            let path = e.unwrap().path();
+            let meta = fs::metadata(&path).unwrap();
+            out.push((path.clone(), meta.len(), meta.modified().unwrap()));
+            if meta.is_dir() {
+                todo.push(path);
+            }
+        }
+    }
+    out.sort();
+    out
 }

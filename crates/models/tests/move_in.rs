@@ -273,7 +273,6 @@ fn local_model(id: &'static str, files: &[(&str, &[u8])]) -> &'static ModelInfo 
         keeps_fillers: None,
         chunk_secs: None,
         llm: None,
-        reuse_dirs: &[],
     }))
 }
 

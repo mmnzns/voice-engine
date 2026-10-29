@@ -32,6 +32,27 @@
   offered (an existing file is kept as an imported GGUF by the shared-folder move, step 4). Removed: `llm_catalog`,
   `EngineKind`, `DEFAULT_MODEL` and the `VAD`, `DIARIZATION` and `SEARCH` statics. An app migrating uses
   `catalog::find`, `catalog::speech()`, `catalog::local_ai()` and `Kind`.
+- Shared model folder: one folder for all three apps (Mac `~/Library/Application Support/Craft Concepts Digital/Models`,
+  Windows `%LOCALAPPDATA%\Craft Concepts Digital\Models`), `<model id>/<files>` plus an `.engine` folder with
+  `users`, `locks` and `moved`. `SharedStore::open(app)` (`VOICE_ENGINE_MODELS_DIR` overrides the folder),
+  `open_at(app, dir)` for tests and dev builds (never moves anything in), `read_only(app, dir)` (creates nothing),
+  `default_dir`, `status` and `list` (`Installed`, `Downloading`, `Partial`, `Missing`), `use_model`, `download`,
+  `hold` (a `ModelHandle` held while a model is loaded), `release`, `release_all` and `collect`. A model is erased
+  when the last app that uses it lets go and no app has it loaded.
+- Downloader: one `.part` file per file, resumed with a Range request, a fresh start when the server ignores Range,
+  size and sha256 checked before the rename, cancel and a 30 s stall check about every 200 ms, progress over the
+  whole model (ported from Talaan, see SOURCES.md). Errors are `DownloadError`: `Offline`, `Refused { status }`,
+  `DiskFull`, `Checksum { file }`, `Stalled`, `Cancelled`, `Io`; `is_failure()` is false for `Cancelled` and `Stalled`.
+- One-time move (`SharedStore::move_in(used)`): each app's own old models are moved in (renamed, with a hard link left
+  at the old path), other apps' complete models are hard-linked in, never touched. Parlato's name table is in
+  `legacy.rs`; its Parakeet files are hash-checked first because Parlato never checked them. A file in use is left
+  for the next start. Parlato's dropped local AI models and the person's own GGUFs stay where they are and come
+  back as `ImportedGguf` with an id from `imports::import_id` (`import-` and 12 hex digits of sha256 over the size,
+  the first MiB and the last MiB, so the same file has the same id after a rename).
+- Removed: `ModelStore` and `Location` (the finder that looked in an app's own folder and in other apps' folders),
+  `ModelInfo::reuse_dirs`, `OtherRoot`, `Layout` and `App::root`, `App::others`, and `apps.rs` (now `legacy.rs`,
+  which keeps `App`). Apps use `SharedStore::open(app)`, then `move_in`, `status`/`list` and `download` instead of
+  looking in folders themselves; Delete is `release`, Delete all data is `release_all`.
 
 ## v0.1.0 (2026-10-28)
 

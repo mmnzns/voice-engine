@@ -128,9 +128,6 @@ pub struct ModelInfo {
     pub chunk_secs: Option<u32>,
     /// Local AI only.
     pub llm: Option<LlmInfo>,
-    /// Folders, relative to another app's data folder, that may already hold these exact files (step 4 replaces
-    /// this with the shared folder).
-    pub reuse_dirs: &'static [&'static str],
 }
 
 impl ModelInfo {
@@ -187,7 +184,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: None,
         llm: None,
-        reuse_dirs: &["Models"],
     },
     ModelInfo {
         id: "whisper-turbo-full",
@@ -213,7 +209,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: None,
         llm: None,
-        reuse_dirs: &["Models"],
     },
     ModelInfo {
         id: "parakeet-v3",
@@ -277,7 +272,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: Some(40),
         llm: None,
-        reuse_dirs: &["ParakeetModels/parakeet-tdt-0.6b-v3-int8"],
     },
     ModelInfo {
         id: "parakeet-v3-full",
@@ -350,7 +344,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: Some(40),
         llm: None,
-        reuse_dirs: &["ParakeetModels/parakeet-tdt-0.6b-v3"],
     },
     ModelInfo {
         id: "whisper-small",
@@ -376,7 +369,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: None,
         llm: None,
-        reuse_dirs: &["Models"],
     },
     ModelInfo {
         id: "whisper-small-en",
@@ -402,7 +394,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: None,
         llm: None,
-        reuse_dirs: &["Models"],
     },
     ModelInfo {
         id: "whisper-large-v3",
@@ -428,7 +419,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: None,
         llm: None,
-        reuse_dirs: &["Models"],
     },
     ModelInfo {
         id: "whisper-large-v3-full",
@@ -454,7 +444,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: None,
         llm: None,
-        reuse_dirs: &["Models"],
     },
     ModelInfo {
         id: "whisper-large-v2",
@@ -480,7 +469,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: None,
         llm: None,
-        reuse_dirs: &["Models"],
     },
     ModelInfo {
         id: "whisper-large-v2-full",
@@ -506,7 +494,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: None,
         llm: None,
-        reuse_dirs: &["Models"],
     },
     ModelInfo {
         id: "whisper-medium",
@@ -532,7 +519,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: None,
         llm: None,
-        reuse_dirs: &["Models"],
     },
     ModelInfo {
         id: "whisper-medium-en",
@@ -558,7 +544,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: None,
         llm: None,
-        reuse_dirs: &["Models"],
     },
     ModelInfo {
         id: "whisper-base",
@@ -584,7 +569,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: None,
         llm: None,
-        reuse_dirs: &["Models"],
     },
     ModelInfo {
         id: "whisper-base-en",
@@ -610,7 +594,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: None,
         llm: None,
-        reuse_dirs: &["Models"],
     },
     ModelInfo {
         id: "whisper-tiny",
@@ -636,7 +619,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: None,
         llm: None,
-        reuse_dirs: &["Models"],
     },
     ModelInfo {
         id: "whisper-tiny-en",
@@ -662,7 +644,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: None,
         llm: None,
-        reuse_dirs: &["Models"],
     },
     ModelInfo {
         id: "parakeet-ultra",
@@ -726,7 +707,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: Some(40),
         llm: None,
-        reuse_dirs: &["ParakeetModels/parakeet-ultra-0.6b-int8"],
     },
     ModelInfo {
         id: "parakeet-v2",
@@ -790,7 +770,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: Some(40),
         llm: None,
-        reuse_dirs: &["ParakeetModels/parakeet-tdt-0.6b-v2-int8"],
     },
     ModelInfo {
         id: "parakeet-v2-full",
@@ -863,7 +842,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: Some(40),
         llm: None,
-        reuse_dirs: &["ParakeetModels/parakeet-tdt-0.6b-v2"],
     },
     ModelInfo {
         id: "parakeet-unified-en",
@@ -918,7 +896,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: Some(40),
         llm: None,
-        reuse_dirs: &["ParakeetModels/parakeet-unified-en-0.6b-int8"],
     },
     ModelInfo {
         id: "parakeet-unified-en-full",
@@ -973,7 +950,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: Some(40),
         llm: None,
-        reuse_dirs: &["ParakeetModels/parakeet-unified-en-0.6b"],
     },
     ModelInfo {
         id: "nemotron-3.5",
@@ -1028,7 +1004,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: Some(40),
         llm: None,
-        reuse_dirs: &["ParakeetModels/nemotron-3.5-asr-streaming-0.6b"],
     },
     // Silero voice activity detection, used with every model. Downloaded with the first model.
     ModelInfo {
@@ -1052,7 +1027,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: None,
         llm: None,
-        reuse_dirs: &["Models"],
     },
     // Speaker separation (named speakers): NVIDIA Nemotron 3 Diarization, ONNX export for parakeet-rs.
     ModelInfo {
@@ -1076,7 +1050,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: None,
         llm: None,
-        reuse_dirs: &[],
     },
     // Search by meaning: Qwen3-Embedding 0.6B, 100+ languages.
     ModelInfo {
@@ -1100,7 +1073,6 @@ pub static CATALOG: &[ModelInfo] = &[
         keeps_fillers: None,
         chunk_secs: None,
         llm: None,
-        reuse_dirs: &[],
     },
     ModelInfo {
         id: "qwen3.5-4b",
@@ -1132,7 +1104,6 @@ pub static CATALOG: &[ModelInfo] = &[
             context_16gb: 131072,
             thinks: true,
         }),
-        reuse_dirs: &[],
     },
     ModelInfo {
         id: "qwen3.5-9b",
@@ -1164,7 +1135,6 @@ pub static CATALOG: &[ModelInfo] = &[
             context_16gb: 131072,
             thinks: true,
         }),
-        reuse_dirs: &[],
     },
     ModelInfo {
         id: "granite-4.2-3b",
@@ -1196,7 +1166,6 @@ pub static CATALOG: &[ModelInfo] = &[
             context_16gb: 65536,
             thinks: true,
         }),
-        reuse_dirs: &[],
     },
 ];
 
