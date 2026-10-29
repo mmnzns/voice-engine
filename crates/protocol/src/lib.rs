@@ -15,8 +15,8 @@ pub use gpu::{Device, DeviceKind};
 
 /// Bumped whenever a message changes shape. Each helper sends it in `Ready`; the app compares it with its own and
 /// reports a mismatch (a helper and an app from different builds) instead of failing later. 0 = a helper from before
-/// the engine existed.
-pub const PROTOCOL_VERSION: u32 = 1;
+/// the engine existed. 2 = configure, load, unload, cancel, inspect, thinking, seed, error kinds.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// A JSON object with any keys: the grammar that keeps a reply parseable when the caller has no schema of its own.
 pub const JSON_OBJECT_SCHEMA: &str = r#"{"type":"object"}"#;
@@ -26,12 +26,45 @@ pub const JSON_OBJECT_SCHEMA: &str = r#"{"type":"object"}"#;
 pub enum Request {
     /// Answers with `Event::Ready`. Used to check the helper started.
     Ping,
+    /// Sets how long the helper waits without a request before exiting. Answers with `Event::Configured`.
+    Configure(Configure),
+    /// Loads a model without generating anything, so the next request doesn't wait. Answers with `Event::Loaded`.
+    Load(Load),
     /// Generates one reply. The model stays loaded for the next request with the same path and context size.
     Complete(Completion),
+    /// Stops the reply being written; it ends with an `Event::Error` of kind `cancelled` and the model stays loaded.
+    /// Ignored when nothing is running.
+    Cancel,
+    /// Frees the loaded model's memory now; the helper keeps running. Answers with `Event::Unloaded`.
+    Unload,
     /// Turns texts into embedding vectors (L2-normalized), for Ask's search index.
     Embed(Embedding),
+    /// Reads a GGUF file's metadata without loading it. Answers with `Event::Inspected`.
+    Inspect(Inspect),
     /// Answers with `Event::Devices`: every ggml device and the one the helper chose. For checks by hand.
     Devices,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Configure {
+    /// Seconds without a request before the helper exits and frees the model's memory. None: never; the helper runs
+    /// until the app closes it.
+    #[serde(default)]
+    pub idle_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Load {
+    pub model_path: String,
+    /// Context size in tokens the next requests will use (it decides how the model is fitted on a GPU).
+    pub n_ctx: u32,
+    #[serde(default = "yes")]
+    pub gpu: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Inspect {
+    pub model_path: String,
 }
 
 fn yes() -> bool {
@@ -62,6 +95,16 @@ pub struct Completion {
     /// Use the helper's GPU, if it has one. False runs on the processor even in a GPU build.
     #[serde(default = "yes")]
     pub gpu: bool,
+    /// Let a model that thinks before answering do so. Off (the default): it answers straight away.
+    #[serde(default)]
+    pub thinking: bool,
+    /// With thinking on: the most thinking tokens before the helper ends the thinking itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_budget: Option<u32>,
+    /// Sampling seed when `temperature` is above 0 (default 1234). The same request on the same computer and
+    /// backend gives the same reply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u32>,
 }
 
 /// What a helper runs on, reported when it says it's ready.
@@ -119,8 +162,28 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         chosen: Option<usize>,
     },
+    /// The idle setting now in force.
+    Configured {
+        #[serde(default)]
+        idle_secs: Option<u64>,
+    },
+    /// The model's memory is freed (or there was none loaded).
+    Unloaded,
+    /// A model is loaded and ready. `seconds` is 0 when it was already loaded.
+    Loaded {
+        seconds: f32,
+        /// The longest context the model was trained for.
+        n_ctx_train: u32,
+        #[serde(flatten)]
+        backend: Backend,
+    },
+    Inspected(Inspection),
     Error {
         message: String,
+        /// What went wrong, for the app to act on; the message is for logs. An error from a helper before
+        /// protocol 2 reads as `Internal`.
+        #[serde(default)]
+        error: ErrorKind,
     },
 }
 
@@ -132,6 +195,45 @@ pub enum Phase {
     Writing,
 }
 
+/// What a GGUF file says about itself.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Inspection {
+    pub has_chat_template: bool,
+    /// Its chat template has a thinking step (`<think>`).
+    pub thinks: bool,
+    /// The longest context it was trained for; 0 when the file doesn't say.
+    pub n_ctx_train: u32,
+    pub architecture: String,
+}
+
+/// Why a request failed. Apps match on this, never on the message text.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ErrorKind {
+    ModelMissing {
+        path: String,
+    },
+    OutOfMemory,
+    PromptTooLong {
+        prompt_tokens: u32,
+        n_ctx: u32,
+        max_tokens: u32,
+    },
+    BadSchema {
+        detail: String,
+    },
+    NoChatTemplate,
+    Cancelled,
+    /// The graphics card failed. `fell_back`: the work was done on the processor instead (the app can say so once
+    /// and stop trying the card); false: nothing was done.
+    GpuFailed {
+        fell_back: bool,
+    },
+    BadRequest,
+    #[default]
+    Internal,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Reply {
     pub text: String,
@@ -140,6 +242,15 @@ pub struct Reply {
     pub seconds: f32,
     /// True when the reply stopped at `max_tokens` instead of finishing.
     pub truncated: bool,
+    /// Tokens spent thinking (not counted in `output_tokens`).
+    #[serde(default)]
+    pub thinking_tokens: u32,
+    /// Seconds spent loading the model for this request; 0 when it was already loaded.
+    #[serde(default)]
+    pub load_seconds: f32,
+    /// The thinking, when thinking was on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_text: Option<String>,
 }
 
 /// One message as one line (no newline inside: JSON escapes the ones in the text).
@@ -171,6 +282,9 @@ mod tests {
             max_tokens: 100,
             temperature: 0.2,
             gpu: true,
+            thinking: false,
+            thinking_budget: None,
+            seed: None,
         }
     }
 
@@ -229,7 +343,7 @@ mod tests {
         let line = encode(&gpu);
         assert_eq!(
             line,
-            r#"{"event":"ready","backend":"vulkan","device":"NVIDIA GeForce RTX 5070 Ti","vram_mb":16303,"protocol":1}"#
+            r#"{"event":"ready","backend":"vulkan","device":"NVIDIA GeForce RTX 5070 Ti","vram_mb":16303,"protocol":2}"#
         );
         assert_eq!(serde_json::from_str::<Event>(&line).unwrap(), gpu);
         // The fake helpers in tests (and a 1.0.x helper) answer with just this.
@@ -247,7 +361,7 @@ mod tests {
                 backend: Backend::cpu(),
                 protocol: PROTOCOL_VERSION
             }),
-            r#"{"event":"ready","backend":"cpu","vram_mb":0,"protocol":1}"#
+            r#"{"event":"ready","backend":"cpu","vram_mb":0,"protocol":2}"#
         );
     }
 
@@ -257,7 +371,7 @@ mod tests {
             backend: Backend::cpu(),
             protocol: PROTOCOL_VERSION,
         });
-        assert!(line.contains(r#""protocol":1"#), "{line}");
+        assert!(line.contains(r#""protocol":2"#), "{line}");
     }
 
     #[test]
@@ -288,6 +402,9 @@ mod tests {
             max_tokens: 100,
             temperature: 0.0,
             gpu: true,
+            thinking: false,
+            thinking_budget: None,
+            seed: None,
         }
     }
 
@@ -328,9 +445,13 @@ mod tests {
                 output_tokens: 3,
                 seconds: 0.5,
                 truncated: false,
+                thinking_tokens: 0,
+                load_seconds: 0.0,
+                thinking_text: None,
             }),
             Event::Error {
                 message: "the AI model failed".into(),
+                error: ErrorKind::Internal,
             },
         ];
         for ev in events {
@@ -402,5 +523,150 @@ mod tests {
         let line = encode(&ev);
         assert!(line.contains("\"kind\":\"igpu\""), "{line}");
         assert_eq!(serde_json::from_str::<Event>(&line).unwrap(), ev);
+    }
+
+    #[test]
+    fn protocol_two_requests_round_trip() {
+        let reqs = [
+            Request::Configure(Configure {
+                idle_secs: Some(90),
+            }),
+            Request::Configure(Configure { idle_secs: None }),
+            Request::Load(Load {
+                model_path: "/m.gguf".into(),
+                n_ctx: 4096,
+                gpu: true,
+            }),
+            Request::Cancel,
+            Request::Unload,
+            Request::Inspect(Inspect {
+                model_path: "/m.gguf".into(),
+            }),
+        ];
+        for req in reqs {
+            let line = encode(&req);
+            assert!(!line.contains('\n'), "{line}");
+            assert_eq!(decode_request(&line).unwrap(), req, "{line}");
+        }
+        assert_eq!(encode(&Request::Cancel), r#"{"op":"cancel"}"#);
+        assert_eq!(encode(&Request::Unload), r#"{"op":"unload"}"#);
+        // A configure without idle_secs means "never exit".
+        assert_eq!(
+            decode_request(r#"{"op":"configure"}"#).unwrap(),
+            Request::Configure(Configure { idle_secs: None })
+        );
+    }
+
+    #[test]
+    fn completion_thinking_and_seed_default_off() {
+        let old = r#"{"op":"complete","model_path":"/m.gguf","n_ctx":512,"system":"","user":"","max_tokens":1,"temperature":0.0}"#;
+        let Request::Complete(c) = decode_request(old).unwrap() else {
+            panic!()
+        };
+        assert!(!c.thinking);
+        assert_eq!(c.thinking_budget, None);
+        assert_eq!(c.seed, None);
+        let line = encode(&Request::Complete(c));
+        assert!(
+            !line.contains("thinking_budget") && !line.contains("seed"),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn protocol_two_events_round_trip() {
+        let events = [
+            Event::Configured {
+                idle_secs: Some(90),
+            },
+            Event::Unloaded,
+            Event::Loaded {
+                seconds: 1.5,
+                n_ctx_train: 262_144,
+                backend: Backend {
+                    backend: "metal".into(),
+                    ..Default::default()
+                },
+            },
+            Event::Inspected(Inspection {
+                has_chat_template: true,
+                thinks: true,
+                n_ctx_train: 262_144,
+                architecture: "qwen35".into(),
+            }),
+            Event::Done(Reply {
+                text: "ok".into(),
+                prompt_tokens: 10,
+                output_tokens: 2,
+                seconds: 0.3,
+                truncated: false,
+                thinking_tokens: 40,
+                load_seconds: 0.0,
+                thinking_text: Some("hmm".into()),
+            }),
+        ];
+        for ev in events {
+            let line = encode(&ev);
+            assert!(!line.contains('\n'), "{line}");
+            assert_eq!(decode_event(&line).unwrap(), ev, "{line}");
+        }
+    }
+
+    #[test]
+    fn errors_carry_a_kind_and_an_old_error_reads_as_internal() {
+        let kinds = [
+            ErrorKind::ModelMissing {
+                path: "/m.gguf".into(),
+            },
+            ErrorKind::OutOfMemory,
+            ErrorKind::PromptTooLong {
+                prompt_tokens: 9000,
+                n_ctx: 8192,
+                max_tokens: 500,
+            },
+            ErrorKind::BadSchema {
+                detail: "bad".into(),
+            },
+            ErrorKind::NoChatTemplate,
+            ErrorKind::Cancelled,
+            ErrorKind::GpuFailed { fell_back: true },
+            ErrorKind::BadRequest,
+            ErrorKind::Internal,
+        ];
+        for error in kinds {
+            let ev = Event::Error {
+                message: "m".into(),
+                error,
+            };
+            assert_eq!(decode_event(&encode(&ev)).unwrap(), ev);
+        }
+        let line = encode(&Event::Error {
+            message: "stopped by request".into(),
+            error: ErrorKind::Cancelled,
+        });
+        assert_eq!(
+            line,
+            r#"{"event":"error","message":"stopped by request","error":{"kind":"cancelled"}}"#
+        );
+        let Event::Error { error, .. } =
+            decode_event(r#"{"event":"error","message":"old helper"}"#).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(error, ErrorKind::Internal);
+    }
+
+    #[test]
+    fn an_old_reply_reads_with_no_thinking() {
+        let Event::Done(r) = decode_event(
+            r#"{"event":"done","text":"x","prompt_tokens":1,"output_tokens":1,"seconds":0.1,"truncated":false}"#,
+        )
+        .unwrap() else {
+            panic!()
+        };
+        assert_eq!(
+            (r.thinking_tokens, r.load_seconds, r.thinking_text),
+            (0, 0.0, None)
+        );
     }
 }

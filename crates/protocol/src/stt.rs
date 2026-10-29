@@ -107,7 +107,7 @@ mod tests {
             backend: Backend::default(),
             protocol: crate::PROTOCOL_VERSION,
         });
-        assert!(line.contains(r#""protocol":1"#), "{line}");
+        assert!(line.contains(r#""protocol":2"#), "{line}");
         let old: SttEvent = serde_json::from_str(r#"{"event":"ready"}"#).unwrap();
         assert_eq!(
             old,

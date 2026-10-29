@@ -22,8 +22,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use voice_engine_protocol::gpu::{Device, DeviceKind, bytes_to_mb, pick};
 use voice_engine_protocol::{
-    Backend, Completion, Embedding, Event, HelperConfig, PROTOCOL_VERSION, Phase, Reply, Request,
-    decode_request, encode,
+    Backend, Completion, Embedding, ErrorKind, Event, HelperConfig, PROTOCOL_VERSION, Phase, Reply,
+    Request, decode_request, encode,
 };
 
 /// Without a request for this long the helper exits, which frees all of the model's memory. The app starts it
@@ -110,6 +110,7 @@ pub fn run(config: HelperConfig) {
         Err(e) => {
             return send(&Event::Error {
                 message: format!("couldn't start the local AI: {e}"),
+                error: ErrorKind::Internal,
             });
         }
     };
@@ -149,8 +150,22 @@ pub fn run(config: HelperConfig) {
                 };
                 match complete(&llama, &mut loaded, target, &c) {
                     Ok(reply) => send(&Event::Done(reply)),
-                    Err(message) => send(&Event::Error { message }),
+                    Err(message) => send(&Event::Error {
+                        message,
+                        error: ErrorKind::Internal,
+                    }),
                 }
+            }
+            Ok(Request::Configure(_) | Request::Load(_) | Request::Inspect(_)) => {
+                send(&Event::Error {
+                    message: "not supported yet".into(),
+                    error: ErrorKind::BadRequest,
+                })
+            }
+            Ok(Request::Cancel) => {}
+            Ok(Request::Unload) => {
+                loaded = None;
+                send(&Event::Unloaded);
             }
             Ok(Request::Embed(e)) => {
                 fail_on_purpose(&config);
@@ -161,11 +176,15 @@ pub fn run(config: HelperConfig) {
                 };
                 match embed(&llama, &mut loaded, target, &e) {
                     Ok(vectors) => send(&Event::Embedded { vectors }),
-                    Err(message) => send(&Event::Error { message }),
+                    Err(message) => send(&Event::Error {
+                        message,
+                        error: ErrorKind::Internal,
+                    }),
                 }
             }
             Err(e) => send(&Event::Error {
                 message: format!("bad request: {e}"),
+                error: ErrorKind::BadRequest,
             }),
         }
     }
@@ -426,6 +445,9 @@ fn complete(
         output_tokens: written,
         seconds: started.elapsed().as_secs_f32(),
         truncated,
+        thinking_tokens: 0,
+        load_seconds: 0.0,
+        thinking_text: None,
     })
 }
 
@@ -469,6 +491,9 @@ mod tests {
             max_tokens: 1,
             temperature: 0.0,
             gpu: false,
+            thinking: false,
+            thinking_budget: None,
+            seed: None,
         };
         let target = Target {
             path: &c.model_path,
