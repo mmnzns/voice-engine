@@ -165,9 +165,9 @@ pub static CATALOG: &[ModelInfo] = &[
     // misheard more), covers Filipino, and at ~13x real time an hour-long call takes a few minutes.
     ModelInfo {
         id: "whisper-turbo",
-        name: "Whisper Large Turbo",
+        name: "Whisper Large Turbo (compressed)",
         maker: "OpenAI",
-        note: "Most accurate. 99 languages, including Filipino.",
+        note: "Compressed to a smaller download, 574 MB. 99 languages, including Filipino.",
         kind: Kind::Whisper,
         languages: "99 languages",
         english_only: false,
@@ -182,6 +182,32 @@ pub static CATALOG: &[ModelInfo] = &[
             ),
             size: 574_041_195,
             sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+        }],
+        gpu: gpu::WHISPER_AND_LLM,
+        keeps_fillers: None,
+        chunk_secs: None,
+        llm: None,
+        reuse_dirs: &["Models"],
+    },
+    ModelInfo {
+        id: "whisper-turbo-full",
+        name: "Whisper Large Turbo (full size)",
+        maker: "OpenAI",
+        note: "The uncompressed Turbo model, a 1.6 GB download. 99 languages, including Filipino.",
+        kind: Kind::Whisper,
+        languages: "99 languages",
+        english_only: false,
+        speed: 2,
+        accuracy: 3,
+        licence: licences::MIT,
+        files: &[ModelFile {
+            name: "ggml-large-v3-turbo.bin",
+            url: concat!(
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/",
+                "ggml-large-v3-turbo.bin"
+            ),
+            size: 1_624_555_275,
+            sha256: "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
         }],
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
@@ -254,6 +280,79 @@ pub static CATALOG: &[ModelInfo] = &[
         reuse_dirs: &["ParakeetModels/parakeet-tdt-0.6b-v3-int8"],
     },
     ModelInfo {
+        id: "parakeet-v3-full",
+        name: "Parakeet (full size)",
+        maker: "NVIDIA",
+        note: "The uncompressed Parakeet model, a 2.5 GB download. 25 European languages.",
+        kind: Kind::Parakeet,
+        languages: "25 European languages",
+        english_only: false,
+        speed: 3,
+        accuracy: 1,
+        licence: licences::CC_BY_4,
+        files: &[
+            ModelFile {
+                name: "encoder-model.onnx",
+                url: concat!(
+                    "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce/",
+                    "encoder-model.onnx"
+                ),
+                size: 41_770_866,
+                sha256: "98a74b21b4cc0017c1e7030319a4a96f4a9506e50f0708f3a516d02a77c96bb1",
+            },
+            ModelFile {
+                name: "encoder-model.onnx.data",
+                url: concat!(
+                    "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce/",
+                    "encoder-model.onnx.data"
+                ),
+                size: 2_435_420_160,
+                sha256: "9a22d372c51455c34f13405da2520baefb7125bd16981397561423ed32d24f36",
+            },
+            ModelFile {
+                name: "decoder_joint-model.onnx",
+                url: concat!(
+                    "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce/",
+                    "decoder_joint-model.onnx"
+                ),
+                size: 72_520_893,
+                sha256: "e978ddf6688527182c10fde2eb4b83068421648985ef23f7a86be732be8706c1",
+            },
+            ModelFile {
+                name: "nemo128.onnx",
+                url: concat!(
+                    "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce/",
+                    "nemo128.onnx"
+                ),
+                size: 139_764,
+                sha256: "a9fde1486ebfcc08f328d75ad4610c67835fea58c73ba57e3209a6f6cf019e9f",
+            },
+            ModelFile {
+                name: "vocab.txt",
+                url: concat!(
+                    "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce/",
+                    "vocab.txt"
+                ),
+                size: 93_939,
+                sha256: "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d",
+            },
+            ModelFile {
+                name: "config.json",
+                url: concat!(
+                    "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx/resolve/8f23f0c03c8761650bdb5b40aaf3e40d2c15f1ce/",
+                    "config.json"
+                ),
+                size: 97,
+                sha256: "666903c76b9798caf2c210afd4f6cd60b08a8dbf9800ec8d7a3bc0d2148ac466",
+            },
+        ],
+        gpu: gpu::PARAKEET_TDT,
+        keeps_fillers: None,
+        chunk_secs: Some(40),
+        llm: None,
+        reuse_dirs: &["ParakeetModels/parakeet-tdt-0.6b-v3"],
+    },
+    ModelInfo {
         id: "whisper-small",
         name: "Whisper Small",
         maker: "OpenAI",
@@ -280,10 +379,36 @@ pub static CATALOG: &[ModelInfo] = &[
         reuse_dirs: &["Models"],
     },
     ModelInfo {
-        id: "whisper-large-v3",
-        name: "Whisper Large v3",
+        id: "whisper-small-en",
+        name: "Whisper Small (English)",
         maker: "OpenAI",
-        note: "Whisper’s largest model. Very accurate, slower than Turbo.",
+        note: "English only. A smaller download than the multilingual Small, with better English accuracy.",
+        kind: Kind::Whisper,
+        languages: "English",
+        english_only: true,
+        speed: 3,
+        accuracy: 1,
+        licence: licences::MIT,
+        files: &[ModelFile {
+            name: "ggml-small.en.bin",
+            url: concat!(
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/",
+                "ggml-small.en.bin"
+            ),
+            size: 487_614_201,
+            sha256: "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
+        }],
+        gpu: gpu::WHISPER_AND_LLM,
+        keeps_fillers: None,
+        chunk_secs: None,
+        llm: None,
+        reuse_dirs: &["Models"],
+    },
+    ModelInfo {
+        id: "whisper-large-v3",
+        name: "Whisper Large v3 (compressed)",
+        maker: "OpenAI",
+        note: "Whisper’s largest model, compressed to a smaller download of 1.1 GB. Very accurate, slower than Turbo.",
         kind: Kind::Whisper,
         languages: "99 languages",
         english_only: false,
@@ -306,10 +431,36 @@ pub static CATALOG: &[ModelInfo] = &[
         reuse_dirs: &["Models"],
     },
     ModelInfo {
-        id: "whisper-large-v2",
-        name: "Whisper Large v2",
+        id: "whisper-large-v3-full",
+        name: "Whisper Large v3 (full size)",
         maker: "OpenAI",
-        note: "The earlier large model. Some voices and accents come out better.",
+        note: "The uncompressed Large v3 model, a 3.1 GB download. Very accurate, slower than Turbo.",
+        kind: Kind::Whisper,
+        languages: "99 languages",
+        english_only: false,
+        speed: 1,
+        accuracy: 3,
+        licence: licences::MIT,
+        files: &[ModelFile {
+            name: "ggml-large-v3.bin",
+            url: concat!(
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/",
+                "ggml-large-v3.bin"
+            ),
+            size: 3_095_033_483,
+            sha256: "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2",
+        }],
+        gpu: gpu::WHISPER_AND_LLM,
+        keeps_fillers: None,
+        chunk_secs: None,
+        llm: None,
+        reuse_dirs: &["Models"],
+    },
+    ModelInfo {
+        id: "whisper-large-v2",
+        name: "Whisper Large v2 (compressed)",
+        maker: "OpenAI",
+        note: "The earlier large model, compressed to a smaller download of 1.1 GB. Some voices and accents come out better.",
         kind: Kind::Whisper,
         languages: "99 languages",
         english_only: false,
@@ -324,6 +475,32 @@ pub static CATALOG: &[ModelInfo] = &[
             ),
             size: 1_080_732_091,
             sha256: "3a214837221e4530dbc1fe8d734f302af393eb30bd0ed046042ebf4baf70f6f2",
+        }],
+        gpu: gpu::WHISPER_AND_LLM,
+        keeps_fillers: None,
+        chunk_secs: None,
+        llm: None,
+        reuse_dirs: &["Models"],
+    },
+    ModelInfo {
+        id: "whisper-large-v2-full",
+        name: "Whisper Large v2 (full size)",
+        maker: "OpenAI",
+        note: "The uncompressed Large v2 model, a 3.1 GB download. Some voices and accents come out better.",
+        kind: Kind::Whisper,
+        languages: "99 languages",
+        english_only: false,
+        speed: 1,
+        accuracy: 3,
+        licence: licences::MIT,
+        files: &[ModelFile {
+            name: "ggml-large-v2.bin",
+            url: concat!(
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/",
+                "ggml-large-v2.bin"
+            ),
+            size: 3_094_623_691,
+            sha256: "9a423fe4d40c82774b6af34115b8b935f34152246eb19e80e376071d3f999487",
         }],
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
@@ -358,6 +535,32 @@ pub static CATALOG: &[ModelInfo] = &[
         reuse_dirs: &["Models"],
     },
     ModelInfo {
+        id: "whisper-medium-en",
+        name: "Whisper Medium (English)",
+        maker: "OpenAI",
+        note: "English only. Good accuracy at a moderate speed, a 1.5 GB download.",
+        kind: Kind::Whisper,
+        languages: "English",
+        english_only: true,
+        speed: 1,
+        accuracy: 2,
+        licence: licences::MIT,
+        files: &[ModelFile {
+            name: "ggml-medium.en.bin",
+            url: concat!(
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/",
+                "ggml-medium.en.bin"
+            ),
+            size: 1_533_774_781,
+            sha256: "cc37e93478338ec7700281a7ac30a10128929eb8f427dda2e865faa8f6da4356",
+        }],
+        gpu: gpu::WHISPER_AND_LLM,
+        keeps_fillers: None,
+        chunk_secs: None,
+        llm: None,
+        reuse_dirs: &["Models"],
+    },
+    ModelInfo {
         id: "whisper-base",
         name: "Whisper Base",
         maker: "OpenAI",
@@ -384,6 +587,32 @@ pub static CATALOG: &[ModelInfo] = &[
         reuse_dirs: &["Models"],
     },
     ModelInfo {
+        id: "whisper-base-en",
+        name: "Whisper Base (English)",
+        maker: "OpenAI",
+        note: "English only. Very small and fast.",
+        kind: Kind::Whisper,
+        languages: "English",
+        english_only: true,
+        speed: 3,
+        accuracy: 1,
+        licence: licences::MIT,
+        files: &[ModelFile {
+            name: "ggml-base.en.bin",
+            url: concat!(
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/",
+                "ggml-base.en.bin"
+            ),
+            size: 147_964_211,
+            sha256: "a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002",
+        }],
+        gpu: gpu::WHISPER_AND_LLM,
+        keeps_fillers: None,
+        chunk_secs: None,
+        llm: None,
+        reuse_dirs: &["Models"],
+    },
+    ModelInfo {
         id: "whisper-tiny",
         name: "Whisper Tiny",
         maker: "OpenAI",
@@ -402,6 +631,32 @@ pub static CATALOG: &[ModelInfo] = &[
             ),
             size: 77_691_713,
             sha256: "be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+        }],
+        gpu: gpu::WHISPER_AND_LLM,
+        keeps_fillers: None,
+        chunk_secs: None,
+        llm: None,
+        reuse_dirs: &["Models"],
+    },
+    ModelInfo {
+        id: "whisper-tiny-en",
+        name: "Whisper Tiny (English)",
+        maker: "OpenAI",
+        note: "English only. The smallest download, 78 MB.",
+        kind: Kind::Whisper,
+        languages: "English",
+        english_only: true,
+        speed: 3,
+        accuracy: 1,
+        licence: licences::MIT,
+        files: &[ModelFile {
+            name: "ggml-tiny.en.bin",
+            url: concat!(
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/",
+                "ggml-tiny.en.bin"
+            ),
+            size: 77_704_715,
+            sha256: "921e4cf8686fdd993dcd081a5da5b6c365bfde1162e72b08d75ac75289920b1f",
         }],
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
@@ -538,6 +793,79 @@ pub static CATALOG: &[ModelInfo] = &[
         reuse_dirs: &["ParakeetModels/parakeet-tdt-0.6b-v2-int8"],
     },
     ModelInfo {
+        id: "parakeet-v2-full",
+        name: "Parakeet v2 (full size)",
+        maker: "NVIDIA",
+        note: "English only. The uncompressed Parakeet v2 model, a 2.5 GB download.",
+        kind: Kind::Parakeet,
+        languages: "English",
+        english_only: true,
+        speed: 3,
+        accuracy: 2,
+        licence: licences::CC_BY_4,
+        files: &[
+            ModelFile {
+                name: "encoder-model.onnx",
+                url: concat!(
+                    "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/0bbb45a3365852604aef28b538a8f066f4ccaa85/",
+                    "encoder-model.onnx"
+                ),
+                size: 41_770_866,
+                sha256: "3987bcd28175d829d12888a996a84e8f62a0e374d9ffd640662c1515adc679d3",
+            },
+            ModelFile {
+                name: "encoder-model.onnx.data",
+                url: concat!(
+                    "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/0bbb45a3365852604aef28b538a8f066f4ccaa85/",
+                    "encoder-model.onnx.data"
+                ),
+                size: 2_435_420_160,
+                sha256: "4dab7362d4874d85965045b1e41b2d61dd2cc0fb25671a7f6b3dc47bf120cc41",
+            },
+            ModelFile {
+                name: "decoder_joint-model.onnx",
+                url: concat!(
+                    "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/0bbb45a3365852604aef28b538a8f066f4ccaa85/",
+                    "decoder_joint-model.onnx"
+                ),
+                size: 35_792_059,
+                sha256: "cbb52a07bd70ab5b67f8439d4b3cd8704b18467b4430bcacb5adabe154b8d191",
+            },
+            ModelFile {
+                name: "nemo128.onnx",
+                url: concat!(
+                    "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/0bbb45a3365852604aef28b538a8f066f4ccaa85/",
+                    "nemo128.onnx"
+                ),
+                size: 139_764,
+                sha256: "a9fde1486ebfcc08f328d75ad4610c67835fea58c73ba57e3209a6f6cf019e9f",
+            },
+            ModelFile {
+                name: "vocab.txt",
+                url: concat!(
+                    "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/0bbb45a3365852604aef28b538a8f066f4ccaa85/",
+                    "vocab.txt"
+                ),
+                size: 9_384,
+                sha256: "ec182b70dd42113aff6c5372c75cac58c952443eb22322f57bbd7f53977d497d",
+            },
+            ModelFile {
+                name: "config.json",
+                url: concat!(
+                    "https://huggingface.co/istupakov/parakeet-tdt-0.6b-v2-onnx/resolve/0bbb45a3365852604aef28b538a8f066f4ccaa85/",
+                    "config.json"
+                ),
+                size: 97,
+                sha256: "666903c76b9798caf2c210afd4f6cd60b08a8dbf9800ec8d7a3bc0d2148ac466",
+            },
+        ],
+        gpu: gpu::PARAKEET_TDT,
+        keeps_fillers: None,
+        chunk_secs: Some(40),
+        llm: None,
+        reuse_dirs: &["ParakeetModels/parakeet-tdt-0.6b-v2"],
+    },
+    ModelInfo {
         id: "parakeet-unified-en",
         name: "Parakeet Unified",
         maker: "NVIDIA",
@@ -591,6 +919,61 @@ pub static CATALOG: &[ModelInfo] = &[
         chunk_secs: Some(40),
         llm: None,
         reuse_dirs: &["ParakeetModels/parakeet-unified-en-0.6b-int8"],
+    },
+    ModelInfo {
+        id: "parakeet-unified-en-full",
+        name: "Parakeet Unified (full size)",
+        maker: "NVIDIA",
+        note: "English only. The uncompressed Parakeet Unified model, a 2.5 GB download, with punctuation.",
+        kind: Kind::ParakeetUnified,
+        languages: "English",
+        english_only: true,
+        speed: 3,
+        accuracy: 2,
+        licence: licences::CC_BY_4,
+        files: &[
+            ModelFile {
+                name: "encoder.onnx",
+                url: concat!(
+                    "https://huggingface.co/bobNight/parakeet-unified-en-0.6b-onnx/resolve/09e9060322d99c5f070010724786e6ee090fd51d/",
+                    "encoder.onnx"
+                ),
+                size: 41_901_475,
+                sha256: "50083dd0b2af503b87ea8fcf9fd7d7dc15dda3130e4113017c8b37ed00418ba4",
+            },
+            ModelFile {
+                name: "encoder.onnx.data",
+                url: concat!(
+                    "https://huggingface.co/bobNight/parakeet-unified-en-0.6b-onnx/resolve/09e9060322d99c5f070010724786e6ee090fd51d/",
+                    "encoder.onnx.data"
+                ),
+                size: 2_437_091_328,
+                sha256: "c054b2932ee13aa39ed84982a399822f3193311fb6fd8e1e204566722614bd87",
+            },
+            ModelFile {
+                name: "decoder_joint.onnx",
+                url: concat!(
+                    "https://huggingface.co/bobNight/parakeet-unified-en-0.6b-onnx/resolve/09e9060322d99c5f070010724786e6ee090fd51d/",
+                    "decoder_joint.onnx"
+                ),
+                size: 35_779_240,
+                sha256: "64648c91935ea4819e9c31ea8a20f011d3b1c960be3861cb8bc74df0259cd998",
+            },
+            ModelFile {
+                name: "tokenizer.model",
+                url: concat!(
+                    "https://huggingface.co/bobNight/parakeet-unified-en-0.6b-onnx/resolve/09e9060322d99c5f070010724786e6ee090fd51d/",
+                    "tokenizer.model"
+                ),
+                size: 251_056,
+                sha256: "07d4e5a63840a53ab2d4d106d2874768143fb3fbdd47938b3910d2da05bfb0a9",
+            },
+        ],
+        gpu: gpu::NONE,
+        keeps_fillers: None,
+        chunk_secs: Some(40),
+        llm: None,
+        reuse_dirs: &["ParakeetModels/parakeet-unified-en-0.6b"],
     },
     ModelInfo {
         id: "nemotron-3.5",
@@ -700,7 +1083,7 @@ pub static CATALOG: &[ModelInfo] = &[
         id: "search",
         name: "Search by meaning",
         maker: "Qwen",
-        note: "Lets Ask find answers phrased differently from the question, in 100+ languages.",
+        note: "Finds passages that mean the same as the question even when the words differ, in 100+ languages.",
         kind: Kind::Embedding,
         languages: "100+ languages",
         english_only: false,
@@ -831,5 +1214,37 @@ mod tests {
             find("qwen3.5-4b").map(|m| m.files[0].name),
             Some("Qwen3.5-4B-Q4_K_M.gguf")
         );
+    }
+
+    #[test]
+    fn parlatos_variants_are_in_the_catalog() {
+        for id in [
+            "whisper-tiny-en",
+            "whisper-base-en",
+            "whisper-small-en",
+            "whisper-medium-en",
+            "whisper-large-v2-full",
+            "whisper-large-v3-full",
+            "whisper-turbo-full",
+            "parakeet-v2-full",
+            "parakeet-v3-full",
+            "parakeet-unified-en-full",
+        ] {
+            assert!(find(id).is_some(), "{id}");
+        }
+        for id in [
+            "whisper-tiny-en",
+            "whisper-base-en",
+            "whisper-small-en",
+            "whisper-medium-en",
+            "parakeet-v2-full",
+            "parakeet-unified-en-full",
+        ] {
+            assert!(find(id).unwrap().english_only, "{id}");
+        }
+        assert!(!find("whisper-large-v3-full").unwrap().english_only);
+        assert_eq!(find("whisper-turbo-full").unwrap().size(), 1_624_555_275);
+        assert_eq!(find("parakeet-v3-full").unwrap().files.len(), 6);
+        assert_eq!(find("parakeet-unified-en-full").unwrap().files.len(), 4);
     }
 }
