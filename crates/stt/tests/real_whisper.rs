@@ -336,10 +336,11 @@ fn three_minutes_run_in_one_call() {
     }
 }
 
-/// The initial prompt conditions Whisper; it does not force a spelling (measured: "Mogo" in the prompt does not
-/// turn "Mago" into "Mogo", but it does change how the same audio is decoded: Whisper imitates the prompt's style,
-/// here lower case without a full stop). So the proof that the vocabulary reaches whisper.cpp is a changed, and
-/// repeatable, decode.
+/// The initial prompt conditions Whisper; it does not force a spelling. Measured on 2026-10-29: "Mogo." leaves
+/// "Mago" as it is and keeps the capital and the full stop (the vocabulary prompt ends with a full stop for that
+/// reason), while a prompt that lists the spellings Whisper is choosing between ("Mago, Mogo, Magoo.") does change the
+/// decode ("Magoo"). So the proof that the vocabulary reaches whisper.cpp is a changed, and repeatable, decode, and
+/// the proof that it does no harm is that the style of a plain vocabulary is kept.
 #[test]
 #[ignore]
 fn vocabulary_reaches_whisper_cpps_prompt() {
@@ -357,11 +358,27 @@ fn vocabulary_reaches_whisper_cpps_prompt() {
         )
         .unwrap();
     assert_eq!(plain, again, "greedy decoding repeats");
-    let with = e
+    let styled = e
         .transcribe(
             &clip,
             &ChunkOptions {
                 vocabulary: vec!["Mogo".into()],
+                ..ChunkOptions::default()
+            },
+        )
+        .unwrap();
+    let styled_text = text_of(&styled);
+    assert!(
+        styled_text.trim_start().starts_with(char::is_uppercase)
+            && styled_text.trim_end().ends_with('.'),
+        "a plain vocabulary keeps the capital and the full stop: {styled_text:?}"
+    );
+    let words = vec!["Mago".to_string(), "Mogo".to_string(), "Magoo".to_string()];
+    let with = e
+        .transcribe(
+            &clip,
+            &ChunkOptions {
+                vocabulary: words.clone(),
                 ..ChunkOptions::default()
             },
         )
@@ -381,7 +398,7 @@ fn vocabulary_reaches_whisper_cpps_prompt() {
         .transcribe(
             &clip,
             &ChunkOptions {
-                vocabulary: vec!["Mogo".into()],
+                vocabulary: words,
                 ..ChunkOptions::default()
             },
         )
