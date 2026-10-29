@@ -242,3 +242,20 @@ fn never_exit_still_exits_when_the_app_is_gone() {
         "the helper must exit when its stdin closes, even configured to never idle out"
     );
 }
+
+#[test]
+fn inspect_a_missing_file_says_model_missing() {
+    let _turn = one_at_a_time();
+    let mut child = spawn(None);
+    let mut stdin = child.stdin.take().unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let line = ask(
+        &mut stdin,
+        &mut out,
+        r#"{"op":"inspect","model_path":"/nonexistent/m.gguf"}"#,
+    );
+    assert!(line.contains(r#""kind":"model_missing""#), "{line}");
+    drop(stdin);
+    let _ = wait_exit(&mut child, Duration::from_secs(20));
+    let _ = child.kill();
+}

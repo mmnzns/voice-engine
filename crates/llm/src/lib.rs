@@ -12,6 +12,7 @@
 mod failure;
 mod generate;
 mod inbox;
+mod inspect;
 mod model;
 mod think;
 
@@ -177,10 +178,10 @@ pub fn run(config: HelperConfig) {
                     Err(f) => send(&f.event()),
                 }
             }
-            Ok(Request::Inspect(_)) => send(&Event::Error {
-                message: "not supported yet".into(),
-                error: ErrorKind::BadRequest,
-            }),
+            Ok(Request::Inspect(i)) => match inspect::inspect(&i.model_path) {
+                Ok(found) => send(&Event::Inspected(found)),
+                Err(f) => send(&f.event()),
+            },
             Ok(Request::Unload) => {
                 loaded = None;
                 send(&Event::Unloaded);

@@ -23,6 +23,9 @@ llama-cpp-2 = { version = "=0.1.159", default-features = false, features = ["com
 [target.'cfg(target_os = "macos")'.dependencies]
 llama-cpp-2 = { version = "=0.1.159", default-features = false, features = ["metal", "common"] }
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [features]
 # Windows GPU build: needs the Vulkan SDK (VULKAN_SDK) to build and vulkan-1.dll, installed by GPU drivers, to run.
 vulkan = ["llama-cpp-2/vulkan"]
