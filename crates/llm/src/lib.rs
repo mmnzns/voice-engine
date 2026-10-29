@@ -11,6 +11,7 @@
 
 mod failure;
 mod generate;
+mod inbox;
 mod model;
 
 use failure::Failure;
@@ -27,15 +28,17 @@ use voice_engine_protocol::{
 };
 
 /// Without a request for this long the helper exits, which frees all of the model's memory. The app starts it
-/// again on the next request. `<prefix>_LLM_IDLE_SECS` shortens it (tests only).
+/// again on the next request, or sends `configure` to change it. `<prefix>_LLM_IDLE_SECS` sets it for tests.
 const IDLE_EXIT: Duration = Duration::from_secs(120);
 
-fn idle_exit(config: &HelperConfig) -> Duration {
-    std::env::var(config.idle_secs_env())
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .map(Duration::from_secs)
-        .unwrap_or(IDLE_EXIT)
+fn idle_exit(config: &HelperConfig) -> Option<Duration> {
+    Some(
+        std::env::var(config.idle_secs_env())
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .map(Duration::from_secs)
+            .unwrap_or(IDLE_EXIT),
+    )
 }
 
 pub(crate) fn send(ev: &Event) {
@@ -124,11 +127,20 @@ pub fn run(config: HelperConfig) {
         }
     });
 
-    let idle = idle_exit(&config);
+    let mut inbox = inbox::Inbox::new(rx);
+    let mut idle = idle_exit(&config);
     let mut loaded: Option<Loaded> = None;
     // Ends when idle or when stdin closes: free everything by exiting.
-    while let Ok(line) = rx.recv_timeout(idle) {
+    while let inbox::Next::Line(line) = inbox.next(idle) {
         match decode_request(&line) {
+            Ok(Request::Configure(c)) => {
+                idle = c.idle_secs.map(Duration::from_secs);
+                send(&Event::Configured {
+                    idle_secs: c.idle_secs,
+                });
+            }
+            // A cancel with nothing running: the reply it meant has already finished.
+            Ok(Request::Cancel) => {}
             Ok(Request::Ping) => send(&Event::Ready {
                 backend: backend(gpu.as_ref()),
                 protocol: PROTOCOL_VERSION,
@@ -144,18 +156,15 @@ pub fn run(config: HelperConfig) {
                     gpu: gpu.as_ref().filter(|_| c.gpu),
                     n_ctx: c.n_ctx,
                 };
-                match complete(&llama, &mut loaded, target, &c) {
+                match complete(&llama, &mut loaded, target, &c, &mut inbox) {
                     Ok(reply) => send(&Event::Done(reply)),
                     Err(f) => send(&f.event()),
                 }
             }
-            Ok(Request::Configure(_) | Request::Load(_) | Request::Inspect(_)) => {
-                send(&Event::Error {
-                    message: "not supported yet".into(),
-                    error: ErrorKind::BadRequest,
-                })
-            }
-            Ok(Request::Cancel) => {}
+            Ok(Request::Load(_) | Request::Inspect(_)) => send(&Event::Error {
+                message: "not supported yet".into(),
+                error: ErrorKind::BadRequest,
+            }),
             Ok(Request::Unload) => {
                 loaded = None;
                 send(&Event::Unloaded);
@@ -167,7 +176,7 @@ pub fn run(config: HelperConfig) {
                     gpu: gpu.as_ref().filter(|_| e.gpu),
                     n_ctx: EMBED_MAX_TOKENS as u32,
                 };
-                match embed(&llama, &mut loaded, target, &e) {
+                match embed(&llama, &mut loaded, target, &e, &mut inbox) {
                     Ok(vectors) => send(&Event::Embedded { vectors }),
                     Err(f) => send(&f.event()),
                 }
@@ -207,12 +216,12 @@ mod tests {
         let config = HelperConfig {
             env_prefix: "VOICE_ENGINE_UNIT_TEST",
         };
-        assert_eq!(idle_exit(&config), IDLE_EXIT);
+        assert_eq!(idle_exit(&config), Some(IDLE_EXIT));
         // SAFETY: this variable name is private to this test, and no other test reads it.
         unsafe { std::env::set_var(config.idle_secs_env(), "7") };
-        assert_eq!(idle_exit(&config), Duration::from_secs(7));
+        assert_eq!(idle_exit(&config), Some(Duration::from_secs(7)));
         unsafe { std::env::set_var(config.idle_secs_env(), "not a number") };
-        assert_eq!(idle_exit(&config), IDLE_EXIT);
+        assert_eq!(idle_exit(&config), Some(IDLE_EXIT));
         unsafe { std::env::remove_var(config.idle_secs_env()) };
     }
 

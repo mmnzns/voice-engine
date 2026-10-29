@@ -1,6 +1,7 @@
 //! Writing a reply and computing embeddings with a loaded model.
 
 use crate::failure::Failure;
+use crate::inbox::Inbox;
 use crate::model::{Loaded, Target, context_params, load};
 use crate::send;
 use llama_cpp_2::context::params::LlamaPoolingType;
@@ -21,6 +22,7 @@ pub(crate) fn embed(
     loaded: &mut Option<Loaded>,
     t: Target,
     e: &Embedding,
+    inbox: &mut Inbox,
 ) -> Result<Vec<Vec<f32>>, Failure> {
     let model = load(llama, loaded, t)?;
     let ctx_params = context_params(EMBED_MAX_TOKENS as u32, t.gpu.is_some())
@@ -36,6 +38,9 @@ pub(crate) fn embed(
     let mut out = Vec::with_capacity(e.texts.len());
     let mut batch = LlamaBatch::new(EMBED_MAX_TOKENS, 1);
     for text in &e.texts {
+        if inbox.cancel_requested() {
+            return Err(Failure::cancelled());
+        }
         // add_special: the tokenizer adds what the model expects (Qwen3-Embedding pools on the closing token).
         let mut tokens = vocab.tokenize(text.as_bytes(), true, false);
         tokens.truncate(EMBED_MAX_TOKENS);
@@ -62,6 +67,7 @@ pub(crate) fn complete(
     loaded: &mut Option<Loaded>,
     t: Target,
     c: &Completion,
+    inbox: &mut Inbox,
 ) -> Result<Reply, Failure> {
     let started = Instant::now();
     let model = load(llama, loaded, t)?;
@@ -136,6 +142,9 @@ pub(crate) fn complete(
         .enumerate()
         .map(|(i, ch)| (i * BATCH, ch))
     {
+        if inbox.cancel_requested() {
+            return Err(Failure::cancelled());
+        }
         batch.clear();
         for (j, t) in chunk.iter().enumerate() {
             let pos = start + j;
@@ -157,6 +166,9 @@ pub(crate) fn complete(
     let mut written = 0u32;
     let mut truncated = true;
     while written < c.max_tokens {
+        if inbox.cancel_requested() {
+            return Err(Failure::cancelled());
+        }
         // `sample` also accepts the token into the samplers (grammar state included); accepting it again
         // would push the grammar past it.
         let token = sampler.sample(&ctx, batch.n_tokens() - 1);
@@ -205,6 +217,8 @@ mod tests {
             .unwrap_or_else(|e| e.into_inner());
         let llama = LlamaBackend::init().unwrap();
         let mut loaded = None;
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let mut inbox = Inbox::new(rx);
         let c = Completion {
             model_path: "/nonexistent/model.gguf".into(),
             n_ctx: 512,
@@ -223,7 +237,7 @@ mod tests {
             gpu: None,
             n_ctx: c.n_ctx,
         };
-        let e = complete(&llama, &mut loaded, target, &c).unwrap_err();
+        let e = complete(&llama, &mut loaded, target, &c, &mut inbox).unwrap_err();
         assert_eq!(
             e.error,
             ErrorKind::ModelMissing {

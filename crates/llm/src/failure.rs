@@ -31,8 +31,6 @@ impl Failure {
         Failure::new(ErrorKind::OutOfMemory, message)
     }
 
-    // Used once a reply can be stopped between tokens (the inbox).
-    #[allow(dead_code)]
     pub fn cancelled() -> Self {
         Failure::new(ErrorKind::Cancelled, "stopped by request")
     }

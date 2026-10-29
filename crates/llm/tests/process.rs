@@ -89,3 +89,82 @@ fn a_bad_line_is_an_error_event_not_a_crash() {
     let _ = wait_exit(&mut child, Duration::from_secs(20));
     let _ = child.kill();
 }
+
+fn ask(stdin: &mut impl Write, out: &mut impl BufRead, request: &str) -> String {
+    writeln!(stdin, "{request}").unwrap();
+    let mut line = String::new();
+    out.read_line(&mut line).unwrap();
+    line
+}
+
+#[test]
+fn configure_never_keeps_it_running_past_the_idle_time() {
+    let mut child = spawn(Some("1"));
+    let mut stdin = child.stdin.take().unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let line = ask(
+        &mut stdin,
+        &mut out,
+        r#"{"op":"configure","idle_secs":null}"#,
+    );
+    assert!(line.contains(r#""event":"configured""#), "{line}");
+    assert!(
+        wait_exit(&mut child, Duration::from_secs(3)).is_none(),
+        "configured to never exit, it must outlive the 1 s idle time"
+    );
+    let line = ask(&mut stdin, &mut out, r#"{"op":"ping"}"#);
+    assert!(line.contains("ready"), "{line}");
+    drop(stdin);
+    assert!(wait_exit(&mut child, Duration::from_secs(20)).is_some_and(|s| s.success()));
+}
+
+#[test]
+fn configure_can_change_while_the_helper_runs() {
+    // An app's "keep models ready" setting flips the policy live; each change must take effect, no restart.
+    let mut child = spawn(None);
+    let mut stdin = child.stdin.take().unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let line = ask(
+        &mut stdin,
+        &mut out,
+        r#"{"op":"configure","idle_secs":null}"#,
+    );
+    assert!(
+        line.contains(r#""event":"configured""#) && line.contains(r#""idle_secs":null"#),
+        "{line}"
+    );
+    let line = ask(&mut stdin, &mut out, r#"{"op":"configure","idle_secs":1}"#);
+    assert!(line.contains(r#""idle_secs":1"#), "{line}");
+    assert!(
+        wait_exit(&mut child, Duration::from_secs(20)).is_some_and(|s| s.success()),
+        "the second configure (1 s) must win over the first (never)"
+    );
+    drop(stdin);
+}
+
+#[test]
+fn configure_a_short_idle_time_and_it_exits() {
+    let mut child = spawn(None);
+    let mut stdin = child.stdin.take().unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let line = ask(&mut stdin, &mut out, r#"{"op":"configure","idle_secs":1}"#);
+    assert!(line.contains(r#""idle_secs":1"#), "{line}");
+    assert!(wait_exit(&mut child, Duration::from_secs(20)).is_some_and(|s| s.success()));
+    drop(stdin);
+}
+
+#[test]
+fn a_cancel_with_nothing_running_is_ignored() {
+    let mut child = spawn(None);
+    let mut stdin = child.stdin.take().unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    writeln!(stdin, r#"{{"op":"cancel"}}"#).unwrap();
+    let line = ask(&mut stdin, &mut out, r#"{"op":"ping"}"#);
+    assert!(
+        line.contains("ready"),
+        "the cancel must produce no event: {line}"
+    );
+    drop(stdin);
+    let _ = wait_exit(&mut child, Duration::from_secs(20));
+    let _ = child.kill();
+}
