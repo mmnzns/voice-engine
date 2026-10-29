@@ -8,6 +8,8 @@ publish.workspace = true
 
 [dependencies]
 dirs.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
