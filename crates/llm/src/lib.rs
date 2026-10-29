@@ -161,7 +161,22 @@ pub fn run(config: HelperConfig) {
                     Err(f) => send(&f.event()),
                 }
             }
-            Ok(Request::Load(_) | Request::Inspect(_)) => send(&Event::Error {
+            Ok(Request::Load(l)) => {
+                let target = Target {
+                    path: &l.model_path,
+                    gpu: gpu.as_ref().filter(|_| l.gpu),
+                    n_ctx: l.n_ctx,
+                };
+                match model::load(&llama, &mut loaded, target) {
+                    Ok((model, seconds)) => send(&Event::Loaded {
+                        seconds,
+                        n_ctx_train: model.n_ctx_train(),
+                        backend: backend(target.gpu),
+                    }),
+                    Err(f) => send(&f.event()),
+                }
+            }
+            Ok(Request::Inspect(_)) => send(&Event::Error {
                 message: "not supported yet".into(),
                 error: ErrorKind::BadRequest,
             }),

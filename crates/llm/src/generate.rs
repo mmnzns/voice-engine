@@ -24,7 +24,7 @@ pub(crate) fn embed(
     e: &Embedding,
     inbox: &mut Inbox,
 ) -> Result<Vec<Vec<f32>>, Failure> {
-    let model = load(llama, loaded, t)?;
+    let (model, _) = load(llama, loaded, t)?;
     let ctx_params = context_params(EMBED_MAX_TOKENS as u32, t.gpu.is_some())
         .with_n_batch(EMBED_MAX_TOKENS as u32)
         .with_n_ubatch(EMBED_MAX_TOKENS as u32)
@@ -70,7 +70,7 @@ pub(crate) fn complete(
     inbox: &mut Inbox,
 ) -> Result<Reply, Failure> {
     let started = Instant::now();
-    let model = load(llama, loaded, t)?;
+    let (model, load_seconds) = load(llama, loaded, t)?;
 
     let template = model.chat_template(None).map_err(|e| {
         Failure::new(
@@ -201,7 +201,7 @@ pub(crate) fn complete(
         seconds: started.elapsed().as_secs_f32(),
         truncated,
         thinking_tokens: 0,
-        load_seconds: 0.0,
+        load_seconds,
         thinking_text: None,
     })
 }

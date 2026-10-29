@@ -51,11 +51,13 @@ fn model_params(t: Target) -> Result<LlamaModelParams, Failure> {
     Ok(params)
 }
 
+/// The model for a target, loading it unless it is already loaded. The seconds are 0 when it was.
 pub(crate) fn load<'a>(
     llama: &LlamaBackend,
     loaded: &'a mut Option<Loaded>,
     t: Target,
-) -> Result<&'a LlamaModel, Failure> {
+) -> Result<(&'a LlamaModel, f32), Failure> {
+    let started = std::time::Instant::now();
     let gpu = t.gpu.map(|d| d.index);
     // The context size only changes how a model is fitted on a GPU (`fit_params`); on the processor or Metal a
     // different size must not reload the model, so it is left out of the key there.
@@ -65,14 +67,14 @@ pub(crate) fn load<'a>(
         .is_some_and(|l| l.path == t.path && l.gpu == gpu && l.n_ctx == n_ctx);
     if !same {
         *loaded = None;
+        if !std::path::Path::new(t.path).is_file() {
+            return Err(Failure::missing(t.path));
+        }
         send(&Event::Progress {
             phase: Phase::Loading,
             done: 0,
             total: 0,
         });
-        if !std::path::Path::new(t.path).is_file() {
-            return Err(Failure::missing(t.path));
-        }
         let params = model_params(t)?;
         let model = LlamaModel::load_from_file(llama, t.path, &params)
             .map_err(|e| Failure::internal(format!("couldn't load the AI model: {e}")))?;
@@ -83,7 +85,12 @@ pub(crate) fn load<'a>(
             model,
         });
     }
-    Ok(&loaded.as_ref().expect("loaded above").model)
+    let seconds = if same {
+        0.0
+    } else {
+        started.elapsed().as_secs_f32()
+    };
+    Ok((&loaded.as_ref().expect("loaded above").model, seconds))
 }
 
 pub(crate) fn threads() -> i32 {

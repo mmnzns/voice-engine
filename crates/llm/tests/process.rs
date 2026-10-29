@@ -168,3 +168,23 @@ fn a_cancel_with_nothing_running_is_ignored() {
     let _ = wait_exit(&mut child, Duration::from_secs(20));
     let _ = child.kill();
 }
+
+#[test]
+fn load_and_complete_with_a_missing_file_say_model_missing() {
+    let mut child = spawn(None);
+    let mut stdin = child.stdin.take().unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    for request in [
+        r#"{"op":"load","model_path":"/nonexistent/m.gguf","n_ctx":512,"gpu":false}"#,
+        r#"{"op":"complete","model_path":"/nonexistent/m.gguf","n_ctx":512,"system":"","user":"","max_tokens":1,"temperature":0.0,"gpu":false}"#,
+    ] {
+        let line = ask(&mut stdin, &mut out, request);
+        assert!(
+            line.contains(r#""kind":"model_missing""#) && line.contains("/nonexistent/m.gguf"),
+            "{line}"
+        );
+    }
+    drop(stdin);
+    let _ = wait_exit(&mut child, Duration::from_secs(20));
+    let _ = child.kill();
+}
