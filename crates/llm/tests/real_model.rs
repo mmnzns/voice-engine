@@ -224,12 +224,19 @@ fn every_app_schema_gives_a_reply_with_its_required_keys() {
             "A candidate said: 'I led a team of five to ship the billing redesign two weeks early, cutting support tickets by 30%.' Fill in the reply for this.",
             serde_json::json!({
                 "system": "Reply with JSON only, matching the schema.",
-                "json_schema": schema, "max_tokens": 1500
+                "json_schema": schema, "max_tokens": 4000
             }),
         ));
         let r = done(h.answer());
-        let reply: serde_json::Value = serde_json::from_str(&r.text)
-            .unwrap_or_else(|e| panic!("{}: not JSON ({e}): {}", path.display(), r.text));
+        let reply: serde_json::Value = serde_json::from_str(&r.text).unwrap_or_else(|e| {
+            panic!(
+                "{}: not JSON ({e}), truncated={}, {} tokens: {}",
+                path.display(),
+                r.truncated,
+                r.output_tokens,
+                r.text
+            )
+        });
         for key in parsed["required"].as_array().into_iter().flatten() {
             assert!(
                 reply.get(key.as_str().unwrap()).is_some(),

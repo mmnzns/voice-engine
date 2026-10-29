@@ -11,6 +11,25 @@ The local AI and speech engine shared by three desktop apps by Miguel Monzones:
 | `voice-engine-stt` | Whisper chunk transcription and the Whisper helper |
 | `voice-engine-models` | The model catalog and the finder (own folder, other apps' folders) |
 
+## Local AI helper protocol
+
+One JSON object per line. Requests (`op`): `ping`, `configure`, `load`, `unload`, `complete`, `cancel`, `embed`,
+`inspect`, `devices`. Events (`event`): `ready`, `configured`, `loaded`, `unloaded`, `progress`, `done`, `embedded`,
+`inspected`, `devices`, `error`. Match errors on `error.kind`, never on `message`. The current version is
+`PROTOCOL_VERSION` in `voice-engine-protocol`; a helper reports it in `ready`.
+
+Lifetime: the helper runs until its stdin closes (the app exited or crashed) or, with an idle time set, until that
+long passes without a request. Name the binary as your app wants (Ensayo: the Tauri sidecar `ensayo-llm`); the build
+recipe for each target triple comes in a later step of v0.2.0. The helper never logs user text: only sizes, timings,
+paths and error kinds reach stderr.
+
+Reply schemas: llama.cpp enforces structure (objects, required keys, `additionalProperties: false`, `enum`, `const`,
+array sizes). It can't enforce every keyword (a `pattern` using `\d` is accepted as any string), so apps keep
+checking replies themselves.
+
+On a Mac, starting several helpers at once can make one die with SIGBUS inside Apple's Metal shader cache; restart a
+helper that dies at startup.
+
 ## Use it in an app
 
 ```toml

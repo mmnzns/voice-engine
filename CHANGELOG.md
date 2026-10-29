@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased (v0.2.0)
+
+- protocol 2 (`PROTOCOL_VERSION` 2): `configure` (idle time, or never exit while the app runs; can be sent at any
+  time), `load` (load now, answers `loaded` with the load time and the model's trained context; a different path
+  replaces the loaded model), `unload` (frees the model, the helper keeps running), `cancel` (stops the reply, the
+  model stays loaded), `inspect` (a GGUF's chat template, thinking and trained context without loading it).
+  `complete` gains `thinking`, `thinking_budget` and `seed`; `done` gains `thinking_tokens`, `load_seconds` and
+  `thinking_text`. Errors carry `error.kind` (`model_missing`, `out_of_memory`, `prompt_too_long`, `bad_schema`,
+  `no_chat_template`, `cancelled`, `gpu_failed`, `bad_request`, `internal`); an error from an older helper reads as
+  `internal`.
+- llm: thinking is off unless asked for; the reply never contains a thinking block. With a schema and thinking on,
+  the schema applies to the answer only. The helper exits when its stdin closes (the app quit or crashed) whatever
+  the idle policy. No user text is ever written to stderr; a test scans the source for it.
+- The apps' 12 reply schemas are part of the tests.
+- Known: on a Mac, several helpers starting at the same moment can make one die with SIGBUS inside Apple's Metal
+  shader cache (not engine code). An app's client must restart a helper that dies at startup.
+
 ## v0.1.0 (2026-10-28)
 
 First version, from Talaan's and Ensayo's engine code (see SOURCES.md).
