@@ -2,6 +2,12 @@
 
 ## Unreleased (v0.2.0)
 
+- bench: why Whisper Base and Whisper Large Turbo missed their bars (`docs/bench-2026-10-29.md`, "Why the bars were
+  missed"). New example `voice-engine-stt` `bench_timing` (the engine, Talaan's own `transcribe` and a direct whisper-rs
+  call with token timestamps on and off, on the same 29 s clip). Whisper's token timestamps cost 1 to 4 percent on Base
+  and about 1 percent on Turbo, so there is no `word_times` option and the engine did not change; Talaan's own function
+  is as slow as the engine (Base 0.70 to 0.71 s with 6 threads against 0.50 s, Turbo 20.1x against about 25x). Not the
+  CPU baseline (`GGML_NATIVE=ON` gives the same) and not the busy machine either.
 - client: the fall back to the processor helper says `gpu: false`. `LlmClient` and `SttClient` resent the request that
   had failed on the card helper still saying `gpu: true`; since `gpu: false` means the processor on the Mac too, and
   there both helpers can be the same binary, the processor helper loaded on Metal again. Now every `load`, `complete`
