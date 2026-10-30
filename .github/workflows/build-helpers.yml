@@ -123,8 +123,22 @@ jobs:
       - uses: ./.github/actions/windows-arm64-toolchain
         if: steps.pick.outputs.helpers != '' && runner.os == 'Windows' && runner.arch == 'ARM64'
 
-      - name: Build the helpers
-        if: steps.pick.outputs.helpers != ''
+      # Windows runs scripts/build-helpers.ps1 under Windows PowerShell 5.1 (`shell: powershell`, the one built into
+      # Windows), so what an app's users run stays covered; HELPERS reaches it as one comma string.
+      - name: Build the helpers (Windows PowerShell 5.1)
+        if: steps.pick.outputs.helpers != '' && runner.os == 'Windows'
+        shell: powershell
+        env:
+          ENGINE_REF: ${{ steps.pick.outputs.ref }}
+          HELPERS: ${{ steps.pick.outputs.helpers }}
+          LLM_NAME: ${{ inputs.llm-name }}
+          STT_NAME: ${{ inputs.stt-name }}
+          TRIPLE: ${{ matrix.triple }}
+        run: |
+          $out = Join-Path $env:GITHUB_WORKSPACE 'dist'
+          & ./scripts/build-helpers.ps1 -Target $env:TRIPLE -OutDir $out -Helpers $env:HELPERS -LlmName $env:LLM_NAME -SttName $env:STT_NAME -EngineRef $env:ENGINE_REF
+      - name: Build the helpers (Mac)
+        if: steps.pick.outputs.helpers != '' && runner.os != 'Windows'
         shell: pwsh
         env:
           ENGINE_REF: ${{ steps.pick.outputs.ref }}
@@ -134,12 +148,8 @@ jobs:
           TRIPLE: ${{ matrix.triple }}
         run: |
           $out = Join-Path $env:GITHUB_WORKSPACE 'dist'
-          if ($IsWindows) {
-            & ./scripts/build-helpers.ps1 -Target $env:TRIPLE -OutDir $out -Helpers $env:HELPERS -LlmName $env:LLM_NAME -SttName $env:STT_NAME -EngineRef $env:ENGINE_REF
-          } else {
-            & bash ./scripts/build-helpers.sh $env:TRIPLE $out --helpers $env:HELPERS --llm-name $env:LLM_NAME --stt-name $env:STT_NAME --engine-ref $env:ENGINE_REF
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
+          & bash ./scripts/build-helpers.sh $env:TRIPLE $out --helpers $env:HELPERS --llm-name $env:LLM_NAME --stt-name $env:STT_NAME --engine-ref $env:ENGINE_REF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: What was built
         if: steps.pick.outputs.helpers != ''
         shell: pwsh

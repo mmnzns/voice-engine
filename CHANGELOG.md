@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- tests: the real-model tests, examples and benches print word, character and segment counts and timings, never what
+  was said (`real_whisper`, `real_parakeet`, `real_fillers` and `client`'s `real_stt` printed transcripts, words and
+  filler tokens); the rule is in README.md and CLAUDE.md (#8).
+- scripts: `build-helpers.ps1` and `smoke-helpers.ps1` work on Windows PowerShell 5.1. `-Helpers llm,stt` unquoted
+  binds (it is a `[string[]]`; a quoted comma string still works), and the smoke test no longer sets
+  `ProcessStartInfo.StandardInputEncoding`, which .NET Framework lacks (it writes the UTF-8 ping as bytes). CI runs
+  both scripts on Windows under `shell: powershell` (#6).
+
 ## v0.2.0 (2026-10-29)
 
 - tests: Windows re-check fixes. `bench_llm`'s default helper path ends in `.exe` on Windows (#4). With the `directml`

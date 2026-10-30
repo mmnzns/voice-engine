@@ -159,7 +159,20 @@ jobs:
       # The Vulkan helpers import vulkan-1.dll; the action finds a loader (System32's or the SDK's) and puts it on PATH.
       - uses: ./.github/actions/vulkan-sdk
         if: github.event_name == 'workflow_dispatch' && matrix.triple == 'x86_64-pc-windows-msvc'
-      - name: Handshake
+      # Windows runs the script under Windows PowerShell 5.1 (the one built into Windows, `shell: powershell`), the shell
+      # an app's users have; the Mac runs it under pwsh. Same script, same body.
+      - name: Handshake (Windows PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        env:
+          VULKAN: ${{ github.event_name == 'workflow_dispatch' && matrix.triple == 'x86_64-pc-windows-msvc' }}
+        run: |
+          $names = @('voice-engine-llm', 'voice-engine-stt')
+          if ($env:VULKAN -eq 'true') { $names += 'voice-engine-llm-vulkan', 'voice-engine-stt-vulkan' }
+          Get-ChildItem "${{ runner.temp }}/helpers" | Format-Table Name, Length
+          ./scripts/smoke-helpers.ps1 -Dir "${{ runner.temp }}/helpers" -Triple "${{ matrix.triple }}" -Names $names -ExpectedProtocol 2
+      - name: Handshake (pwsh)
+        if: runner.os != 'Windows'
         shell: pwsh
         env:
           VULKAN: ${{ github.event_name == 'workflow_dispatch' && matrix.triple == 'x86_64-pc-windows-msvc' }}

@@ -73,23 +73,16 @@ fn both_modes_give_segments_and_ordered_timed_words() {
                 },
             )
             .unwrap();
+        // Counts and times only: nothing a person said goes into a log.
         eprintln!(
-            "{timing:?}: {:?} in {:?}, language {:?}",
-            text_of(&t),
-            t0.elapsed(),
-            t.language
+            "{timing:?}: {} segments, {} words, {} chars in {:?}",
+            t.segments.len(),
+            words_of(&t).len(),
+            text_of(&t).chars().count(),
+            t0.elapsed()
         );
         for s in &t.segments {
-            eprintln!(
-                "   [{}..{}] {:?} words {:?}",
-                s.start_ms,
-                s.end_ms,
-                s.text,
-                s.words
-                    .iter()
-                    .map(|w| (w.text.as_str(), w.start_ms, w.end_ms))
-                    .collect::<Vec<_>>()
-            );
+            eprintln!("   [{}..{}] {} words", s.start_ms, s.end_ms, s.words.len());
         }
         check_shape(&t, ms(&clip));
         let heard = lower_letters(&words_of(&t).join(" "));
@@ -163,7 +156,11 @@ fn segments_mode_is_what_talaans_settings_give() {
             .iter()
             .map(|s| (s.text.clone(), s.start_ms, s.end_ms))
             .collect();
-        eprintln!("gpu {gpu}: talaan {want:?}\n         ours   {got:?}");
+        eprintln!(
+            "gpu {gpu}: talaan {} segments, ours {} segments",
+            want.len(),
+            got.len()
+        );
         assert_eq!(got, want, "gpu {gpu}");
         check_shape(&ours, ms(&clip));
     }
@@ -248,7 +245,7 @@ fn words_mode_is_what_ensayos_settings_give() {
     }
     let want = clean(raw);
     let got: Vec<_> = ours.segments.iter().flat_map(|s| s.words.clone()).collect();
-    eprintln!("ensayo {want:?}\nours   {got:?}");
+    eprintln!("ensayo {} words, ours {} words", want.len(), got.len());
     assert!(want.len() > 8);
     assert_eq!(got, want);
 }
@@ -283,9 +280,9 @@ fn clips_of_every_short_length_work() {
                 );
             }
             eprintln!(
-                "{n} samples ({clip_ms} ms) {timing:?}: {} segments, text {:?}",
+                "{n} samples ({clip_ms} ms) {timing:?}: {} segments, {} words",
                 t.segments.len(),
-                text_of(&t)
+                words_of(&t).len()
             );
             // From 0.4 s of "Hello there." on, the speech is heard: padding gave Whisper enough audio to decode.
             if n >= 6_400 {
@@ -401,9 +398,11 @@ fn vocabulary_reaches_whisper_cpps_prompt() {
         )
         .unwrap();
     eprintln!(
-        "without: {:?}\nwith:    {:?}",
-        text_of(&plain),
-        text_of(&with)
+        "without: {} words, {} chars; with: {} words, {} chars",
+        words_of(&plain).len(),
+        text_of(&plain).chars().count(),
+        words_of(&with).len(),
+        text_of(&with).chars().count()
     );
     check_shape(&with, ms(&clip));
     assert_ne!(
@@ -452,7 +451,7 @@ fn fillers_option_is_accepted() {
                 },
             )
             .unwrap();
-        eprintln!("keep_fillers {keep_fillers}: {:?}", words_of(&t).join(" "));
+        eprintln!("keep_fillers {keep_fillers}: {} words", words_of(&t).len());
         check_shape(&t, ms(&clip));
     }
 }
@@ -555,9 +554,9 @@ fn silence_after_the_last_word_is_resumed_and_reported() {
     let mut e = engine(use_gpu());
     let t = e.transcribe(&audio, &ChunkOptions::default()).unwrap();
     eprintln!(
-        "speech {speech_ms} ms + 6 s of silence: stopped early at {:?}, words {:?}",
+        "speech {speech_ms} ms + 6 s of silence: stopped early at {:?}, {} words",
         t.stopped_early_at_ms,
-        words_of(&t)
+        words_of(&t).len()
     );
     check_shape(&t, ms(&audio));
     let at = t

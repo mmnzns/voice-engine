@@ -82,24 +82,17 @@ fn both_modes_give_segments_and_ordered_timed_words() {
     for timing in [Timing::Segments, Timing::Words] {
         let t0 = Instant::now();
         let t = e.transcribe(&clip, &options(timing)).unwrap();
+        // Counts and times only: nothing a person said goes into a log.
         eprintln!(
-            "{timing:?}: {:?} in {:?}, language {:?}, stopped early {:?}",
-            text_of(&t),
+            "{timing:?}: {} segments, {} words, {} chars in {:?}, stopped early {:?}",
+            t.segments.len(),
+            words_of(&t).len(),
+            text_of(&t).chars().count(),
             t0.elapsed(),
-            t.language,
             t.stopped_early_at_ms
         );
         for s in &t.segments {
-            eprintln!(
-                "   [{}..{}] {:?} words {:?}",
-                s.start_ms,
-                s.end_ms,
-                s.text,
-                s.words
-                    .iter()
-                    .map(|w| (w.text.as_str(), w.start_ms, w.end_ms))
-                    .collect::<Vec<_>>()
-            );
+            eprintln!("   [{}..{}] {} words", s.start_ms, s.end_ms, s.words.len());
         }
         check_shape(&t, ms(&clip));
         let heard = lower_letters(&words_of(&t).join(" "));
@@ -209,7 +202,11 @@ fn compare_with_parakeet_rs(clip: &[f32]) {
         .iter()
         .map(|s| (s.text.clone(), s.start_ms, s.end_ms))
         .collect();
-    eprintln!("talaan {want_segments:?}\nours   {got_segments:?}");
+    eprintln!(
+        "talaan {} segments, ours {} segments",
+        want_segments.len(),
+        got_segments.len()
+    );
     assert!(!want_segments.is_empty());
     assert_eq!(got_segments, want_segments);
 
@@ -263,7 +260,7 @@ fn sentences_come_out_as_segments_with_their_words() {
     let segments = e.transcribe(&clip, &options(Timing::Segments)).unwrap();
     let words = e.transcribe(&clip, &options(Timing::Words)).unwrap();
     for s in &segments.segments {
-        eprintln!("[{}..{}] {:?} {:?}", s.start_ms, s.end_ms, s.text, s.words);
+        eprintln!("[{}..{}] {} words", s.start_ms, s.end_ms, s.words.len());
     }
     check_shape(&segments, ms(&clip));
     check_shape(&words, ms(&clip));
@@ -304,11 +301,11 @@ fn a_15_second_window_returns_timed_words_across_it() {
         let t = e.transcribe(&clip, &options(timing)).unwrap();
         let words = flat(&t);
         eprintln!(
-            "{timing:?}: {} words in {:?}, first {:?}, last {:?}, stopped early {:?}",
+            "{timing:?}: {} words in {:?}, first at {:?} ms, last ends at {:?} ms, stopped early {:?}",
             words.len(),
             t0.elapsed(),
-            words.first(),
-            words.last(),
+            words.first().map(|w| w.1),
+            words.last().map(|w| w.2),
             t.stopped_early_at_ms
         );
         check_shape(&t, 15_000);
@@ -334,15 +331,19 @@ fn a_40_second_chunk_works_and_a_45_second_one_is_too_long() {
     let t = e.transcribe(&clip, &options(Timing::Words)).unwrap();
     let words = flat(&t);
     eprintln!(
-        "40 s: {} words in {:?}, last {:?}, stopped early {:?}",
+        "40 s: {} words in {:?}, last ends at {:?} ms, stopped early {:?}",
         words.len(),
         t0.elapsed(),
-        words.last(),
+        words.last().map(|w| w.2),
         t.stopped_early_at_ms
     );
     check_shape(&t, 40_000);
     assert!(words.len() >= 70);
-    assert!(words.last().unwrap().2 >= 30_000, "{:?}", words.last());
+    assert!(
+        words.last().unwrap().2 >= 30_000,
+        "last word ends at {:?} ms",
+        words.last().map(|w| w.2)
+    );
 
     let long = speech(45.0);
     let t0 = Instant::now();
@@ -391,9 +392,9 @@ fn clips_of_every_short_length_work() {
                 );
             }
             eprintln!(
-                "{n} samples ({clip_ms} ms) {timing:?}: {} segments, text {:?}",
+                "{n} samples ({clip_ms} ms) {timing:?}: {} segments, {} words",
                 t.segments.len(),
-                text_of(&t)
+                words_of(&t).len()
             );
             if n >= 20_000 {
                 assert!(
