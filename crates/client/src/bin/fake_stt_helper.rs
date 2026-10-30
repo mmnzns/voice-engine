@@ -20,9 +20,14 @@
 //! - `too_long` answers `transcribe` with too long (max 40 s); `missing` answers `load` with model missing;
 //!   `slow_load` takes 700 ms to load.
 //!
+//! `devices` answers with the list `FAKE_DEVICES` describes (fake_support/devices.rs).
+//!
 //! When `FAKE_LOG` names a file, every `load` the helper receives is appended to it as one line, `[<mode>] load
 //! gpu=<flag>`, so a test can see what each helper (the card one and the processor one run in different modes) was
 //! asked.
+
+#[path = "fake_support/devices.rs"]
+mod fake_devices;
 
 use std::io::{BufRead, Write};
 use std::sync::mpsc;
@@ -130,7 +135,14 @@ fn main() {
                 backend: ready.clone(),
                 protocol,
             }),
-            SttRequest::Devices | SttRequest::Cancel => {}
+            SttRequest::Cancel => {}
+            SttRequest::Devices => {
+                let list = fake_devices::list();
+                send(&SttEvent::Devices {
+                    devices: list.devices,
+                    chosen: list.chosen,
+                });
+            }
             SttRequest::Load(l) => {
                 loaded = None;
                 log_load(&mode, l.gpu);

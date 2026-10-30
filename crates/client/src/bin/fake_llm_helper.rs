@@ -13,9 +13,14 @@
 //! `metal_die` is the Mac helper asked for as the card helper: `ready` says `metal` with no device, and it dies on
 //! `complete` like `gpu_die`.
 //!
+//! `devices` answers with the list `FAKE_DEVICES` describes (fake_support/devices.rs).
+//!
 //! When `FAKE_LOG` names a file, every `load`, `complete` and `embed` the helper receives is appended to it as one
 //! line, `[<mode>] <op> gpu=<flag>`, so a test can see what each helper (the card one and the processor one run in
 //! different modes) was asked.
+
+#[path = "fake_support/devices.rs"]
+mod fake_devices;
 
 use std::io::{BufRead, Write};
 use std::sync::mpsc;
@@ -137,7 +142,14 @@ fn main() {
                     backend: says(e.gpu),
                 });
             }
-            Request::Cancel | Request::Devices => {}
+            Request::Cancel => {}
+            Request::Devices => {
+                let list = fake_devices::list();
+                send(&Event::Devices {
+                    devices: list.devices,
+                    chosen: list.chosen,
+                });
+            }
             Request::Complete(c) => {
                 log(&mode, "complete", c.gpu);
                 match mode.as_str() {
