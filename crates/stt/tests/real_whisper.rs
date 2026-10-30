@@ -1,17 +1,19 @@
-//! Whisper on a real model, on the Mac: `cargo test -p voice-engine-stt -- --ignored --test-threads=1`.
+//! Whisper on a real model, on a Mac or a Windows PC: `cargo test -p voice-engine-stt -- --ignored --test-threads=1`.
 //!
-//! The model is `whisper-turbo` from `$VOICE_ENGINE_TEST_MODELS` (default: Talaan's models folder,
-//! `~/Library/Application Support/Talaan/models`), only ever read. Speech is made with the macOS `say` command in a
-//! temporary folder and converted with `afconvert` to 16 kHz mono f32. Every test here goes through one lock: the
-//! Metal shader cache can SIGBUS when several processes (or contexts) start at once. The voice detection tests
-//! (`vad/ggml-silero-v6.2.0.bin`, from the same folder) live here too, behind the same lock and the same `say`
-//! helper.
-
-#![cfg(target_os = "macos")]
+//! The model is `whisper-turbo` (and `vad` for the voice detection tests), each looked up on its own: in
+//! `$VOICE_ENGINE_TEST_MODELS` when that is set, else in the shared folder, then in Talaan's folder (`common`, which
+//! says exactly where), only ever read. Speech comes from `$VOICE_ENGINE_TEST_CLIP` (a 16 kHz mono WAV that says
+//! `SENTENCE`: `docs/data/clip-sentence.wav`) when that is set, else, on a Mac, from the macOS `say` command in a
+//! temporary folder converted with `afconvert`. A test that needs `say`'s own wording (the vocabulary test, the voice
+//! detection ones that need a phrase with no pause in it) is skipped without it. The graphics card is asked for on the
+//! Mac only (Metal); elsewhere these run on the processor. Every test here goes through one lock: the Metal shader
+//! cache can SIGBUS when several processes (or contexts) start at once.
 
 mod common;
 
-use common::{SENTENCE, check_shape, guard, lower_letters, models_dir, ms, say, text_of, words_of};
+use common::{
+    SENTENCE, check_shape, guard, lower_letters, model_dir, ms, say, text_of, use_gpu, words_of,
+};
 use std::path::PathBuf;
 use std::time::Instant;
 use voice_engine_models::catalog::find;
@@ -23,7 +25,7 @@ use voice_engine_stt::{ChunkOptions, LoadOptions, Timing, Transcriber, load};
 
 fn model_file() -> PathBuf {
     let m = find("whisper-turbo").unwrap();
-    let dir = models_dir().join("whisper-turbo");
+    let dir = model_dir("whisper-turbo");
     let file = dir.join(m.files[0].name);
     assert!(
         file.is_file(),
@@ -33,11 +35,20 @@ fn model_file() -> PathBuf {
     file
 }
 
+/// The `gpu` options to run: with and without the card on the Mac, the processor only elsewhere.
+fn gpu_modes() -> Vec<bool> {
+    if use_gpu() {
+        vec![false, true]
+    } else {
+        vec![false]
+    }
+}
+
 fn engine(gpu: bool) -> Box<dyn Transcriber> {
     let m = find("whisper-turbo").unwrap();
     load(
         m,
-        &models_dir().join("whisper-turbo"),
+        &model_dir("whisper-turbo"),
         LoadOptions { gpu, threads: None },
     )
     .unwrap()
@@ -46,10 +57,11 @@ fn engine(gpu: bool) -> Box<dyn Transcriber> {
 #[test]
 #[ignore]
 fn both_modes_give_segments_and_ordered_timed_words() {
+    need_clip!();
     let _g = guard();
     let clip = say(SENTENCE);
     eprintln!("clip: {} ms", ms(&clip));
-    let mut e = engine(true);
+    let mut e = engine(use_gpu());
     for timing in [Timing::Segments, Timing::Words] {
         let t0 = Instant::now();
         let t = e
@@ -107,14 +119,15 @@ fn both_modes_give_segments_and_ordered_timed_words() {
 #[test]
 #[ignore]
 fn segments_mode_is_what_talaans_settings_give() {
+    need_clip!();
     let _g = guard();
     let clip = say(&format!(
         "{SENTENCE} We will see if the segments match. And a second sentence follows."
     ));
-    for gpu in [false, true] {
+    for gpu in gpu_modes() {
         let threads = 6;
         let m = find("whisper-turbo").unwrap();
-        let dir = models_dir().join("whisper-turbo");
+        let dir = model_dir("whisper-turbo");
         let mut e = load(
             m,
             &dir,
@@ -161,18 +174,19 @@ fn segments_mode_is_what_talaans_settings_give() {
 #[test]
 #[ignore]
 fn words_mode_is_what_ensayos_settings_give() {
+    need_clip!();
     let _g = guard();
     let clip = say(&format!(
         "{SENTENCE} Ensayo counts words, so every word needs a time."
     ));
     let threads = 6;
     let m = find("whisper-turbo").unwrap();
-    let dir = models_dir().join("whisper-turbo");
+    let dir = model_dir("whisper-turbo");
     let mut e = load(
         m,
         &dir,
         LoadOptions {
-            gpu: true,
+            gpu: use_gpu(),
             threads: Some(threads),
         },
     )
@@ -188,7 +202,7 @@ fn words_mode_is_what_ensayos_settings_give() {
         )
         .unwrap();
 
-    let params = voice_engine_stt::context_params(Some(0), true);
+    let params = voice_engine_stt::context_params(use_gpu().then_some(0), use_gpu());
     let ctx = whisper_rs::WhisperContext::new_with_params(model_file(), params).unwrap();
     let mut state = ctx.create_state().unwrap();
     let mut p = whisper_rs::FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 1 });
@@ -242,9 +256,10 @@ fn words_mode_is_what_ensayos_settings_give() {
 #[test]
 #[ignore]
 fn clips_of_every_short_length_work() {
+    need_clip!();
     let _g = guard();
     let clip = say(SENTENCE);
-    let mut e = engine(true);
+    let mut e = engine(use_gpu());
     for n in [0usize, 1_600, 6_400, 15_999, 16_000, 16_001, 20_000] {
         for timing in [Timing::Segments, Timing::Words] {
             let part = &clip[..n.min(clip.len())];
@@ -292,6 +307,7 @@ fn clips_of_every_short_length_work() {
 #[test]
 #[ignore]
 fn three_minutes_run_in_one_call() {
+    need_clip!();
     let _g = guard();
     let clip = say(SENTENCE);
     let mut audio = vec![];
@@ -300,7 +316,7 @@ fn three_minutes_run_in_one_call() {
         audio.extend(std::iter::repeat_n(0.0f32, 4_000)); // a quarter second between repeats
     }
     eprintln!("long clip: {} ms", ms(&audio));
-    let mut e = engine(true);
+    let mut e = engine(use_gpu());
     for timing in [Timing::Segments, Timing::Words] {
         let t0 = Instant::now();
         let t = e
@@ -344,9 +360,10 @@ fn three_minutes_run_in_one_call() {
 #[test]
 #[ignore]
 fn vocabulary_reaches_whisper_cpps_prompt() {
+    need_say!();
     let _g = guard();
     let clip = say("The team at Mogo is growing quickly.");
-    let mut e = engine(true);
+    let mut e = engine(use_gpu());
     let plain = e.transcribe(&clip, &ChunkOptions::default()).unwrap();
     let again = e
         .transcribe(
@@ -421,9 +438,10 @@ fn vocabulary_reaches_whisper_cpps_prompt() {
 #[test]
 #[ignore]
 fn fillers_option_is_accepted() {
+    need_clip!();
     let _g = guard();
     let clip = say("Um, so, uh, I think, like, we should, you know, go ahead.");
-    let mut e = engine(true);
+    let mut e = engine(use_gpu());
     for keep_fillers in [false, true] {
         let t = e
             .transcribe(
@@ -443,13 +461,17 @@ fn fillers_option_is_accepted() {
 #[ignore]
 fn backend_is_metal_with_the_card_and_cpu_without() {
     let _g = guard();
-    let e = engine(true);
-    let b = e.backend();
-    eprintln!("gpu: {b:?}");
-    assert_eq!(b.backend, "metal");
-    assert!(b.device.is_some());
-    assert!(!b.fell_back);
-    drop(e);
+    // Metal is asked for on the Mac only: elsewhere there is no card to ask for in this build.
+    #[cfg(target_os = "macos")]
+    {
+        let e = engine(true);
+        let b = e.backend();
+        eprintln!("gpu: {b:?}");
+        assert_eq!(b.backend, "metal");
+        assert!(b.device.is_some());
+        assert!(!b.fell_back);
+        drop(e);
+    }
     let e = engine(false);
     let b = e.backend();
     eprintln!("cpu: {b:?}");
@@ -464,7 +486,7 @@ fn threads_follow_the_option_and_the_backend_that_loaded() {
     let _g = guard();
     let file = model_file();
     let logical = logical_cores();
-    for gpu in [true, false] {
+    for gpu in gpu_modes().into_iter().rev() {
         let e = WhisperEngine::load(
             &file,
             LoadOptions {
@@ -500,9 +522,10 @@ fn threads_follow_the_option_and_the_backend_that_loaded() {
 #[test]
 #[ignore]
 fn the_language_hint_is_passed_and_the_language_comes_back() {
+    need_clip!();
     let _g = guard();
     let clip = say(SENTENCE);
-    let mut e = engine(true);
+    let mut e = engine(use_gpu());
     let detected = e.transcribe(&clip, &ChunkOptions::default()).unwrap();
     assert_eq!(detected.language.as_deref(), Some("en"));
     let forced = e
@@ -524,11 +547,12 @@ fn the_language_hint_is_passed_and_the_language_comes_back() {
 #[test]
 #[ignore]
 fn silence_after_the_last_word_is_resumed_and_reported() {
+    need_clip!();
     let _g = guard();
     let mut audio = say(SENTENCE);
     let speech_ms = ms(&audio);
     audio.extend(std::iter::repeat_n(0.0f32, 16_000 * 6)); // 6 s of silence
-    let mut e = engine(true);
+    let mut e = engine(use_gpu());
     let t = e.transcribe(&audio, &ChunkOptions::default()).unwrap();
     eprintln!(
         "speech {speech_ms} ms + 6 s of silence: stopped early at {:?}, words {:?}",
@@ -579,7 +603,7 @@ fn a_missing_file_and_a_broken_file_give_kinds() {
 
 fn vad_dir() -> PathBuf {
     let m = find("vad").unwrap();
-    let dir = models_dir().join("vad");
+    let dir = model_dir("vad");
     let file = dir.join(m.files[0].name);
     assert!(
         file.is_file(),
@@ -603,6 +627,7 @@ const PHRASE: &str = "This is a short test of the voice detection in the speech 
 #[test]
 #[ignore]
 fn voice_detection_finds_one_span_around_speech_between_silences() {
+    need_say!();
     let _g = guard();
     let speech = say(PHRASE);
     let (lead, tail) = (2_000u64, 2_000u64);
@@ -650,6 +675,7 @@ fn voice_detection_gives_no_span_for_silence_and_for_quiet_noise() {
 #[test]
 #[ignore]
 fn voice_detection_keeps_two_bursts_apart_and_in_order() {
+    need_say!();
     let _g = guard();
     let speech = say(PHRASE);
     let gap_ms = 3_000u64;
@@ -672,6 +698,7 @@ fn voice_detection_keeps_two_bursts_apart_and_in_order() {
 #[test]
 #[ignore]
 fn voice_detection_edge_cases_on_the_real_model() {
+    need_clip!();
     let _g = guard();
     let dir = vad_dir();
     assert_eq!(vad::detect(&dir, &[]).unwrap(), vec![]);

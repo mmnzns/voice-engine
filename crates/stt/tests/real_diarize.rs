@@ -1,16 +1,17 @@
 //! Speaker separation on the real model, on the Mac: `cargo test -p voice-engine-stt --test real_diarize -- --ignored
 //! --test-threads=1 --nocapture`.
 //!
-//! The model is `diarization/nemotron3_diar_v3.onnx` from `$VOICE_ENGINE_TEST_MODELS` (default: Talaan's models
-//! folder, `~/Library/Application Support/Talaan/models`), only ever read. The two voices are made with the macOS
-//! `say` command (Samantha, then Daniel; see `common`). Every test goes through the same lock as the other real
-//! tests.
+//! The model is `diarization/nemotron3_diar_v3.onnx`, looked up on its own: in `$VOICE_ENGINE_TEST_MODELS` when that is
+//! set, else in the shared folder, then in Talaan's folder (`common`), only ever read. The voices are made with the
+//! macOS `say` command (Samantha, then Daniel, and more; see `common`): this file needs several different voices, which a
+//! single `VOICE_ENGINE_TEST_CLIP` cannot give, so it stays Mac only (not for Metal: nothing here uses the card).
+//! Every test goes through the same lock as the other real tests.
 
 #![cfg(target_os = "macos")]
 
 mod common;
 
-use common::{guard, models_dir, ms, say_with};
+use common::{guard, model_dir, ms, say_with};
 use std::path::PathBuf;
 use std::time::Instant;
 use voice_engine_models::catalog::find;
@@ -18,8 +19,8 @@ use voice_engine_stt::SpeechError;
 use voice_engine_stt::diarize::{self, Diarizer, FRAME_MS, SPEAKERS, SpeakerFrame, load};
 use voice_engine_stt::threads::{ThreadKind, default_threads, logical_cores};
 
-fn model_dir() -> PathBuf {
-    let dir = models_dir().join("diarization");
+fn diarization_dir() -> PathBuf {
+    let dir = model_dir("diarization");
     let file = find("diarization").unwrap().files[0].name;
     assert!(
         dir.join(file).is_file(),
@@ -30,7 +31,7 @@ fn model_dir() -> PathBuf {
 }
 
 fn diarizer(threads: Option<usize>) -> Diarizer {
-    load(&model_dir(), threads).unwrap()
+    load(&diarization_dir(), threads).unwrap()
 }
 
 const SAMANTHA: &str = "Good morning everyone, and thank you for joining the call today. I would like to start with the plan.";

@@ -1,16 +1,16 @@
-//! Parakeet on a real model, on the Mac: `cargo test -p voice-engine-stt --test real_parakeet -- --ignored
+//! Parakeet on a real model, on a Mac or a Windows PC: `cargo test -p voice-engine-stt --test real_parakeet -- --ignored
 //! --test-threads=1`.
 //!
-//! The model is `parakeet-ultra` from `$VOICE_ENGINE_TEST_MODELS` (default: Talaan's models folder,
-//! `~/Library/Application Support/Talaan/models`), only ever read: the only ONNX speech model on this Mac. Parakeet
-//! Unified and Nemotron are covered by `parakeet_api.rs` (pure tests and folders that are wrong) only. Speech is
-//! made with the macOS `say` command (see `common`). Every test goes through the same lock as the Whisper ones.
-
-#![cfg(target_os = "macos")]
+//! The model is `parakeet-ultra`, looked up on its own: in `$VOICE_ENGINE_TEST_MODELS` when that is set, else in the
+//! shared folder, then in Talaan's folder (`common`), only ever read. Parakeet Unified and Nemotron are covered by
+//! `parakeet_api.rs` (pure tests and folders that are wrong) only. Speech comes from `$VOICE_ENGINE_TEST_CLIP` (a 16 kHz
+//! mono WAV that says `SENTENCE`) when that is set, else, on a Mac, from the macOS `say` command (see `common`); the
+//! test that needs `say`'s own short sentences with pauses is skipped without it. Every test goes through the same lock
+//! as the Whisper ones.
 
 mod common;
 
-use common::{SENTENCE, check_shape, guard, lower_letters, models_dir, ms, say, text_of, words_of};
+use common::{SENTENCE, check_shape, guard, lower_letters, model_dir, ms, say, text_of, words_of};
 use std::path::PathBuf;
 use std::time::Instant;
 use voice_engine_models::catalog::find;
@@ -23,8 +23,8 @@ use voice_engine_stt::{
 
 const ID: &str = "parakeet-ultra";
 
-fn model_dir() -> PathBuf {
-    let dir = models_dir().join(ID);
+fn ultra_dir() -> PathBuf {
+    let dir = model_dir(ID);
     assert!(
         dir.join("encoder-model.int8.onnx").is_file(),
         "the test model is not at {}",
@@ -34,7 +34,7 @@ fn model_dir() -> PathBuf {
 }
 
 fn engine(opts: LoadOptions) -> ParakeetEngine {
-    ParakeetEngine::load(find(ID).unwrap(), &model_dir(), opts).unwrap()
+    ParakeetEngine::load(find(ID).unwrap(), &ultra_dir(), opts).unwrap()
 }
 
 fn options(timing: Timing) -> ChunkOptions {
@@ -74,6 +74,7 @@ fn flat(t: &Transcript) -> Vec<(String, u64, u64)> {
 #[test]
 #[ignore]
 fn both_modes_give_segments_and_ordered_timed_words() {
+    need_clip!();
     let _g = guard();
     let clip = say(SENTENCE);
     eprintln!("clip: {} ms", ms(&clip));
@@ -139,9 +140,14 @@ fn sentences_clip() -> Vec<f32> {
 #[test]
 #[ignore]
 fn the_engine_gives_what_talaan_and_ensayo_get_from_parakeet_rs() {
+    need_clip!();
     let _g = guard();
     // a run-on paragraph the model punctuates with commas (two sentences), and five short ones
-    for clip in [speech(14.0), sentences_clip()] {
+    let mut clips = vec![speech(14.0)];
+    if common::support::say_available().is_ok() {
+        clips.push(sentences_clip());
+    }
+    for clip in clips {
         compare_with_parakeet_rs(&clip);
     }
 }
@@ -162,7 +168,7 @@ fn compare_with_parakeet_rs(clip: &[f32]) {
     assert_eq!(words.stopped_early_at_ms, None);
 
     let config = parakeet_rs::ExecutionConfig::new().with_intra_threads(threads);
-    let mut theirs = parakeet_rs::ParakeetTDT::from_pretrained(model_dir(), Some(config)).unwrap();
+    let mut theirs = parakeet_rs::ParakeetTDT::from_pretrained(ultra_dir(), Some(config)).unwrap();
     let len_ms = ms(clip);
     // Talaan's and Ensayo's own code, copied: half a second of silence each side, seconds to whole milliseconds with
     // the padding taken off, clamped to the chunk.
@@ -250,6 +256,7 @@ fn compare_with_parakeet_rs(clip: &[f32]) {
 #[test]
 #[ignore]
 fn sentences_come_out_as_segments_with_their_words() {
+    need_say!();
     let _g = guard();
     let clip = sentences_clip();
     let mut e = engine(LoadOptions::default());
@@ -287,6 +294,7 @@ fn sentences_come_out_as_segments_with_their_words() {
 #[test]
 #[ignore]
 fn a_15_second_window_returns_timed_words_across_it() {
+    need_clip!();
     let _g = guard();
     let clip = speech(15.0);
     assert_eq!(ms(&clip), 15_000);
@@ -316,6 +324,7 @@ fn a_15_second_window_returns_timed_words_across_it() {
 #[test]
 #[ignore]
 fn a_40_second_chunk_works_and_a_45_second_one_is_too_long() {
+    need_clip!();
     let _g = guard();
     let mut e = engine(LoadOptions::default());
     assert_eq!(e.max_secs(), 40);
@@ -361,6 +370,7 @@ fn a_40_second_chunk_works_and_a_45_second_one_is_too_long() {
 #[test]
 #[ignore]
 fn clips_of_every_short_length_work() {
+    need_clip!();
     let _g = guard();
     let clip = say(SENTENCE);
     let mut e = engine(LoadOptions::default());
@@ -409,12 +419,14 @@ fn clips_of_every_short_length_work() {
 
 #[test]
 #[ignore]
+// With the `directml` feature on Windows, `gpu: true` may really use the card; then this claim does not hold.
+#[cfg(not(feature = "directml"))]
 fn the_gpu_option_runs_on_the_processor_and_says_so_on_the_mac() {
     let _g = guard();
     let m = find(ID).unwrap();
     let with = load(
         m,
-        &model_dir(),
+        &ultra_dir(),
         LoadOptions {
             gpu: true,
             threads: None,
@@ -429,7 +441,7 @@ fn the_gpu_option_runs_on_the_processor_and_says_so_on_the_mac() {
     );
     let without = load(
         m,
-        &model_dir(),
+        &ultra_dir(),
         LoadOptions {
             gpu: false,
             threads: None,
@@ -447,6 +459,7 @@ fn the_gpu_option_runs_on_the_processor_and_says_so_on_the_mac() {
 #[test]
 #[ignore]
 fn threads_follow_the_option_else_the_processor_rule() {
+    need_clip!();
     let _g = guard();
     let logical = logical_cores();
     let clip = say(SENTENCE);
@@ -501,6 +514,7 @@ fn threads_follow_the_option_else_the_processor_rule() {
 #[test]
 #[ignore]
 fn fillers_vocabulary_and_language_hints_change_nothing_for_parakeet() {
+    need_clip!();
     let _g = guard();
     let clip = say(SENTENCE);
     let mut e = engine(LoadOptions::default());
@@ -523,10 +537,11 @@ fn fillers_vocabulary_and_language_hints_change_nothing_for_parakeet() {
 #[test]
 #[ignore]
 fn load_through_the_api_gives_a_transcriber_that_can_be_dropped_and_loaded_again() {
+    need_clip!();
     let _g = guard();
     let clip = say(SENTENCE);
     for _ in 0..2 {
-        let mut e = load(find(ID).unwrap(), &model_dir(), LoadOptions::default()).unwrap();
+        let mut e = load(find(ID).unwrap(), &ultra_dir(), LoadOptions::default()).unwrap();
         let t = e.transcribe(&clip, &ChunkOptions::default()).unwrap();
         check_shape(&t, ms(&clip));
     }

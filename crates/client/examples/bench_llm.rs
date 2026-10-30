@@ -7,7 +7,8 @@
 //! cargo run --release -p voice-engine-client --example bench_llm -- qwen3.5-9b    # any catalog AI model id
 //! ```
 //!
-//! The models are read from the shared folder (`SharedStore::default_dir`). The helper is
+//! The models are read from `$VOICE_ENGINE_TEST_MODELS` (a folder with a folder per model id, like the speech bench's) when
+//! that is set, else from the shared folder (`SharedStore::default_dir`, which is only read, never created). The helper is
 //! `$VOICE_ENGINE_TEST_HELPER` or `target/release/voice-engine-llm`. For each model, on Metal and then with
 //! `gpu: false`: `load` (seconds), one warm-up request, then 3 timed requests (median and range), thinking off,
 //! temperature 0, context 4096. "reply" is the wall time from sending the request to the full reply; "prompt" is
@@ -127,7 +128,11 @@ fn main() {
     if ids.is_empty() {
         ids = vec!["qwen3.5-4b".into(), "granite-4.2-3b".into()];
     }
-    let shared = SharedStore::default_dir().expect("the shared model folder");
+    // Only builds paths: neither folder is created.
+    let models_root = match std::env::var_os("VOICE_ENGINE_TEST_MODELS").filter(|d| !d.is_empty()) {
+        Some(dir) => PathBuf::from(dir),
+        None => SharedStore::default_dir().expect("the shared model folder"),
+    };
     println!(
         "helper {}; context {N_CTX}; {RUNS} timed requests after 1 warm-up; thinking off, temperature 0; \
          request {} words in",
@@ -137,8 +142,12 @@ fn main() {
 
     for id in &ids {
         let model = find(id).unwrap_or_else(|| panic!("{id} is not in the catalog"));
-        let path = shared.join(id).join(model.files[0].name);
-        assert!(path.is_file(), "{id} is not in the shared folder");
+        let path = models_root.join(id).join(model.files[0].name);
+        assert!(
+            path.is_file(),
+            "{id} is not at {} (set VOICE_ENGINE_TEST_MODELS to a folder that holds a folder named {id})",
+            path.display()
+        );
         let path = path.to_string_lossy().into_owned();
 
         // What the model's template says about thinking (the catalog's own flag is `llm.thinks`).

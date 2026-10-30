@@ -175,7 +175,8 @@ Nothing uses CoreML. On the Mac, `gpu: true` for an ONNX model runs on the proce
 ### What was verified, and where
 
 - Mac (an M-series Mac, macOS): the tests without a model, and the real-model tests (`cargo test -p voice-engine-stt --
-  --ignored --test-threads=1`, models read from `~/Library/Application Support/Talaan/models`) for Whisper Turbo (both
+  --ignored --test-threads=1`, each model read from the shared folder or `~/Library/Application Support/Talaan/models`;
+  on a Windows PC see "Benchmarks" for the clip and the folders) for Whisper Turbo (both
   timing modes, any length, vocabulary, threads, language, early stop, Metal and processor), Parakeet Ultra, voice
   detection and speaker separation (all pass except the two-voices test described above), and `SttClient` with the real
   Whisper helper (`crates/client/tests/real_stt.rs`).
@@ -394,10 +395,36 @@ cargo run --release -p voice-engine-client --example bench_llm                # 
 cargo run --release -p voice-engine-models --example download_proof           # downloads whisper-base and whisper-tiny
 ```
 
-`bench` reads `whisper-turbo` and `parakeet-ultra` from `$VOICE_ENGINE_TEST_MODELS` (default Talaan's models folder) and
-`whisper-base` from the shared folder, and needs the macOS `say` command for its clip. `bench_llm` takes catalog ids
-(default `qwen3.5-4b` and `granite-4.2-3b`) and finds the helper at `$VOICE_ENGINE_TEST_HELPER` or
-`target/release/voice-engine-llm`. `download_proof` writes into the real shared model folder.
+`bench` and `bench_timing` look for each model on its own: in `$VOICE_ENGINE_TEST_MODELS` (a folder that holds a folder per
+model id) when that is set, else in the shared folder, then in Talaan's real folder for this platform (the Mac's
+`~/Library/Application Support/Talaan/models`; Windows' `%LOCALAPPDATA%\com.craftconceptsdigital.talaan\models`, then
+`%APPDATA%\Talaan\models`), and skip a model they do not find, saying where they looked. The clip is the 16 kHz mono WAV
+file named by `$VOICE_ENGINE_TEST_CLIP` (16-bit PCM or 32-bit float; repeated and cut to 29 s), and the macOS `say` command
+only when that is not set and the computer is a Mac. `bench_llm` takes catalog ids (default `qwen3.5-4b` and
+`granite-4.2-3b`), reads them from `$VOICE_ENGINE_TEST_MODELS` or else the shared folder, and finds the helper at
+`$VOICE_ENGINE_TEST_HELPER` or `target/release/voice-engine-llm`. `download_proof` writes into the real shared model folder.
+
+### Run the speed check and the real-model tests on a Windows PC
+
+No Mac, `say` or `afconvert` is needed. Two clips made with `say` on a Mac are in `docs/data` (16 kHz mono 16-bit PCM, each
+under 500 KB): `clip-bench.wav` (12.0 s, 385 KB: three of the speed bench's sentences, so the bench repeats it to 29 s
+with all the words decoded) for the speed bench, and `clip-sentence.wav` (3.2 s, 106 KB: "Hello there. This is a short test
+of the speech engine.") for the real-model tests, which assert on what is heard. In PowerShell, from a clone of the engine:
+
+```powershell
+$env:VOICE_ENGINE_TEST_CLIP = "$PWD\docs\data\clip-bench.wav"           # or any 16 kHz mono WAV of your own
+# Only when the models are not in the shared folder or Talaan's folders; a folder with a folder per model id:
+# $env:VOICE_ENGINE_TEST_MODELS = "C:\path\to\models"
+cargo run --release -p voice-engine-stt --example bench                    # Whisper Turbo and Parakeet Ultra on the processor
+$env:VOICE_ENGINE_TEST_CLIP = "$PWD\docs\data\clip-sentence.wav"
+cargo test --release -p voice-engine-stt -- --ignored --test-threads=1     # the real-model tests (Whisper, Parakeet, voice detection)
+```
+
+The real tests expect the clip to say that sentence. A test that needs the `say` command's own wording or several
+voices (the Whisper vocabulary test, two voice detection tests, the Parakeet short-sentences test, and everything in
+`real_fillers.rs` and `real_diarize.rs`) is skipped with a message when `VOICE_ENGINE_TEST_CLIP` is set or the computer is
+not a Mac. Metal is asked for on the Mac only; on Windows they run on the processor. Use `--release`: the native
+libraries must be the optimized ones (see "Build settings an app must copy").
 
 ## Which app uses which tag
 

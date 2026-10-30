@@ -6,19 +6,27 @@
 //! cargo run --release -p voice-engine-stt --example bench -- sweep   # also other thread counts for each model
 //! ```
 //!
-//! Models: `whisper-turbo` and `parakeet-ultra` from `$VOICE_ENGINE_TEST_MODELS` (default: Talaan's models folder),
-//! `whisper-base` from the shared folder (`SharedStore::default_dir`). Only ever read. The clip is made with the macOS
-//! `say` command (several sentences, 0.3 s apart, cut to 29.0 s). One model is loaded at a time. Each line is one
-//! load, one warm-up decode, then 3 timed decodes (median and range); `Timing::Segments`, language auto.
+//! Works on a Mac and on a Windows PC (see `support/mod.rs` for the details):
+//!
+//! * Models: each of `whisper-turbo`, `parakeet-ultra` and `whisper-base` is looked up on its own, in
+//!   `$VOICE_ENGINE_TEST_MODELS` (a folder with a folder per model id) when that is set, else in the shared folder, then in
+//!   Talaan's real folder for this platform. Only ever read. A model that is not found is named and skipped.
+//! * The clip: `$VOICE_ENGINE_TEST_CLIP`, a 16 kHz mono WAV (16-bit PCM or 32-bit float), repeated 0.3 s apart and cut to
+//!   29.0 s (`docs/data/clip-bench.wav` is 12 s of it; a clip of one short sentence repeated makes Whisper Turbo stop
+//!   after the first, so the number would not mean much); only when that is not set, and only on a Mac, the macOS `say` command reading several sentences in turn the
+//!   same way. Without either the bench says what to set.
+//! * The Metal rows run on a Mac only. One model is loaded at a time. Each line is one load, one warm-up decode, then 3
+//!   timed decodes (median and range); `Timing::Segments`, language auto.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Instant;
-use voice_engine_models::SharedStore;
 use voice_engine_models::catalog::find;
 use voice_engine_stt::parakeet_engine::ParakeetEngine;
 use voice_engine_stt::whisper_engine::WhisperEngine;
 use voice_engine_stt::{ChunkOptions, LoadOptions, Timing, Transcriber};
+
+#[path = "../support/mod.rs"]
+mod support;
 
 const CLIP_SECS: f64 = 29.0;
 const RUNS: usize = 3;
@@ -35,64 +43,11 @@ const SENTENCES: &[&str] = &[
     "That is everything from my side, so let's open it up for questions.",
 ];
 
-fn say(text: &str, dir: &Path) -> Vec<f32> {
-    let aiff = dir.join("clip.aiff");
-    let wav = dir.join("clip.wav");
-    let ok = Command::new("say")
-        .arg("-o")
-        .arg(&aiff)
-        .arg(text)
-        .status()
-        .expect("the macOS say command");
-    assert!(ok.success(), "say failed");
-    let ok = Command::new("afconvert")
-        .args(["-f", "WAVE", "-d", "LEF32@16000", "-c", "1"])
-        .arg(&aiff)
-        .arg(&wav)
-        .status()
-        .expect("afconvert");
-    assert!(ok.success(), "afconvert failed");
-    read_wav_f32(&wav)
-}
-
-/// Samples of a 32-bit float mono WAV (what afconvert wrote), chunk by chunk.
-fn read_wav_f32(path: &Path) -> Vec<f32> {
-    let b = std::fs::read(path).unwrap();
-    assert_eq!(&b[0..4], b"RIFF");
-    let mut i = 12;
-    while i + 8 <= b.len() {
-        let id = &b[i..i + 4];
-        let len = u32::from_le_bytes(b[i + 4..i + 8].try_into().unwrap()) as usize;
-        let body = i + 8;
-        if id == b"data" {
-            let end = (body + len).min(b.len());
-            return b[body..end]
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|c| f32::from_le_bytes(*c))
-                .collect();
-        }
-        i = body + len + (len & 1);
-    }
-    panic!("no data chunk");
-}
-
 fn clip() -> Vec<f32> {
-    let dir = std::env::temp_dir().join(format!("voice-engine-bench-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let want = (CLIP_SECS * 16_000.0) as usize;
-    let mut out: Vec<f32> = vec![];
-    for sentence in SENTENCES.iter().cycle() {
-        if out.len() >= want {
-            break;
-        }
-        out.extend(say(sentence, &dir));
-        out.extend(std::iter::repeat_n(0.0, 4_800));
-    }
-    out.truncate(want);
-    let _ = std::fs::remove_dir_all(&dir);
-    out
+    support::bench_clip(CLIP_SECS, SENTENCES).unwrap_or_else(|e| {
+        eprintln!("bench: {e}");
+        std::process::exit(2);
+    })
 }
 
 fn median_and_range(times: &[f64]) -> (f64, f64, f64) {
@@ -204,13 +159,20 @@ fn verdict(met: bool) -> &'static str {
     if met { "MET" } else { "MISSED" }
 }
 
+/// `file_name` inside the folder of model `id` (see `support::find_model_dir`), or a line saying why not.
+fn model_file(id: &str, file_name: &str) -> Option<PathBuf> {
+    match support::find_model_dir(id) {
+        Ok(dir) => Some(dir.join(file_name)),
+        Err(why) => {
+            println!("{id}: skipped, {why}");
+            None
+        }
+    }
+}
+
 fn main() {
     let sweep = std::env::args().any(|a| a == "sweep");
-    let talaan = match std::env::var_os("VOICE_ENGINE_TEST_MODELS") {
-        Some(d) => PathBuf::from(d),
-        None => dirs::data_dir().unwrap().join("Talaan/models"),
-    };
-    let shared = SharedStore::default_dir().expect("the shared model folder");
+    let mac = cfg!(target_os = "macos");
 
     let audio = clip();
     let audio_secs = audio.len() as f64 / 16_000.0;
@@ -220,55 +182,62 @@ fn main() {
         voice_engine_stt::threads::logical_cores()
     );
 
-    let turbo = talaan.join("whisper-turbo/ggml-large-v3-turbo-q5_0.bin");
-    let base = shared.join("whisper-base/ggml-base.bin");
-    let ultra = talaan.join("parakeet-ultra");
+    // Each model on its own: one that is not found is named and skipped, the others still run.
+    let turbo = model_file("whisper-turbo", "ggml-large-v3-turbo-q5_0.bin");
+    let base = model_file("whisper-base", "ggml-base.bin");
+    let ultra = support::find_model_dir("parakeet-ultra")
+        .map_err(|why| println!("parakeet-ultra: skipped, {why}"))
+        .ok();
 
-    let metal = whisper(
-        "whisper-turbo (metal)",
-        &turbo,
-        &audio,
-        LoadOptions {
-            gpu: true,
-            threads: None,
-        },
-    );
-    let bar = format!(
-        "bar: 25x on Metal -> {}",
-        verdict(metal.rtf(audio_secs) >= 25.0)
-    );
-    print(&metal, audio_secs, &bar);
-    if sweep {
-        for n in [4, 6, 12] {
-            let row = whisper(
-                &format!("whisper-turbo (metal, {n} threads)"),
-                &turbo,
+    if let Some(turbo) = &turbo {
+        if mac {
+            let metal = whisper(
+                "whisper-turbo (metal)",
+                turbo,
                 &audio,
                 LoadOptions {
                     gpu: true,
-                    threads: Some(n),
+                    threads: None,
                 },
             );
-            print(&row, audio_secs, "sweep");
+            let bar = format!(
+                "bar: 25x on Metal -> {}",
+                verdict(metal.rtf(audio_secs) >= 25.0)
+            );
+            print(&metal, audio_secs, &bar);
+            if sweep {
+                for n in [4, 6, 12] {
+                    let row = whisper(
+                        &format!("whisper-turbo (metal, {n} threads)"),
+                        turbo,
+                        &audio,
+                        LoadOptions {
+                            gpu: true,
+                            threads: Some(n),
+                        },
+                    );
+                    print(&row, audio_secs, "sweep");
+                }
+            }
         }
+
+        let cpu = whisper(
+            "whisper-turbo (cpu)",
+            turbo,
+            &audio,
+            LoadOptions {
+                gpu: false,
+                threads: None,
+            },
+        );
+        print(&cpu, audio_secs, "no bar (the processor)");
     }
 
-    let cpu = whisper(
-        "whisper-turbo (cpu)",
-        &turbo,
-        &audio,
-        LoadOptions {
-            gpu: false,
-            threads: None,
-        },
-    );
-    print(&cpu, audio_secs, "no bar (the processor)");
-
-    if base.is_file() {
+    if let Some(base) = base.as_ref().filter(|b| b.is_file()) {
         let rows = [
             whisper(
                 "whisper-base (cpu, default)",
-                &base,
+                base,
                 &audio,
                 LoadOptions {
                     gpu: false,
@@ -277,7 +246,7 @@ fn main() {
             ),
             whisper(
                 "whisper-base (cpu, 6 threads)",
-                &base,
+                base,
                 &audio,
                 LoadOptions {
                     gpu: false,
@@ -293,19 +262,22 @@ fn main() {
             print(row, audio_secs, &bar);
         }
         if sweep {
-            let mut rows = vec![whisper(
-                "whisper-base (metal, default)",
-                &base,
-                &audio,
-                LoadOptions {
-                    gpu: true,
-                    threads: None,
-                },
-            )];
+            let mut rows = vec![];
+            if mac {
+                rows.push(whisper(
+                    "whisper-base (metal, default)",
+                    base,
+                    &audio,
+                    LoadOptions {
+                        gpu: true,
+                        threads: None,
+                    },
+                ));
+            }
             for n in [4, 8, 12] {
                 rows.push(whisper(
                     &format!("whisper-base (cpu, {n} threads)"),
-                    &base,
+                    base,
                     &audio,
                     LoadOptions {
                         gpu: false,
@@ -317,18 +289,14 @@ fn main() {
                 print(row, audio_secs, "sweep");
             }
         }
-    } else {
-        println!(
-            "whisper-base: not in the shared folder yet (run the download_proof example first)"
-        );
     }
 
-    if ultra.join("encoder-model.int8.onnx").is_file() {
+    if let Some(ultra) = &ultra {
         let rows = [
             parakeet(
                 "parakeet-ultra (cpu, default)",
                 "parakeet-ultra",
-                &ultra,
+                ultra,
                 &audio,
                 LoadOptions {
                     gpu: false,
@@ -338,7 +306,7 @@ fn main() {
             parakeet(
                 "parakeet-ultra (cpu, 12 threads)",
                 "parakeet-ultra",
-                &ultra,
+                ultra,
                 &audio,
                 LoadOptions {
                     gpu: false,
@@ -359,7 +327,7 @@ fn main() {
                 let row = parakeet(
                     &format!("parakeet-ultra (cpu, {n} threads)"),
                     "parakeet-ultra",
-                    &ultra,
+                    ultra,
                     &audio,
                     LoadOptions {
                         gpu: false,
@@ -369,7 +337,5 @@ fn main() {
                 print(&row, audio_secs, "sweep");
             }
         }
-    } else {
-        println!("parakeet-ultra: not found in {}", ultra.display());
     }
 }

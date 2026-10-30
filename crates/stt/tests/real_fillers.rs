@@ -1,6 +1,6 @@
 //! Fillers, measured (spec 9.4): `cargo test -p voice-engine-stt --test real_fillers -- --ignored --test-threads=1
-//! --nocapture`. For `whisper-turbo` and `parakeet-ultra` (from `$VOICE_ENGINE_TEST_MODELS`, default Talaan's models
-//! folder, only ever read) it transcribes a recording with spoken "um", "uh", "hmm" and "like" in several voices, in
+//! --nocapture`. For `whisper-turbo` and `parakeet-ultra` (each looked up on its own: `$VOICE_ENGINE_TEST_MODELS`, else
+//! the shared folder, then Talaan's folder, see `common`; only ever read) it transcribes a recording with spoken "um", "uh", "hmm" and "like" in several voices, in
 //! `Timing::Words` mode, with `keep_fillers` false and true, and counts the fillers that come back.
 //!
 //! The catalog's `keeps_fillers` for each model is the verdict of that count (the rule below), and this test fails
@@ -8,13 +8,14 @@
 //!
 //! Caveat: the speech is the macOS `say` command. A synthetic "um" is a clean, stressed syllable; a real one is
 //! short, quiet and half swallowed. Models may keep text-to-speech fillers more readily than real ones, so a result
-//! here is evidence, not proof (docs/bench-2026-10-29.md, "Fillers").
+//! here is evidence, not proof (docs/bench-2026-10-29.md, "Fillers"). It needs several `say` voices, which a single
+//! `VOICE_ENGINE_TEST_CLIP` cannot give, so it stays Mac only (not for Metal).
 
 #![cfg(target_os = "macos")]
 
 mod common;
 
-use common::{guard, models_dir, ms, say_with, words_of};
+use common::{guard, model_dir, ms, say_with, words_of};
 use voice_engine_models::catalog::find;
 use voice_engine_stt::{ChunkOptions, LoadOptions, Timing, Transcriber, load};
 
@@ -101,12 +102,8 @@ fn measure(id: &str, gpu: bool) -> (Vec<Run>, [usize; 4]) {
     for (voice, clip) in &clips {
         eprintln!("{voice}: recording {} ms", ms(clip));
     }
-    let mut engine: Box<dyn Transcriber> = load(
-        m,
-        &models_dir().join(id),
-        LoadOptions { gpu, threads: None },
-    )
-    .unwrap();
+    let mut engine: Box<dyn Transcriber> =
+        load(m, &model_dir(id), LoadOptions { gpu, threads: None }).unwrap();
     let mut runs = vec![];
     for (voice, clip) in &clips {
         for keep in [false, true] {

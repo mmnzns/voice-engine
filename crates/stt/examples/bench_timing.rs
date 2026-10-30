@@ -18,17 +18,20 @@
 //! 4. `tokens off`: the same, with `set_token_timestamps(false)`: the engine's settings minus the one suspect.
 //!
 //! Ways 2 to 4 share one loaded model each (same context parameters as the engine: flash attention on Metal only), and
-//! only one model is ever loaded at a time (Metal's shader cache can crash when several start at once). Models:
-//! `whisper-turbo` from `$VOICE_ENGINE_TEST_MODELS` (default: Talaan's models folder), `whisper-base` from the shared
-//! folder (`SharedStore::default_dir`). Only ever read.
+//! only one model is ever loaded at a time (Metal's shader cache can crash when several start at once). Models: each of
+//! `whisper-turbo` and `whisper-base` is looked up on its own, in `$VOICE_ENGINE_TEST_MODELS` when that is set, else in
+//! the shared folder, then in Talaan's real folder for this platform (`support/mod.rs`). Only ever read. The clip is
+//! `$VOICE_ENGINE_TEST_CLIP` (a 16 kHz mono WAV, repeated and cut to 29 s) or, only on a Mac without it, made with `say`.
+//! Whisper Large Turbo runs on Metal on the Mac and on the processor elsewhere.
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 use std::time::Instant;
-use voice_engine_models::SharedStore;
 use voice_engine_stt::threads::{ThreadKind, logical_cores, resolve_threads};
 use voice_engine_stt::whisper_engine::{WhisperEngine, choose_gpu};
 use voice_engine_stt::{ChunkOptions, LoadOptions, Timing, Transcriber};
+
+#[path = "../support/mod.rs"]
+mod support;
 
 const CLIP_SECS: f64 = 29.0;
 const RUNS: usize = 3;
@@ -45,64 +48,11 @@ const SENTENCES: &[&str] = &[
     "That is everything from my side, so let's open it up for questions.",
 ];
 
-fn say(text: &str, dir: &Path) -> Vec<f32> {
-    let aiff = dir.join("clip.aiff");
-    let wav = dir.join("clip.wav");
-    let ok = Command::new("say")
-        .arg("-o")
-        .arg(&aiff)
-        .arg(text)
-        .status()
-        .expect("the macOS say command");
-    assert!(ok.success(), "say failed");
-    let ok = Command::new("afconvert")
-        .args(["-f", "WAVE", "-d", "LEF32@16000", "-c", "1"])
-        .arg(&aiff)
-        .arg(&wav)
-        .status()
-        .expect("afconvert");
-    assert!(ok.success(), "afconvert failed");
-    read_wav_f32(&wav)
-}
-
-/// Samples of a 32-bit float mono WAV (what afconvert wrote), chunk by chunk.
-fn read_wav_f32(path: &Path) -> Vec<f32> {
-    let b = std::fs::read(path).unwrap();
-    assert_eq!(&b[0..4], b"RIFF");
-    let mut i = 12;
-    while i + 8 <= b.len() {
-        let id = &b[i..i + 4];
-        let len = u32::from_le_bytes(b[i + 4..i + 8].try_into().unwrap()) as usize;
-        let body = i + 8;
-        if id == b"data" {
-            let end = (body + len).min(b.len());
-            return b[body..end]
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|c| f32::from_le_bytes(*c))
-                .collect();
-        }
-        i = body + len + (len & 1);
-    }
-    panic!("no data chunk");
-}
-
 fn clip() -> Vec<f32> {
-    let dir = std::env::temp_dir().join(format!("voice-engine-bench-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let want = (CLIP_SECS * 16_000.0) as usize;
-    let mut out: Vec<f32> = vec![];
-    for sentence in SENTENCES.iter().cycle() {
-        if out.len() >= want {
-            break;
-        }
-        out.extend(say(sentence, &dir));
-        out.extend(std::iter::repeat_n(0.0, 4_800));
-    }
-    out.truncate(want);
-    let _ = std::fs::remove_dir_all(&dir);
-    out
+    support::bench_clip(CLIP_SECS, SENTENCES).unwrap_or_else(|e| {
+        eprintln!("bench_timing: {e}");
+        std::process::exit(2);
+    })
 }
 
 fn median_and_range(times: &[f64]) -> (f64, f64, f64) {
@@ -254,11 +204,6 @@ fn direct(
 
 fn main() {
     let which = std::env::args().nth(1).unwrap_or_default();
-    let talaan_dir = match std::env::var_os("VOICE_ENGINE_TEST_MODELS") {
-        Some(d) => PathBuf::from(d),
-        None => dirs::data_dir().unwrap().join("Talaan/models"),
-    };
-    let shared = SharedStore::default_dir().expect("the shared model folder");
     let audio = clip();
     let audio_secs = audio.len() as f64 / 16_000.0;
     let logical = logical_cores();
@@ -267,29 +212,47 @@ fn main() {
          auto, greedy, no context"
     );
 
-    // (name, file, gpu, the engine's default thread count where it runs)
+    // (name, the model's folder or why it was not found, the file in it, gpu, the engine's default thread count where
+    // it runs). Turbo asks for Metal on the Mac only.
+    let turbo_gpu = cfg!(target_os = "macos");
     let models = [
         (
             "whisper-base",
-            shared.join("whisper-base/ggml-base.bin"),
+            support::find_model_dir("whisper-base").map(|d| d.join("ggml-base.bin")),
             false,
             resolve_threads(ThreadKind::Processor, None, logical),
         ),
         (
             "whisper-turbo",
-            talaan_dir.join("whisper-turbo/ggml-large-v3-turbo-q5_0.bin"),
-            true,
-            resolve_threads(ThreadKind::Gpu, None, logical),
+            support::find_model_dir("whisper-turbo")
+                .map(|d| d.join("ggml-large-v3-turbo-q5_0.bin")),
+            turbo_gpu,
+            resolve_threads(
+                if turbo_gpu {
+                    ThreadKind::Gpu
+                } else {
+                    ThreadKind::Processor
+                },
+                None,
+                logical,
+            ),
         ),
     ];
     for (name, file, gpu, default) in models {
         if !which.is_empty() && !name.ends_with(&which) {
             continue;
         }
-        if !file.is_file() {
-            println!("{name}: not found at {}", file.display());
-            continue;
-        }
+        let file = match file {
+            Ok(file) if file.is_file() => file,
+            Ok(file) => {
+                println!("{name}: not found at {}", file.display());
+                continue;
+            }
+            Err(why) => {
+                println!("{name}: skipped, {why}");
+                continue;
+            }
+        };
         let place = if gpu { "metal" } else { "cpu" };
         println!("--- {name} ({place}) ---");
         let counts = [("default".to_string(), default), ("6".to_string(), 6)];

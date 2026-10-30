@@ -1,13 +1,25 @@
-//! Helpers the real-model tests share (`real_whisper.rs`, `real_parakeet.rs`, `real_diarize.rs`): one lock so only one test loads a
-//! model at a time, the models folder, speech made with the macOS `say` command, and small text helpers.
-//! Only ever reads the models folder.
+//! Helpers the real-model tests share (`real_whisper.rs`, `real_parakeet.rs`, `real_diarize.rs`, `real_fillers.rs`): one
+//! lock so only one test loads a model at a time, where the models are, and where the speech comes from, and small
+//! text helpers. Only ever reads the models folders.
+//!
+//! The models and the clip are found by `support` (`crates/stt/support/mod.rs`, which says how: `VOICE_ENGINE_TEST_MODELS`,
+//! the shared folder, Talaan's folder; `VOICE_ENGINE_TEST_CLIP`, a 16 kHz mono WAV, else the macOS `say` command).
+//! With `VOICE_ENGINE_TEST_CLIP` set, `say` returns that clip for any text: it must say `SENTENCE`
+//! (`docs/data/clip-sentence.wav`). A test whose wording or voices matter starts with `need_say!()` and is skipped (it
+//! prints why and passes) when `say` is not what makes the speech; one that only needs some speech starts with
+//! `need_clip!()`.
 
 #![allow(dead_code)]
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
+#[path = "../../support/mod.rs"]
+pub mod support;
+
+use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 use voice_engine_stt::Transcript;
+
+#[allow(unused_imports)]
+pub use support::SENTENCE;
 
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
@@ -15,69 +27,54 @@ pub fn guard() -> MutexGuard<'static, ()> {
     ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-pub fn models_dir() -> PathBuf {
-    match std::env::var_os("VOICE_ENGINE_TEST_MODELS") {
-        Some(d) => PathBuf::from(d),
-        None => dirs::data_dir().unwrap().join("Talaan/models"),
-    }
+/// The folder of model `id` (see `support::find_model_dir`); panics with where it looked when it is not there.
+pub fn model_dir(id: &str) -> PathBuf {
+    support::find_model_dir(id).unwrap_or_else(|e| panic!("the test model: {e}"))
 }
 
-/// 16 kHz mono f32 samples of `text` spoken by the macOS `say` command in its default voice.
+/// Whether the graphics card is asked for in the tests: Metal on the Mac. Elsewhere the tests run on the processor
+/// (a runner or a Windows PC without the Vulkan build has no card to ask for).
+pub fn use_gpu() -> bool {
+    cfg!(target_os = "macos")
+}
+
+/// Starts a test that needs some speech: returns (skips the test, saying why) when there is none.
+#[macro_export]
+macro_rules! need_clip {
+    () => {
+        if let Err(why) = $crate::common::support::speech_available() {
+            eprintln!("SKIPPED: {why}");
+            return;
+        }
+    };
+}
+
+/// Starts a test that needs `say` to speak its own wording or voices (not a clip from a file).
+#[macro_export]
+macro_rules! need_say {
+    () => {
+        if let Err(why) = $crate::common::support::say_available() {
+            eprintln!("SKIPPED: {why}");
+            return;
+        }
+    };
+}
+
+/// 16 kHz mono f32 samples of `text`: the clip of `VOICE_ENGINE_TEST_CLIP` when that is set (whatever `text` is),
+/// else `text` spoken by the macOS `say` command in its default voice.
 pub fn say(text: &str) -> Vec<f32> {
     say_with(None, text)
 }
 
-/// The same, in the named voice (`say -v`), when one is given.
+/// The same, in the named voice (`say -v`) when one is given. A named voice is always `say`: a clip from a file has one
+/// voice only.
 pub fn say_with(voice: Option<&str>, text: &str) -> Vec<f32> {
-    let dir = tempfile::tempdir().unwrap();
-    let aiff = dir.path().join("clip.aiff");
-    let wav = dir.path().join("clip.wav");
-    let mut cmd = Command::new("say");
-    if let Some(voice) = voice {
-        cmd.arg("-v").arg(voice);
+    if voice.is_none()
+        && let Some(clip) = support::clip_from_env()
+    {
+        return clip.unwrap_or_else(|e| panic!("{e}"));
     }
-    let ok = cmd.arg("-o").arg(&aiff).arg(text).status().unwrap();
-    assert!(ok.success(), "say failed");
-    let ok = Command::new("afconvert")
-        .args(["-f", "WAVE", "-d", "LEF32@16000", "-c", "1"])
-        .arg(&aiff)
-        .arg(&wav)
-        .status()
-        .unwrap();
-    assert!(ok.success(), "afconvert failed");
-    read_wav_f32(&wav)
-}
-
-/// Samples of a 32-bit float mono WAV (what afconvert wrote), chunk by chunk.
-pub fn read_wav_f32(path: &Path) -> Vec<f32> {
-    let b = std::fs::read(path).unwrap();
-    assert_eq!(&b[0..4], b"RIFF");
-    assert_eq!(&b[8..12], b"WAVE");
-    let mut i = 12;
-    while i + 8 <= b.len() {
-        let id = &b[i..i + 4];
-        let len = u32::from_le_bytes(b[i + 4..i + 8].try_into().unwrap()) as usize;
-        let body = i + 8;
-        if id == b"fmt " {
-            let tag = u16::from_le_bytes(b[body..body + 2].try_into().unwrap());
-            let bits = u16::from_le_bytes(b[body + 14..body + 16].try_into().unwrap());
-            assert!(
-                tag == 3 && bits == 32,
-                "not float32 (tag {tag}, {bits} bits)"
-            );
-        }
-        if id == b"data" {
-            let end = (body + len).min(b.len());
-            return b[body..end]
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|c| f32::from_le_bytes(*c))
-                .collect();
-        }
-        i = body + len + (len & 1);
-    }
-    panic!("no data chunk in {}", path.display());
+    support::say_samples(voice, text).unwrap_or_else(|e| panic!("{e}"))
 }
 
 pub fn ms(samples: &[f32]) -> u64 {
@@ -90,8 +87,6 @@ pub fn lower_letters(s: &str) -> String {
         .filter(|c| c.is_alphanumeric())
         .collect()
 }
-
-pub const SENTENCE: &str = "Hello there. This is a short test of the speech engine.";
 
 pub fn words_of(t: &Transcript) -> Vec<String> {
     t.segments
