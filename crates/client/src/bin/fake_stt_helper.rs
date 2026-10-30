@@ -18,7 +18,7 @@
 //!   card and answers `transcribe` with the graphics card failed; `cpu_fallback` runs the model on the processor
 //!   though the card was asked for (`fell_back` in `loaded` and `transcribed`).
 //! - `too_long` answers `transcribe` with too long (max 40 s); `missing` answers `load` with model missing;
-//!   `slow_load` takes 700 ms to load.
+//!   `slow_load` takes 4 s to load, far past the tests' 600 ms stall limit (the client stops it at the limit).
 //!
 //! `devices` answers with the list `FAKE_DEVICES` describes (fake_support/devices.rs).
 //!
@@ -153,11 +153,11 @@ fn main() {
                     continue;
                 }
                 if mode == "slow_load" {
-                    std::thread::sleep(Duration::from_millis(700));
+                    std::thread::sleep(Duration::from_secs(4));
                 }
                 loaded = Some(l);
                 send(&SttEvent::Loaded {
-                    seconds: if mode == "slow_load" { 0.7 } else { 0.5 },
+                    seconds: if mode == "slow_load" { 4.0 } else { 0.5 },
                     backend: ran_on.clone(),
                 });
             }

@@ -35,7 +35,8 @@ fn model_file() -> PathBuf {
     file
 }
 
-/// The `gpu` options to run: with and without the card on the Mac, the processor only elsewhere.
+/// The `gpu` options to run: with and without the card on the Mac or with the `vulkan` feature, the processor only
+/// elsewhere.
 fn gpu_modes() -> Vec<bool> {
     if use_gpu() {
         vec![false, true]
@@ -199,7 +200,14 @@ fn words_mode_is_what_ensayos_settings_give() {
         )
         .unwrap();
 
-    let params = voice_engine_stt::context_params(use_gpu().then_some(0), use_gpu());
+    // The card the engine chooses (Metal on the Mac, the discrete Vulkan card elsewhere); the processor when none.
+    let mac = cfg!(target_os = "macos");
+    let all = voice_engine_stt::devices();
+    let card = use_gpu()
+        .then(|| voice_engine_stt::whisper_engine::choose_gpu(&all, mac))
+        .flatten()
+        .map(|(_, number)| number);
+    let params = voice_engine_stt::context_params(card, mac && card.is_some());
     let ctx = whisper_rs::WhisperContext::new_with_params(model_file(), params).unwrap();
     let mut state = ctx.create_state().unwrap();
     let mut p = whisper_rs::FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 1 });
@@ -458,17 +466,28 @@ fn fillers_option_is_accepted() {
 
 #[test]
 #[ignore]
-fn backend_is_metal_with_the_card_and_cpu_without() {
+fn backend_names_the_card_with_it_and_cpu_without() {
     let _g = guard();
-    // Metal is asked for on the Mac only: elsewhere there is no card to ask for in this build.
-    #[cfg(target_os = "macos")]
-    {
+    // The card is asked for on the Mac (Metal) and in a `vulkan` build; elsewhere there is no card to ask for.
+    if use_gpu() {
         let e = engine(true);
         let b = e.backend();
         eprintln!("gpu: {b:?}");
-        assert_eq!(b.backend, "metal");
-        assert!(b.device.is_some());
-        assert!(!b.fell_back);
+        if cfg!(target_os = "macos") {
+            assert_eq!(b.backend, "metal");
+        }
+        match b.backend.as_str() {
+            "metal" | "vulkan" => {
+                assert!(b.device.is_some(), "{b:?}");
+                assert!(!b.fell_back, "{b:?}");
+            }
+            // A `vulkan` build on a PC with no discrete card, or one whose card did not start: the processor, said so.
+            "cpu" => {
+                assert_eq!(b.device, None);
+                assert!(b.fell_back, "{b:?}");
+            }
+            other => panic!("unexpected backend {other}: {b:?}"),
+        }
         drop(e);
     }
     let e = engine(false);
@@ -505,7 +524,8 @@ fn threads_follow_the_option_and_the_backend_that_loaded() {
         .unwrap();
         assert_eq!(e.threads(), 1, "gpu {gpu}: at least one");
         let e = WhisperEngine::load(&file, LoadOptions { gpu, threads: None }).unwrap();
-        let kind = if gpu {
+        // The rule of where the model really runs: with the card asked for on a PC that has none it is the processor's.
+        let kind = if gpu && e.backend().backend != "cpu" {
             ThreadKind::Gpu
         } else {
             ThreadKind::Processor
