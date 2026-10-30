@@ -96,17 +96,38 @@ impl World {
     }
 }
 
-fn assert_not_real(dir: &Path) {
-    let real: Vec<PathBuf> = [SharedStore::default_dir(), dirs::data_local_dir()]
-        .into_iter()
-        .flatten()
-        .collect();
-    for real in real {
-        assert!(
-            !dir.starts_with(&real),
-            "a test must never use a real folder: {}",
-            dir.display()
+/// The places a test must never touch: the real shared model folder and every real old app folder `LegacySource`
+/// would read on this computer (the roots of Talaan, Ensayo and Parlato). Not the whole local data folder: on a Windows
+/// PC the temp folder is `%LOCALAPPDATA%\Temp`, and a test's temp folder is no danger to anything.
+fn real_places() -> Vec<PathBuf> {
+    let mut real: Vec<PathBuf> = SharedStore::default_dir().into_iter().collect();
+    for app in App::ALL {
+        real.extend(
+            LegacySource::on_this_computer(app)
+                .into_iter()
+                .map(|source| source.root),
         );
+    }
+    real
+}
+
+/// Err when `dir` is, is inside, or contains one of `real`.
+fn check_not_real(dir: &Path, real: &[PathBuf]) -> Result<(), String> {
+    for real in real {
+        if dir.starts_with(real) || real.starts_with(dir) {
+            return Err(format!(
+                "a test must never use a real folder: {} (touches {})",
+                dir.display(),
+                real.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn assert_not_real(dir: &Path) {
+    if let Err(message) = check_not_real(dir, &real_places()) {
+        panic!("{message}");
     }
 }
 
@@ -1180,4 +1201,67 @@ fn a_store_opened_with_open_at_never_moves_and_never_creates_anything_outside_it
     assert!(!w.moved_marker("talaan").exists());
     assert!(w.talaan().join("vad/ggml-silero-v6.2.0.bin").is_file());
     assert_ne!(Some(store.root().to_path_buf()), SharedStore::default_dir());
+}
+
+// ---- the guard itself ---------------------------------------------------------------------------------------
+
+#[test]
+#[should_panic(expected = "a test must never use a real folder")]
+fn the_guard_refuses_the_real_shared_folder() {
+    assert_not_real(&SharedStore::default_dir().expect("a shared folder on this computer"));
+}
+
+#[test]
+#[should_panic(expected = "a test must never use a real folder")]
+fn the_guard_refuses_inside_the_real_shared_folder() {
+    assert_not_real(
+        &SharedStore::default_dir()
+            .expect("a shared folder on this computer")
+            .join("whisper-base"),
+    );
+}
+
+#[test]
+fn the_guard_refuses_every_real_app_folder() {
+    for app in App::ALL {
+        let sources = LegacySource::on_this_computer(app);
+        assert!(!sources.is_empty(), "{app:?} has no old folder here");
+        for source in sources {
+            for dir in [source.root.clone(), source.root.join("anything")] {
+                assert!(
+                    std::panic::catch_unwind(|| assert_not_real(&dir)).is_err(),
+                    "{app:?}: {} was accepted",
+                    dir.display()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+#[should_panic(expected = "a test must never use a real folder")]
+fn the_guard_refuses_a_real_app_folder_by_name() {
+    let talaan = LegacySource::on_this_computer(App::Talaan)
+        .into_iter()
+        .next()
+        .expect("Talaan's old folder on this computer");
+    assert_not_real(&talaan.root);
+}
+
+#[test]
+fn the_guard_refuses_a_folder_that_holds_a_real_one() {
+    // The whole local data folder would hold every real folder, so a test using it as its own would touch them.
+    let local = dirs::data_local_dir().unwrap();
+    assert!(check_not_real(&local, &real_places()).is_err());
+}
+
+#[test]
+fn the_guard_accepts_a_temp_folder_even_under_the_local_data_folder() {
+    // Windows: %LOCALAPPDATA%\Temp\.tmpXXXX. The folder is not a real place, so it passes.
+    let local = dirs::data_local_dir().unwrap();
+    let temp_inside_local = local.join("Temp").join(".tmpAbC123").join("local");
+    assert_eq!(check_not_real(&temp_inside_local, &real_places()), Ok(()));
+    // ... and the real temp folder of this computer, whatever it is.
+    let tmp = tempfile::tempdir().unwrap();
+    assert_not_real(tmp.path());
 }
