@@ -9,7 +9,7 @@
 //!
 //! The models are read from `$VOICE_ENGINE_TEST_MODELS` (a folder with a folder per model id, like the speech bench's) when
 //! that is set, else from the shared folder (`SharedStore::default_dir`, which is only read, never created). The helper is
-//! `$VOICE_ENGINE_TEST_HELPER` or `target/release/voice-engine-llm`. For each model, on Metal and then with
+//! `$VOICE_ENGINE_TEST_HELPER` or `target/release/voice-engine-llm` (`.exe` on Windows). For each model, on Metal and then with
 //! `gpu: false`: `load` (seconds), one warm-up request, then 3 timed requests (median and range), thinking off,
 //! temperature 0, context 4096. "reply" is the wall time from sending the request to the full reply; "prompt" is
 //! the time until the helper reported the whole prompt read; tok/s is output tokens over reply minus prompt.
@@ -116,8 +116,13 @@ fn median(v: &mut [f64]) -> f64 {
 
 fn main() {
     let helper = PathBuf::from(
-        std::env::var_os("VOICE_ENGINE_TEST_HELPER")
-            .unwrap_or_else(|| "target/release/voice-engine-llm".into()),
+        std::env::var_os("VOICE_ENGINE_TEST_HELPER").unwrap_or_else(|| {
+            format!(
+                "target/release/voice-engine-llm{}",
+                std::env::consts::EXE_SUFFIX
+            )
+            .into()
+        }),
     );
     assert!(
         helper.is_file(),
