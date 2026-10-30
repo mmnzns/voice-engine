@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- tooling: the graphics card can be measured on Windows (#7). `bench` (speech) has Whisper rows on Vulkan in process
+  (`--features vulkan`) and a Parakeet row on DirectML (`--features directml`), and every row prints `backend`, `device`
+  and `fell_back`; the Mac's Metal rows stay. README: "Check the graphics card on a Windows PC", one command block per step.
+- tooling: new example `bench_stt` (client): Whisper through a built speech helper with `SttClient`, the card against
+  `gpu: false`, warm-up then 3 runs with median and range, with the helper's `devices()` and each line's backend, device
+  and `fell_back`.
+- tooling: `bench_llm` prints the device name and `fell_back` next to the backend (#7).
+- tests: `tests/real_fallback.rs` (client, `#[ignore]`): `VOICE_ENGINE_GPU=fail` against the real Vulkan and processor
+  helpers, speech and AI; it asserts `cpu` and `fell_back`, and skips with the variables to set when they are not set (#7).
+- tests: `real_whisper` asks for the card off the Mac when built with `vulkan` (and accepts a PC with no card:
+  processor and `fell_back`), `real_parakeet`'s DirectML test checks the device is the discrete card (#7).
+- helpers: the AI helper's `couldn't build the prompt` and `bad output schema` messages no longer carry the library's own
+  text, only the kind (it wraps strings built from the prompt); a test covers the first (#8).
+- tests: `stt_client`'s slow-load timeout no longer flakes on a slow runner: the fake loads in 4 s against a 600 ms
+  stall limit, not 700 ms.
 - tests: the real-model tests, examples and benches print word, character and segment counts and timings, never what
   was said (`real_whisper`, `real_parakeet`, `real_fillers` and `client`'s `real_stt` printed transcripts, words and
   filler tokens); the rule is in README.md and CLAUDE.md (#8).

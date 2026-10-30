@@ -291,7 +291,8 @@ fn a_helper_that_says_nothing_is_stopped_at_the_stall_limit() {
 fn a_load_that_takes_longer_than_the_stall_limit_is_a_timeout_too() {
     let _t = turn();
     let (_d, st) = state();
-    // The fake needs 700 ms to load and the stall limit is 600 ms.
+    // The fake needs 4 s to load and the stall limit is 600 ms: a margin of seconds, so a slow runner that delays the
+    // client's clock check can not see the answer arrive first. The helper is stopped at the limit, so it ends in ~0.6 s.
     let client = SttClient::new(config("slow_load", &st));
     let e = client.load(model("whisper-turbo")).unwrap_err();
     assert_eq!(e, EngineError::TimedOut);

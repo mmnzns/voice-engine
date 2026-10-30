@@ -16,7 +16,9 @@
 //! Models are run one at a time (each helper is stopped before the next starts).
 //!
 //! `gpu: false` is the processor on every system, so the second row of a model is the processor. `backend` is what the
-//! helper said for that request (`metal` or `cpu`), not what it said when it started.
+//! helper said for that request (`metal`, `vulkan` or `cpu`), not what it said when it started; `device` is the card's
+//! name (`-` on the processor) and `fell_back` says the card was asked for and the processor ran. On Windows run it
+//! with the Vulkan helper (`$VOICE_ENGINE_TEST_HELPER` = the `--features vulkan` build) to measure the card.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -77,6 +79,9 @@ struct Timed {
     truncated: bool,
     text: String,
     backend: String,
+    /// The card's name, `-` on the processor.
+    device: String,
+    fell_back: bool,
 }
 
 fn request(c: &LlmClient, completion: Completion) -> Timed {
@@ -106,6 +111,8 @@ fn request(c: &LlmClient, completion: Completion) -> Timed {
         truncated: r.truncated,
         text: r.text,
         backend: outcome.backend.backend,
+        device: outcome.backend.device.unwrap_or_else(|| "-".into()),
+        fell_back: outcome.fell_back,
     }
 }
 
@@ -190,9 +197,11 @@ fn main() {
                 reply.iter().cloned().fold(0.0, f64::max),
             );
             println!(
-                "{id:<16} gpu={gpu:<5} backend={:<5} load={:.2}s (wall {load_wall:.2}s) warm-up reply={:.2}s | reply median={:.2}s \
+                "{id:<16} gpu={gpu:<5} backend={:<6} device={:?} fell_back={} load={:.2}s (wall {load_wall:.2}s) warm-up reply={:.2}s | reply median={:.2}s \
                  range={lo:.2}-{hi:.2}s prompt={:.2}s tokens in={} out={:?} tok/s median={:.1} truncated={}",
                 warm.backend,
+                warm.device,
+                warm.fell_back,
                 loaded.value.seconds,
                 warm.reply_s,
                 median(&mut reply),

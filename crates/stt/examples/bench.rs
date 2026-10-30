@@ -4,6 +4,7 @@
 //! ```text
 //! cargo run --release -p voice-engine-stt --example bench            # the planned set
 //! cargo run --release -p voice-engine-stt --example bench -- sweep   # also other thread counts for each model
+//! cargo run --release -p voice-engine-stt --features vulkan,directml --example bench   # Windows: the card rows too
 //! ```
 //!
 //! Works on a Mac and on a Windows PC (see `support/mod.rs` for the details):
@@ -15,7 +16,11 @@
 //!   29.0 s (`docs/data/clip-bench.wav` is 12 s of it; a clip of one short sentence repeated makes Whisper Turbo stop
 //!   after the first, so the number would not mean much); only when that is not set, and only on a Mac, the macOS `say` command reading several sentences in turn the
 //!   same way. Without either the bench says what to set.
-//! * The Metal rows run on a Mac only. One model is loaded at a time. Each line is one load, one warm-up decode, then 3
+//! * The graphics card rows: Whisper on Metal on a Mac, and on Vulkan in this process when built with `--features vulkan`
+//!   (needs the Vulkan SDK to build; Windows); Parakeet on DirectML when built with `--features directml` (Windows).
+//!   Each row prints `backend`, `device` (the adapter's name, `-` on the processor) and `fell_back` (the card was
+//!   asked for and the processor ran), so a row that quietly ran on the processor says so. On a PC with two adapters
+//!   (an RTX card and the Ryzen's Radeon) `device` is how to see which one ran. One model is loaded at a time. Each line is one load, one warm-up decode, then 3
 //!   timed decodes (median and range); `Timing::Segments`, language auto.
 
 use std::path::{Path, PathBuf};
@@ -59,6 +64,8 @@ fn median_and_range(times: &[f64]) -> (f64, f64, f64) {
 struct Row {
     label: String,
     backend: String,
+    device: String,
+    fell_back: bool,
     threads: usize,
     load_s: f64,
     first_s: f64,
@@ -99,15 +106,9 @@ fn measure(
     let (median_s, min_s, max_s) = median_and_range(&times);
     Row {
         label: label.to_string(),
-        backend: format!(
-            "{}{}",
-            backend.backend,
-            if backend.fell_back {
-                " (fell back)"
-            } else {
-                ""
-            }
-        ),
+        backend: backend.backend.clone(),
+        device: backend.device.clone().unwrap_or_else(|| "-".into()),
+        fell_back: backend.fell_back,
         threads,
         load_s,
         first_s,
@@ -140,10 +141,12 @@ fn parakeet(label: &str, id: &str, dir: &Path, audio: &[f32], opts: LoadOptions)
 
 fn print(row: &Row, audio_secs: f64, bar: &str) {
     println!(
-        "{:<34} backend={:<5} threads={:<2} load={:>5.2}s first={:>5.2}s decode median={:>5.2}s range={:.2}-{:.2}s \
+        "{:<34} backend={:<8} device={:?} fell_back={:<5} threads={:<2} load={:>5.2}s first={:>5.2}s decode median={:>5.2}s range={:.2}-{:.2}s \
          rtf={:>5.1}x words={}  | {bar}",
         row.label,
         row.backend,
+        row.device,
+        row.fell_back,
         row.threads,
         row.load_s,
         row.first_s,
@@ -173,6 +176,10 @@ fn model_file(id: &str, file_name: &str) -> Option<PathBuf> {
 fn main() {
     let sweep = std::env::args().any(|a| a == "sweep");
     let mac = cfg!(target_os = "macos");
+    // Whisper's card: Metal on a Mac, Vulkan in this process when built with the feature (Windows).
+    let whisper_card = mac || cfg!(feature = "vulkan");
+    let whisper_card_name = if mac { "metal" } else { "vulkan" };
+    let directml = cfg!(feature = "directml");
 
     let audio = clip();
     let audio_secs = audio.len() as f64 / 16_000.0;
@@ -190,9 +197,9 @@ fn main() {
         .ok();
 
     if let Some(turbo) = &turbo {
-        if mac {
+        if whisper_card {
             let metal = whisper(
-                "whisper-turbo (metal)",
+                &format!("whisper-turbo ({whisper_card_name})"),
                 turbo,
                 &audio,
                 LoadOptions {
@@ -200,15 +207,19 @@ fn main() {
                     threads: None,
                 },
             );
-            let bar = format!(
-                "bar: 25x on Metal -> {}",
-                verdict(metal.rtf(audio_secs) >= 25.0)
-            );
+            let bar = if mac {
+                format!(
+                    "bar: 25x on Metal -> {}",
+                    verdict(metal.rtf(audio_secs) >= 25.0)
+                )
+            } else {
+                "no bar (the card)".to_string()
+            };
             print(&metal, audio_secs, &bar);
             if sweep {
                 for n in [4, 6, 12] {
                     let row = whisper(
-                        &format!("whisper-turbo (metal, {n} threads)"),
+                        &format!("whisper-turbo ({whisper_card_name}, {n} threads)"),
                         turbo,
                         &audio,
                         LoadOptions {
@@ -263,9 +274,9 @@ fn main() {
         }
         if sweep {
             let mut rows = vec![];
-            if mac {
+            if whisper_card {
                 rows.push(whisper(
-                    "whisper-base (metal, default)",
+                    &format!("whisper-base ({whisper_card_name}, default)"),
                     base,
                     &audio,
                     LoadOptions {
@@ -292,6 +303,19 @@ fn main() {
     }
 
     if let Some(ultra) = &ultra {
+        if directml {
+            let row = parakeet(
+                "parakeet-ultra (directml)",
+                "parakeet-ultra",
+                ultra,
+                &audio,
+                LoadOptions {
+                    gpu: true,
+                    threads: None,
+                },
+            );
+            print(&row, audio_secs, "no bar (the card)");
+        }
         let rows = [
             parakeet(
                 "parakeet-ultra (cpu, default)",

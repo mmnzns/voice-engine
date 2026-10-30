@@ -470,7 +470,17 @@ fn the_gpu_option_uses_directml_or_reports_the_fallback() {
     .backend();
     eprintln!("gpu: true -> {b:?}");
     match b.backend.as_str() {
-        "directml" => assert!(!b.fell_back, "{b:?}"),
+        "directml" => {
+            assert!(!b.fell_back, "{b:?}");
+            // The adapter's name is reported, and it is the discrete card the engine chose, not adapter 0.
+            let card = voice_engine_stt::discrete_card()
+                .expect("DirectML ran, so there is a discrete card");
+            assert_eq!(
+                b.device.as_deref(),
+                Some(card.description.as_str()),
+                "{b:?}"
+            );
+        }
         "cpu" => assert!(b.fell_back, "{b:?}"),
         other => panic!("unexpected backend {other}: {b:?}"),
     }

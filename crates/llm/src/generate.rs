@@ -86,13 +86,13 @@ pub(crate) fn complete(
     let thinking = thinks && c.thinking;
     let messages = [
         LlamaChatMessage::new("system".into(), c.system.clone())
-            .map_err(|e| Failure::internal(e.to_string()))?,
+            .map_err(|_| Failure::internal("couldn't build the prompt: a null byte in the text"))?,
         LlamaChatMessage::new("user".into(), c.user.clone())
-            .map_err(|e| Failure::internal(e.to_string()))?,
+            .map_err(|_| Failure::internal("couldn't build the prompt: a null byte in the text"))?,
     ];
     let mut prompt = model
         .apply_chat_template(&template, &messages, true)
-        .map_err(|e| Failure::internal(format!("couldn't build the prompt: {e}")))?;
+        .map_err(|e| Failure::internal(prompt_error(&e)))?;
     prompt.push_str(think::prompt_ending(thinks, thinking));
     let vocab = model.vocab();
     let tokens = vocab.tokenize(prompt.as_bytes(), false, true);
@@ -273,6 +273,19 @@ fn feed(
 
 /// The sampling chain for a request. With `answer`, the reply's schema (if any) constrains it; thinking is free
 /// text. Temperature 0 is greedy; above 0 the seed makes it repeatable.
+/// What went wrong applying the chat template, by kind only. The library's own text is not put in a message: it
+/// wraps strings that were built from the prompt, and that can be what a person said.
+fn prompt_error(e: &llama_cpp_2::ApplyChatTemplateError) -> String {
+    use llama_cpp_2::ApplyChatTemplateError as E;
+    let what = match e {
+        E::NulError(_) => "a null byte in the text".to_string(),
+        E::FromUtf8Error(_) => "the result was not valid UTF-8".to_string(),
+        E::NullResult => "llama.cpp gave no result".to_string(),
+        E::FfiError(code) => format!("llama.cpp error {code}"),
+    };
+    format!("couldn't build the prompt: {what}")
+}
+
 fn sampling_chain(
     model: &LlamaModel,
     c: &Completion,
@@ -285,7 +298,8 @@ fn sampling_chain(
                 ErrorKind::BadSchema {
                     detail: e.to_string(),
                 },
-                format!("bad output schema: {e}"),
+                // The schema is the app's own, but the message follows the same rule as the prompt's: no library text.
+                "bad output schema (the detail says what)",
             )
         };
         let grammar = llama_cpp_2::json_schema_to_grammar(schema).map_err(|e| bad_schema(&e))?;
@@ -342,5 +356,26 @@ mod tests {
             }
         );
         assert!(e.message.contains("missing"), "{}", e.message);
+    }
+
+    #[test]
+    fn a_prompt_error_names_its_kind_and_never_the_text_it_wrapped() {
+        let said = "remember to call my doctor about the rash on Tuesday";
+        let nul = std::ffi::CString::new(format!("{said}\0")).unwrap_err();
+        let utf8 = String::from_utf8(said.bytes().chain([0xff]).collect()).unwrap_err();
+        for e in [
+            llama_cpp_2::ApplyChatTemplateError::NulError(nul),
+            llama_cpp_2::ApplyChatTemplateError::FromUtf8Error(utf8),
+            llama_cpp_2::ApplyChatTemplateError::NullResult,
+            llama_cpp_2::ApplyChatTemplateError::FfiError(-1),
+        ] {
+            let text = prompt_error(&e);
+            assert!(text.starts_with("couldn't build the prompt: "), "{text}");
+            assert!(!text.contains("doctor") && !text.contains("rash"), "{text}");
+        }
+        assert_eq!(
+            prompt_error(&llama_cpp_2::ApplyChatTemplateError::FfiError(-3)),
+            "couldn't build the prompt: llama.cpp error -3"
+        );
     }
 }

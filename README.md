@@ -454,8 +454,66 @@ cargo test --release -p voice-engine-stt --features directml -- --ignored --test
 The real tests expect the clip to say that sentence. A test that needs the `say` command's own wording or several
 voices (the Whisper vocabulary test, two voice detection tests, the Parakeet short-sentences test, and everything in
 `real_fillers.rs` and `real_diarize.rs`) is skipped with a message when `VOICE_ENGINE_TEST_CLIP` is set or the computer is
-not a Mac. Metal is asked for on the Mac only; on Windows they run on the processor. Use `--release`: the native
-libraries must be the optimized ones (see "Build settings an app must copy").
+not a Mac. Metal is asked for on the Mac; on Windows the tests run on the processor unless built with `--features
+vulkan` (Whisper) or `--features directml` (Parakeet), see "Check the graphics card on a Windows PC" below. Use
+`--release`: the native libraries must be the optimized ones (see "Build settings an app must copy").
+
+### Check the graphics card on a Windows PC
+
+For a PC with a discrete card (the Vulkan SDK installed and `VULKAN_SDK` set to build `vulkan`; DirectML needs nothing, Windows
+brings `DirectML.dll`). Every line a bench prints has `backend`, `device` (the adapter's name, `-` on the processor) and
+`fell_back` (the card was asked for and the processor ran): on a PC with two adapters (an RTX card and the Ryzen's Radeon)
+`device` must be the discrete card. Each step is one block, run from a clone of the engine, with the clip and the models set
+as above (`$env:VOICE_ENGINE_TEST_CLIP = "$PWD\docs\data\clip-bench.wav"`).
+
+1. Parakeet on DirectML and Whisper on Vulkan in this process (the `vulkan` feature builds the Vulkan backend into the
+   example), next to the processor rows:
+
+```powershell
+cargo run --release -p voice-engine-stt --features vulkan,directml --example bench
+```
+
+2. Whisper through the Vulkan speech helper, with `SttClient`, the card next to `gpu: false` (first it prints the helper's
+   device list and the device it chose):
+
+```powershell
+cargo build --release -p voice-engine-stt --features vulkan
+cargo run --release -p voice-engine-client --example bench_stt
+```
+
+3. The AI helper on the card (`$env:VOICE_ENGINE_TEST_HELPER` is the helper to measure, `target\release\voice-engine-llm.exe` by default):
+
+```powershell
+cargo build --release -p voice-engine-llm --features vulkan
+cargo run --release -p voice-engine-client --example bench_llm
+```
+
+4. The real-model tests on the card (Whisper in process with `vulkan`, Parakeet with `directml`; `--ignored`, one at a time):
+
+```powershell
+$env:VOICE_ENGINE_TEST_CLIP = "$PWD\docs\data\clip-sentence.wav"
+cargo test --release -p voice-engine-stt --features vulkan,directml -- --ignored --test-threads=1 --nocapture
+```
+
+5. The forced fallback against the real helpers: `VOICE_ENGINE_GPU=fail` makes the Vulkan helper abort on its first real request,
+   and the client must answer the same call from the processor helper with `fell_back` true (a test whose variables are not set
+   says which and passes). The Vulkan build is copied aside because the processor build overwrites it:
+
+```powershell
+cargo build --release -p voice-engine-stt --features vulkan
+Copy-Item target\release\voice-engine-stt.exe $env:TEMP\stt-vulkan.exe -Force
+cargo build --release -p voice-engine-llm --features vulkan
+Copy-Item target\release\voice-engine-llm.exe $env:TEMP\llm-vulkan.exe -Force
+cargo build --release -p voice-engine-stt -p voice-engine-llm
+$env:VOICE_ENGINE_TEST_STT_GPU_HELPER = "$env:TEMP\stt-vulkan.exe"
+$env:VOICE_ENGINE_TEST_STT_HELPER = "$PWD\target\release\voice-engine-stt.exe"
+$env:VOICE_ENGINE_TEST_GPU_HELPER = "$env:TEMP\llm-vulkan.exe"
+$env:VOICE_ENGINE_TEST_HELPER = "$PWD\target\release\voice-engine-llm.exe"
+$env:VOICE_ENGINE_TEST_LLM = "C:\path\to\model.gguf"      # any chat model, a .gguf file
+cargo test --release -p voice-engine-client --test real_fallback -- --ignored --nocapture --test-threads=1
+```
+
+The last build has no features, so it makes the processor helpers the client falls back to.
 
 Logs never hold what a person said. A test, example or bench prints counts (words, characters, segments), times, sizes and
 backend names, never a transcript, a word, a reply or a prompt; check logs are saved and shared, so this holds for every
