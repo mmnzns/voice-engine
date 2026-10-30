@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (v0.2.0)
+## v0.2.0 (2026-10-29)
 
 - tests: Windows re-check fixes. `bench_llm`'s default helper path ends in `.exe` on Windows (#4). With the `directml`
   feature, `real_parakeet`'s thread test expects the card's thread rule when `gpu: true` really ran on DirectML, and a

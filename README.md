@@ -431,9 +431,9 @@ libraries must be the optimized ones (see "Build settings an app must copy").
 
 | App | Engine tag |
 | --- | --- |
-| Talaan | v0.1.0 (moving) |
-| Ensayo | v0.1.0 (moving) |
-| Parlato | not yet |
+| Talaan | moving to v0.2.0 |
+| Ensayo | moving to v0.2.0 |
+| Parlato | moving to v0.2.0 |
 
 ## Licence
 
