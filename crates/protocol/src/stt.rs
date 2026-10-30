@@ -51,8 +51,7 @@ pub struct SttLoad {
 pub enum SttRequest {
     /// Answers with `SttEvent::Ready`.
     Ping,
-    /// Answers with `SttEvent::Devices`: every ggml device (and, in a build with `directml`, every DirectML adapter,
-    /// backend "DirectML") and the ggml one the helper chose. The app asks the card helper this once at startup to
+    /// Answers with `SttEvent::Devices`: every ggml device and the one the helper chose. The app can ask the card helper this at startup to
     /// learn whether the PC has a discrete card (`gpu::discrete_card`).
     Devices,
     /// Loads a Whisper model, replacing any other. Answers with `Loaded`. The model stays loaded for every

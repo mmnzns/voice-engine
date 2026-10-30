@@ -170,8 +170,8 @@ impl SttClient {
         })
     }
 
-    /// Every device the helper sees and the one it uses: ggml's (Vulkan, the processor) and, when the helper is
-    /// built with `directml`, DirectML's adapters (backend "DirectML"). Asked of the graphics card helper when there
+    /// Every device the helper sees and the one it uses: ggml's (Vulkan, the processor). The helper runs Whisper
+    /// only, so it never lists DirectML's adapters (`voice_engine_stt::discrete_card` is that, in the app). Asked of the graphics card helper when there
     /// is one and it hasn't failed (else of the processor helper, which lists the processor only). Starts the helper
     /// if none runs and loads no model, so an app asks once at startup, before the first load.
     pub fn devices(&self) -> Result<DeviceList, EngineError> {

@@ -54,5 +54,5 @@ dirs.workspace = true
 vulkan = ["whisper-rs/vulkan"]
 # Windows only: Parakeet on the graphics card through ONNX Runtime's DirectML provider (`gpu: true`), on the discrete
 # card only (never the iGPU), with the processor as the fallback. Without it, or on the Mac, `gpu: true` runs on the
-# processor and says so. In the helper it also adds the DirectML adapters to the `devices` answer.
+# processor and says so. For an app's own build, not the helpers (they run Whisper only).
 directml = ["ort/directml", "dep:windows"]

@@ -9,7 +9,7 @@ What it builds, per target triple:
 | Target triple | Built on | Helpers |
 | --- | --- | --- |
 | `aarch64-apple-darwin` (Mac, Apple silicon) | `macos-latest` | `llm`, `stt` |
-| `x86_64-pc-windows-msvc` (Windows, Intel and AMD) | `windows-latest` | `llm`, `stt`, and the Vulkan variants `llm-vulkan`, `stt-vulkan` (the speech one with DirectML too) |
+| `x86_64-pc-windows-msvc` (Windows, Intel and AMD) | `windows-latest` | `llm`, `stt`, and the Vulkan variants `llm-vulkan`, `stt-vulkan` |
 | `aarch64-pc-windows-msvc` (Windows on Arm, Snapdragon) | `windows-11-arm` | `llm`, `stt` |
 
 Each file is named the way Tauri names a sidecar, `<name>-<target triple>[.exe]`, for example
@@ -17,23 +17,16 @@ Each file is named the way Tauri names a sidecar, `<name>-<target triple>[.exe]`
 `llm-name` and `stt-name` inputs; the engine fixes nothing). A Vulkan variant puts `-vulkan` after the name and before the
 triple: `ensayo-llm-vulkan-x86_64-pc-windows-msvc.exe`. Vulkan builds exist for Windows x64 only.
 
-### What the Vulkan speech helper needs at run time
+### DirectML is not in the helpers
 
-`stt-vulkan` is built with `--features vulkan,directml`. Vulkan is Whisper's card path (`vulkan-1.dll`, from the graphics
-driver). `directml` adds the DirectML adapters to the helper's `devices` answer, so one call tells an app whether the PC
-has a discrete card for Whisper, the AI and Parakeet alike; the helper itself still runs Whisper only (Parakeet runs in
-the app's own process, which an app builds with the `directml` feature too).
-
-What `directml` needs, from `ort-sys 2.0.0-rc.13`'s build script: ONNX Runtime is linked statically (the pyke build, always
-compiled with DirectML on Windows) and the program imports `DirectML.dll`, `D3D12.dll`, `DXGI.dll` and `DXCORE.dll` at load
-time. `ort`'s `copy-dylibs` feature is off, so the build copies nothing next to the exe. All four are Windows system
-libraries: `DirectML.dll` has been in `C:\Windows\System32` since Windows 10 1903, and `DXCORE.dll` is there too. So the
-build script ships no extra file and `SHA256SUMS` lists the exe only. A PC without `DirectML.dll` (older than Windows 10
-1903) cannot start the helper; the client then falls back to the processor helper as for any card helper that fails to
-start. A `DirectML.dll` next to the exe would win over the system one (the loader looks in the exe's folder first); the
-engine does not ship one. Not checked on a PC yet: that the in-box `DirectML.dll` is new enough for this ONNX Runtime on
-every Windows 10 build. If a PC reports a DirectML load failure, Parakeet falls back to the processor with `fell_back`
-and the helper is unaffected.
+Both Vulkan helpers are built with `--features vulkan` only. The speech helper runs Whisper only; Parakeet runs in the
+app's own process, so an app that wants Parakeet on the card enables `voice-engine-stt/directml` in its own `Cargo.toml`.
+From `ort-sys 2.0.0-rc.13`'s build script: that build links ONNX Runtime statically and the program imports
+`DirectML.dll`, `D3D12.dll`, `DXGI.dll` and `DXCORE.dll` at load time (`ort`'s `copy-dylibs` is off, so nothing is copied
+next to the exe). All four come from Windows: `DirectML.dll` has been in `C:\Windows\System32` since Windows 10 1903.
+Nothing ships with the app, and the helpers do not import any of it. Not checked on a PC yet: that the in-box
+`DirectML.dll` is new enough for this ONNX Runtime on every Windows 10 build; if it is not, Parakeet falls back to the
+processor with `fell_back`.
 
 ## Why the engine builds them, and not the app
 

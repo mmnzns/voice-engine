@@ -142,11 +142,7 @@ foreach ($h in $wanted) {
   $cargoArgs = @('build', '--release', '--locked', '-p', $pkg, '--message-format=json-render-diagnostics')
   $savedGenerator = $env:CMAKE_GENERATOR; $savedTargetDir = $env:CARGO_TARGET_DIR
   if ($vulkan) {
-    # The speech helper also gets DirectML, so its `devices` answer lists the DirectML adapters next to Vulkan's (the card
-    # check, #9). ONNX Runtime links DirectML.dll as a load-time import: the in-box System32 copy (Windows 10 1903 and
-    # later) satisfies it, so there is no file to ship (docs/building-helpers.md).
-    $features = if ($kind -eq 'stt') { 'vulkan,directml' } else { 'vulkan' }
-    $cargoArgs += @('--features', $features)
+    $cargoArgs += @('--features', 'vulkan')
     Use-Ninja
     $env:CMAKE_GENERATOR = 'Ninja'
     $env:CARGO_TARGET_DIR = $VulkanTargetDir

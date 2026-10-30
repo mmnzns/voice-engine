@@ -165,22 +165,30 @@ the call ends 2 s later by killing the helper, and the next call loads the model
 ### Choosing the graphics card default on Windows
 
 On Windows the card is on by default only when the PC has a discrete card; with only built-in graphics it stays off until
-the app has measured it. The person can always switch it. An app finds out with one call, before the first model load,
-and the answer is the same for Whisper, the AI and Parakeet:
+the app has measured it. The person can always switch it. An app finds out before the first model load.
+
+Parakeet runs in the app's own process, so the app enables the feature in its own `Cargo.toml`
+(`voice-engine-stt = { ..., features = ["directml"] }`) and asks in process, with no helper:
 
 ```rust
-let card = speech_client.discrete_card()?;   // Result<Option<Device>, EngineError>; llm_client.discrete_card() is the same
-let gpu_by_default = card.is_some();         // card.map(|d| d.description): "NVIDIA GeForce RTX 5070 Ti"
+let card = voice_engine_stt::discrete_card();   // Option<Device>: "NVIDIA GeForce RTX 5070 Ti", or None
+let gpu_by_default = card.is_some();
 ```
 
-Ask the card helper (the Vulkan one, built with `directml` too: `docs/building-helpers.md`), at startup. The call starts
-the helper if it is not running and loads no model. `devices()` gives the whole list (`DeviceList`: every device, Vulkan's
-and DirectML's adapters with backend `"DirectML"`, and the index of the one the helper uses) for a settings screen. The
-card is `voice_engine_protocol::gpu::discrete_card`: the discrete GPU with the most memory, never an integrated one, so
-Miguel's RTX 5070 Ti with its Radeon iGPU answers yes and a Ryzen with only the Radeon answers no. If the card helper is
-missing or failed earlier, the client asks the processor helper, which sees the processor only: the answer is no, and the
-default is off. What `Outcome::backend` says afterwards (`device`, and `directml` for Parakeet) is the card that was used.
-An app that links `voice-engine-stt` with `directml` in its own process can also call `voice_engine_stt::discrete_card()`.
+It lists the adapters through DXGI and DXCore only (no model is loaded, no helper started), so it is cheap at startup. The
+card is the discrete adapter with the most memory, never an integrated one: Miguel's RTX 5070 Ti with its Radeon iGPU
+answers yes, a Ryzen with only the Radeon answers no. It is also the card DirectML runs Parakeet on (not Windows'
+adapter 0, which can be the iGPU), and `backend().device` names it. Without the `directml` feature, or off Windows,
+`discrete_card()` cannot see adapters and returns None: an app built that way asks a card helper instead.
+
+For Whisper and the AI, the card helpers answer the same question: `SttClient::discrete_card()` and
+`LlmClient::discrete_card()` (`Result<Option<Device>, EngineError>`) are
+`voice_engine_protocol::gpu::discrete_card` over the helper's ggml devices (Vulkan), and `devices()` gives the whole
+`DeviceList` for a settings screen or a check. The call starts the helper if it is not running and loads no model. If the
+card helper is missing or failed earlier, the client asks the processor helper, which sees the processor only: no.
+
+`DirectML.dll` comes from Windows (`C:\Windows\System32`, Windows 10 1903 and later): nothing ships with the app and the
+engine adds no file to the helpers' output. The helpers are built without DirectML and do not import it.
 
 ### What runs where
 
