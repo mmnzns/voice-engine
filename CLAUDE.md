@@ -14,3 +14,6 @@ Rules for every chat working in this repository:
 - Every tag: CI green on main, a CHANGELOG.md section, a Notion change log row, the same day. Never move or delete a
   pushed tag.
 - Keep README.md's "Which app uses which tag" table current.
+- Nothing a person said goes into logs, in tests, examples, benches or the helpers: print counts, sizes, times and
+  backend names, never transcript text, words, replies or prompts. A failure message may show text only when the
+  assertion is about that text itself.

@@ -120,11 +120,11 @@ fn measure(id: &str, gpu: bool) -> (Vec<Run>, [usize; 4]) {
             let words = words_of(&t);
             let fillers = fillers_in(&words);
             let found = per_kind(&fillers);
-            // Only the filler tokens and counts: never the transcript.
+            // Counts only: nothing a person said goes into a log.
             eprintln!(
-                "{id} {voice} keep_fillers={keep}: {} words, fillers {:?} (um {}, uh {}, hmm {}, like {})",
+                "{id} {voice} keep_fillers={keep}: {} words, {} fillers (um {}, uh {}, hmm {}, like {})",
                 words.len(),
-                fillers,
+                fillers.len(),
                 found[0],
                 found[1],
                 found[2],

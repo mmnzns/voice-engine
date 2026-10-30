@@ -163,10 +163,17 @@ fn a_say_clip_through_the_real_helper_and_the_model_stays_loaded_between_calls()
         )
         .unwrap();
     eprintln!(
-        "words ({:.2} s, {:?}): {}",
+        // Counts and times only: nothing a person said goes into a log.
+        "words ({:.2} s, {:?}): {} words, {} chars",
         began.elapsed().as_secs_f32(),
         words.backend,
-        text(&words.value)
+        words
+            .value
+            .segments
+            .iter()
+            .map(|s| s.words.len())
+            .sum::<usize>(),
+        text(&words.value).chars().count()
     );
     let said = text(&words.value);
     assert!(said.contains("thursday"), "{said}");
@@ -186,14 +193,14 @@ fn a_say_clip_through_the_real_helper_and_the_model_stays_loaded_between_calls()
         )
         .unwrap();
     eprintln!(
-        "segments ({:?}): {}",
+        "segments ({:?}): {} chars",
         segments
             .value
             .segments
             .iter()
             .map(|s| (s.start_ms, s.end_ms))
             .collect::<Vec<_>>(),
-        text(&segments.value)
+        text(&segments.value).chars().count()
     );
     assert!(text(&segments.value).contains("thursday"));
     assert!(segments.value.segments.iter().any(|s| s.words.len() > 3));

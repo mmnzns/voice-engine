@@ -14,6 +14,8 @@ param(
   [int]$TimeoutSecs = 60
 )
 $ErrorActionPreference = 'Stop'
+# Accepts -Names a,b (an array) and -Names 'a,b' (one string).
+$Names = @($Names | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $onWindows = $env:OS -eq 'Windows_NT'
 $ext = if ($onWindows) { '.exe' } else { '' }
 $Dir = (Resolve-Path $Dir).Path
@@ -55,11 +57,13 @@ foreach ($name in $Names) {
     $psi.RedirectStandardInput = $true
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
-    $psi.StandardInputEncoding = [System.Text.UTF8Encoding]::new($false)
     $p = [System.Diagnostics.Process]::Start($psi)
     $errTask = $p.StandardError.ReadToEndAsync()
-    $p.StandardInput.Write("{`"op`":`"ping`"}`n")
-    $p.StandardInput.Flush()
+    # UTF-8 without a BOM, written as bytes: ProcessStartInfo.StandardInputEncoding does not exist on .NET Framework
+    # (Windows PowerShell 5.1), and its StandardInput would use the console's code page.
+    $ping = [System.Text.UTF8Encoding]::new($false).GetBytes("{`"op`":`"ping`"}`n")
+    $p.StandardInput.BaseStream.Write($ping, 0, $ping.Length)
+    $p.StandardInput.BaseStream.Flush()
     $lineTask = $p.StandardOutput.ReadLineAsync()
     if ($lineTask.Wait($TimeoutSecs * 1000)) { $line = $lineTask.Result } else { $p.Kill(); Fail "${file}: no answer within ${TimeoutSecs}s" }
     # The app has gone: stdin closes and the helper must exit by itself.

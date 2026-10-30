@@ -7,7 +7,7 @@
 #   -Target     x86_64-pc-windows-msvc or aarch64-pc-windows-msvc. Must be the architecture of this computer: the native
 #               libraries are built by CMake for the machine that runs the build.
 #   -OutDir     receives <name>-<target triple>.exe for each helper, SHA256SUMS and build-info.txt.
-#   -Helpers    which to build, a comma list among llm, stt, llm-vulkan and stt-vulkan (default llm,stt). The Vulkan
+#   -Helpers    which to build, among llm, stt, llm-vulkan and stt-vulkan (default llm,stt), as a list (-Helpers llm,stt) or one comma string ('llm,stt'). The Vulkan
 #               variants are x86_64-pc-windows-msvc only and need the Vulkan SDK (VULKAN_SDK set; the repository's
 #               .github/actions/vulkan-sdk installs it on a runner). Their file name is <name>-vulkan-<target triple>.exe.
 #   -LlmName    the sidecar's base name for the AI helper (default voice-engine-llm); -SttName the same for speech
@@ -24,7 +24,7 @@
 param(
   [Parameter(Mandatory)][string]$Target,
   [Parameter(Mandatory)][string]$OutDir,
-  [string]$Helpers = 'llm,stt',
+  [string[]]$Helpers = @('llm', 'stt'),
   [string]$LlmName = 'voice-engine-llm',
   [string]$SttName = 'voice-engine-stt',
   [string]$EngineRef = '',
@@ -43,7 +43,8 @@ $x64 = $Target -eq 'x86_64-pc-windows-msvc'
 foreach ($n in $LlmName, $SttName) {
   if ($n -notmatch '^[A-Za-z0-9._-]+$') { Die "'$n' is not a usable file name (letters, digits, '.', '_' and '-')" }
 }
-$wanted = @($Helpers -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+# Windows PowerShell 5.1 and 7 both bind an unquoted llm,stt as an array; a quoted 'llm,stt' arrives as one string.
+$wanted = @($Helpers | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 if ($wanted.Count -eq 0) { Die 'no helper asked for' }
 foreach ($h in $wanted) {
   if ($h -notin 'llm', 'stt', 'llm-vulkan', 'stt-vulkan') { Die "unknown helper '$h' (llm, stt, llm-vulkan, stt-vulkan)" }

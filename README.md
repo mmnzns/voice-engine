@@ -427,6 +427,11 @@ voices (the Whisper vocabulary test, two voice detection tests, the Parakeet sho
 not a Mac. Metal is asked for on the Mac only; on Windows they run on the processor. Use `--release`: the native
 libraries must be the optimized ones (see "Build settings an app must copy").
 
+Logs never hold what a person said. A test, example or bench prints counts (words, characters, segments), times, sizes and
+backend names, never a transcript, a word, a reply or a prompt; check logs are saved and shared, so this holds for every
+`println!` and `eprintln!` in `crates/*/tests`, `examples` and `support`. An assertion's failure message may show text
+only when the assertion is about that text itself (a parity test that compares two transcripts).
+
 ## Which app uses which tag
 
 | App | Engine tag |
