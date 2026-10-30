@@ -184,7 +184,7 @@ fn logs_something(line: &str) -> bool {
 fn the_helper_logs_one_fixed_line_and_builds_its_messages_from_fixed_words() {
     // helper.rs is the speech helper: it reads the audio and the vocabulary from stdin. Its only stderr line is the
     // `<PREFIX>_GPU=fail` note (an environment variable's name), and the only message that formats anything in is
-    // the one for a request that did not parse, which takes serde's error class and column, never its text (serde
+    // the one for a request that did not parse, which takes serde's error class, line and column, never its text (serde
     // quotes the value that did not fit, and that could be the vocabulary).
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/helper.rs");
     let text = std::fs::read_to_string(path).unwrap();
@@ -206,7 +206,7 @@ fn the_helper_logs_one_fixed_line_and_builds_its_messages_from_fixed_words() {
     let around: Vec<&str> = production
         .lines()
         .skip(formats[0].0.saturating_sub(1))
-        .take(3)
+        .take(6)
         .collect();
     assert!(around.concat().contains("classify()"), "{around:?}");
     // The two `to_string` calls: the engine's own fixed-word error text, and the model file's path for the

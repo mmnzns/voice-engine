@@ -203,11 +203,23 @@ pub fn run(config: HelperConfig) {
                     Err(f) => send(&f.event()),
                 }
             }
-            Err(e) => {
-                send(&Failure::new(ErrorKind::BadRequest, format!("bad request: {e}")).event())
-            }
+            Err(e) => send(&bad_request(&e).event()),
         }
     }
+}
+
+/// The error for a request line that did not decode. Only serde's category and position: its own text can quote the
+/// value that did not fit, and that value can be what a person said (a prompt).
+fn bad_request(e: &serde_json::Error) -> Failure {
+    Failure::new(
+        ErrorKind::BadRequest,
+        format!(
+            "bad request: {:?} at line {} column {}",
+            e.classify(),
+            e.line(),
+            e.column()
+        ),
+    )
 }
 
 /// llama.cpp's backend can exist once per process, so every test that starts it (here and in the other files)
@@ -218,6 +230,20 @@ pub(crate) static BACKEND_TURN: std::sync::Mutex<()> = std::sync::Mutex::new(())
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bad_request_does_not_echo_the_sentence_it_carried() {
+        let said = "remember to call my doctor about the rash on Tuesday";
+        // A string where a number belongs: serde's own message quotes the string.
+        let line = format!(r#"{{"op":"load","n_ctx":"{said}"}}"#);
+        let e = voice_engine_protocol::decode_request(&line).unwrap_err();
+        assert!(e.to_string().contains("doctor"), "the premise: {e}");
+        let f = bad_request(&e);
+        assert_eq!(f.error, ErrorKind::BadRequest);
+        let text = f.message.clone();
+        assert!(!text.contains("doctor") && !text.contains("rash"), "{text}");
+        assert!(text.contains("bad request"), "{text}");
+    }
 
     #[test]
     fn a_cpu_build_reports_the_processor_and_lists_the_cpu() {
