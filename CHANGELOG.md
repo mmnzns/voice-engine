@@ -5,6 +5,8 @@
 - tests: the real-model tests, examples and benches print word, character and segment counts and timings, never what
   was said (`real_whisper`, `real_parakeet`, `real_fillers` and `client`'s `real_stt` printed transcripts, words and
   filler tokens); the rule is in README.md and CLAUDE.md (#8).
+- helpers: the AI helper's `bad request` error keeps only serde's category, line and column (serde's own text quotes the
+  value that did not fit, which can be a prompt); the speech helper already did, and both now have a test (#8).
 - scripts: `build-helpers.ps1` and `smoke-helpers.ps1` work on Windows PowerShell 5.1. `-Helpers llm,stt` unquoted
   binds (it is a `[string[]]`; a quoted comma string still works), and the smoke test no longer sets
   `ProcessStartInfo.StandardInputEncoding`, which .NET Framework lacks (it writes the UTF-8 ping as bytes). CI runs

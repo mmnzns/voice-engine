@@ -59,6 +59,20 @@ impl Failure {
     }
 }
 
+/// The error for a request line that did not decode. Only serde's category and position: its own text can quote the
+/// value that did not fit, and that value can be what a person said.
+fn bad_request(e: &serde_json::Error) -> Failure {
+    Failure::new(
+        SttErrorKind::BadRequest,
+        &format!(
+            "bad request: {:?} at line {} column {}",
+            e.classify(),
+            e.line(),
+            e.column()
+        ),
+    )
+}
+
 /// What the engine said, as the kind the app matches on. `file` is where the model should have been.
 fn failure(e: SpeechError, file: &Path) -> Failure {
     // `SpeechError`'s own text is fixed words and engine codes (tests/privacy.rs), so it is safe in a message.
@@ -204,14 +218,7 @@ pub fn run_helper(config: HelperConfig) {
                     Err(f) => send(&f.event()),
                 }
             }
-            // `e.classify()` and the column only: serde's own text can quote the value that did not fit.
-            Err(e) => send(
-                &Failure::new(
-                    SttErrorKind::BadRequest,
-                    &format!("bad request: {:?} at column {}", e.classify(), e.column()),
-                )
-                .event(),
-            ),
+            Err(e) => send(&bad_request(&e).event()),
         }
     }
 }
@@ -283,6 +290,23 @@ mod tests {
             let f = check_load(&load_of(id, SttModelKind::Whisper)).unwrap_err();
             assert_eq!(f.error, SttErrorKind::BadRequest, "{id}");
         }
+    }
+
+    #[test]
+    fn a_bad_request_does_not_echo_the_sentence_it_carried() {
+        let said = "remember to call my doctor about the rash on Tuesday";
+        // A string where a bool belongs: serde's own message quotes the string.
+        let line = format!(r#"{{"op":"load","gpu":"{said}"}}"#);
+        let e = voice_engine_protocol::stt::decode_request(&line).unwrap_err();
+        assert!(e.to_string().contains("doctor"), "the premise: {e}");
+        let f = bad_request(&e);
+        assert_eq!(f.error, SttErrorKind::BadRequest);
+        assert!(
+            !f.message.contains("doctor") && !f.message.contains("rash"),
+            "{}",
+            f.message
+        );
+        assert!(f.message.contains("bad request"), "{}", f.message);
     }
 
     #[test]
