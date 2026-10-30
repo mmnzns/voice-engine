@@ -20,7 +20,7 @@
 //! - `too_long` answers `transcribe` with too long (max 40 s); `missing` answers `load` with model missing;
 //!   `slow_load` takes 4 s to load, far past the tests' 600 ms stall limit (the client stops it at the limit).
 //!
-//! `devices` answers with the list `FAKE_DEVICES` describes (fake_support/devices.rs).
+//! `devices` answers with the list `FAKE_DEVICES` describes (fake_support/devices.rs); mode `no_devices` never answers it.
 //!
 //! When `FAKE_LOG` names a file, every `load` the helper receives is appended to it as one line, `[<mode>] load
 //! gpu=<flag>`, so a test can see what each helper (the card one and the processor one run in different modes) was
@@ -136,6 +136,7 @@ fn main() {
                 protocol,
             }),
             SttRequest::Cancel => {}
+            SttRequest::Devices if mode == "no_devices" => {}
             SttRequest::Devices => {
                 let list = fake_devices::list();
                 send(&SttEvent::Devices {

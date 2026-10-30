@@ -23,7 +23,9 @@
 
 use crate::error::EngineError;
 use crate::gpu_memory;
-use crate::llm::{CANCEL_GRACE, Limits, Outcome, POLL, START_RETRY_PAUSE, START_TRIES};
+use crate::llm::{
+    CANCEL_GRACE, DEVICES_LIMIT, Limits, Outcome, POLL, START_RETRY_PAUSE, START_TRIES,
+};
 use crate::process::{Recv, StartFailure, SttProcess, write_line};
 use std::path::PathBuf;
 use std::process::ChildStdin;
@@ -176,16 +178,22 @@ impl SttClient {
     /// if none runs and loads no model, so an app asks once at startup, before the first load.
     pub fn devices(&self) -> Result<DeviceList, EngineError> {
         let mut running = lock(&self.running);
-        self.exchange(&mut running, &SttRequest::Devices, false, &|ev| match ev {
-            SttEvent::Devices { devices, chosen } => Some((
-                DeviceList {
-                    devices: devices.clone(),
-                    chosen: *chosen,
-                },
-                None,
-            )),
-            _ => None,
-        })
+        self.exchange_within(
+            Some(DEVICES_LIMIT),
+            &mut running,
+            &SttRequest::Devices,
+            false,
+            &|ev| match ev {
+                SttEvent::Devices { devices, chosen } => Some((
+                    DeviceList {
+                        devices: devices.clone(),
+                        chosen: *chosen,
+                    },
+                    None,
+                )),
+                _ => None,
+            },
+        )
         .map(|o| o.value)
     }
 
@@ -256,6 +264,18 @@ impl SttClient {
         needs_model: bool,
         pick: &dyn Fn(&SttEvent) -> Option<Answer<T>>,
     ) -> Result<Outcome<T>, EngineError> {
+        self.exchange_within(None, running, request, needs_model, pick)
+    }
+
+    /// `exchange`, with the stall and total limits capped at `cap` when there is one.
+    fn exchange_within<T>(
+        &self,
+        cap: Option<Duration>,
+        running: &mut Option<Running>,
+        request: &SttRequest,
+        needs_model: bool,
+        pick: &dyn Fn(&SttEvent) -> Option<Answer<T>>,
+    ) -> Result<Outcome<T>, EngineError> {
         self.stop_asked.store(false, Ordering::SeqCst);
         let began = Instant::now();
         let mut fell_back = false;
@@ -281,7 +301,7 @@ impl SttClient {
                 }
                 other => other.clone(),
             };
-            let attempt = self.attempt(r, &sent, needs_model, began, pick);
+            let attempt = self.attempt(r, &sent, needs_model, began, cap, pick);
             *lock(&self.live_stdin) = None;
             match attempt {
                 Ok((value, spoken)) => {
@@ -356,6 +376,7 @@ impl SttClient {
         request: &SttRequest,
         needs_model: bool,
         began: Instant,
+        cap: Option<Duration>,
         pick: &dyn Fn(&SttEvent) -> Option<Answer<T>>,
     ) -> Result<Answer<T>, Attempt> {
         // A helper that exited while idle: say so before writing to it, so the call is not counted as a crash.
@@ -373,13 +394,13 @@ impl SttClient {
                 // The processor helper has no use for the app's wish for the card.
                 model = processor_only(model);
             }
-            self.run(r, &SttRequest::Load(model), began, &|ev| match ev {
+            self.run(r, &SttRequest::Load(model), began, cap, &|ev| match ev {
                 SttEvent::Loaded { backend, .. } => Some(((), Some(backend.clone()))),
                 _ => None,
             })?;
             r.loaded = true;
         }
-        self.run(r, request, began, pick)
+        self.run(r, request, began, cap, pick)
     }
 
     /// Writes one request and waits for its answer, holding it to the limits on every pass.
@@ -388,12 +409,17 @@ impl SttClient {
         r: &mut Running,
         request: &SttRequest,
         began: Instant,
+        cap: Option<Duration>,
         pick: &dyn Fn(&SttEvent) -> Option<Answer<T>>,
     ) -> Result<Answer<T>, Attempt> {
         if r.process.send(request).is_err() {
             return Err(Attempt::Died { delivered: false });
         }
-        let limits = lock(&self.config).limits.clone();
+        let mut limits = lock(&self.config).limits.clone();
+        if let Some(cap) = cap {
+            limits.stall = limits.stall.min(cap);
+            limits.total = limits.total.min(cap);
+        }
         let mut last_event = Instant::now();
         loop {
             // Checked on every pass, not only when the helper is quiet: a helper that keeps writing events while

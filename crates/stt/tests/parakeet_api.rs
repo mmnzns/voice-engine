@@ -633,6 +633,7 @@ fn rtx() -> Adapter {
         integrated: false,
         software: false,
         dedicated_mb: 16303,
+        vendor_id: 0x10DE,
     }
 }
 
