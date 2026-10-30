@@ -458,6 +458,31 @@ fn the_gpu_option_runs_on_the_processor_and_says_so_on_the_mac() {
 
 #[test]
 #[ignore]
+// A Windows build with `directml`: `gpu: true` runs on the card, or falls back to the processor and says so.
+#[cfg(feature = "directml")]
+fn the_gpu_option_uses_directml_or_reports_the_fallback() {
+    let _g = guard();
+    let b = engine(LoadOptions {
+        gpu: true,
+        threads: None,
+    })
+    .backend();
+    eprintln!("gpu: true -> {b:?}");
+    match b.backend.as_str() {
+        "directml" => assert!(!b.fell_back, "{b:?}"),
+        "cpu" => assert!(b.fell_back, "{b:?}"),
+        other => panic!("unexpected backend {other}: {b:?}"),
+    }
+    let b = engine(LoadOptions {
+        gpu: false,
+        threads: None,
+    })
+    .backend();
+    assert_eq!((b.backend.as_str(), b.fell_back), ("cpu", false), "{b:?}");
+}
+
+#[test]
+#[ignore]
 fn threads_follow_the_option_else_the_processor_rule() {
     need_clip!();
     let _g = guard();
@@ -486,7 +511,7 @@ fn threads_follow_the_option_else_the_processor_rule() {
             },
             1,
         ),
-        // no GPU path on the Mac: the processor's rule even with `gpu: true`
+        // no GPU path on the Mac: the processor's rule even with `gpu: true` (the card's rule when DirectML started, below)
         (
             LoadOptions {
                 gpu: true,
@@ -503,8 +528,15 @@ fn threads_follow_the_option_else_the_processor_rule() {
         ),
     ] {
         let mut e = engine(opts);
-        eprintln!("{opts:?}: {} threads", e.threads());
-        assert_eq!(e.threads(), want, "{opts:?}");
+        let backend = e.backend();
+        eprintln!("{opts:?}: {} threads on {backend:?}", e.threads());
+        // With the `directml` feature on a Windows PC with a card, `gpu: true` really runs on DirectML: its rule then.
+        let want = if opts.threads.is_none() && backend.backend == "directml" {
+            default_threads(ThreadKind::Gpu, logical)
+        } else {
+            want
+        };
+        assert_eq!(e.threads(), want, "{opts:?} on {backend:?}");
         // and a model built with that many threads decodes
         let t = e.transcribe(&clip, &ChunkOptions::default()).unwrap();
         assert!(lower_letters(&text_of(&t)).contains("speechengine"));
