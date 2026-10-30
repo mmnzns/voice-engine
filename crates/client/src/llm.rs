@@ -23,6 +23,9 @@ pub(crate) const CANCEL_GRACE: Duration = Duration::from_secs(2);
 /// several start at the same moment).
 pub(crate) const START_TRIES: u32 = 3;
 pub(crate) const START_RETRY_PAUSE: Duration = Duration::from_millis(300);
+/// How long `devices` waits for the helper's answer (stall and total alike): an app asks at startup, so a helper that
+/// never answers must not hold it for the general limits.
+pub(crate) const DEVICES_LIMIT: Duration = Duration::from_secs(10);
 /// How often a waiting request looks at its limits and at `cancel`.
 pub(crate) const POLL: Duration = Duration::from_millis(100);
 
@@ -186,13 +189,18 @@ impl LlmClient {
     /// hasn't failed (else of the processor helper, which lists the processor only). Starts the helper if none runs,
     /// so an app asks once at startup, before the first load.
     pub fn devices(&self) -> Result<DeviceList, EngineError> {
-        self.exchange(&Request::Devices, &mut |_| {}, &|ev| match ev {
-            Event::Devices { devices, chosen } => Some(DeviceList {
-                devices: devices.clone(),
-                chosen: *chosen,
-            }),
-            _ => None,
-        })
+        self.exchange_within(
+            Some(DEVICES_LIMIT),
+            &Request::Devices,
+            &mut |_| {},
+            &|ev| match ev {
+                Event::Devices { devices, chosen } => Some(DeviceList {
+                    devices: devices.clone(),
+                    chosen: *chosen,
+                }),
+                _ => None,
+            },
+        )
         .map(|o| o.value)
     }
 
@@ -262,6 +270,17 @@ impl LlmClient {
         progress: &mut dyn FnMut(&Event),
         pick: &dyn Fn(&Event) -> Option<T>,
     ) -> Result<Outcome<T>, EngineError> {
+        self.exchange_within(None, request, progress, pick)
+    }
+
+    /// `exchange`, with the stall and total limits capped at `cap` when there is one.
+    fn exchange_within<T>(
+        &self,
+        cap: Option<Duration>,
+        request: &Request,
+        progress: &mut dyn FnMut(&Event),
+        pick: &dyn Fn(&Event) -> Option<T>,
+    ) -> Result<Outcome<T>, EngineError> {
         let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
         let mut fell_back = false;
         let mut retried = false;
@@ -278,7 +297,7 @@ impl LlmClient {
             } else {
                 request.clone()
             };
-            let attempt = self.attempt(r, &sent, progress, pick);
+            let attempt = self.attempt(r, &sent, cap, progress, pick);
             *self.live_stdin.lock().unwrap_or_else(|e| e.into_inner()) = None;
             match attempt {
                 Ok((value, ran)) => {
@@ -331,18 +350,23 @@ impl LlmClient {
         &self,
         r: &mut Running,
         request: &Request,
+        cap: Option<Duration>,
         progress: &mut dyn FnMut(&Event),
         pick: &dyn Fn(&Event) -> Option<T>,
     ) -> Result<(T, Option<Backend>), Attempt> {
         if r.process.send(request).is_err() {
             return Err(Attempt::Died { answered: false });
         }
-        let limits = self
+        let mut limits = self
             .config
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .limits
             .clone();
+        if let Some(cap) = cap {
+            limits.stall = limits.stall.min(cap);
+            limits.total = limits.total.min(cap);
+        }
         let began = Instant::now();
         let mut last_event = Instant::now();
         let mut answered = false;

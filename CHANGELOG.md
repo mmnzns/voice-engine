@@ -6,6 +6,8 @@
   memory and a vendor other than Microsoft ("Microsoft Basic Display Adapter", Hyper-V and remote display adapters), and
   `devices()` leaves Microsoft adapters out; the protocol's `discrete_card` ignores a GPU that reports 0 MB (`pick`
   for Whisper and the AI is unchanged).
+- fix: `devices()` and `discrete_card()` (AI and speech clients) give up after 10 s with `TimedOut` instead of waiting the
+  120 s stall limit, so an app can ask at startup; README says to treat an `Err` as no card (#15).
 
 ## v0.2.1 (2026-10-30)
 

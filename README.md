@@ -186,6 +186,9 @@ For Whisper and the AI, the card helpers answer the same question: `SttClient::d
 `voice_engine_protocol::gpu::discrete_card` over the helper's ggml devices (Vulkan), and `devices()` gives the whole
 `DeviceList` for a settings screen or a check. The call starts the helper if it is not running and loads no model. If the
 card helper is missing or failed earlier, the client asks the processor helper, which sees the processor only: no.
+The call gives up after 10 s (`EngineError::TimedOut`, and the helper is stopped), whatever the general limits are, so an
+app can ask at startup without hanging. An app should treat an `Err` from `discrete_card()` as "no card": the card stays
+off by default. A timeout does not mark the card as failed.
 
 `DirectML.dll` comes from Windows (`C:\Windows\System32`, Windows 10 1903 and later): nothing ships with the app and the
 engine adds no file to the helpers' output. The helpers are built without DirectML and do not import it.

@@ -13,7 +13,7 @@
 //! `metal_die` is the Mac helper asked for as the card helper: `ready` says `metal` with no device, and it dies on
 //! `complete` like `gpu_die`.
 //!
-//! `devices` answers with the list `FAKE_DEVICES` describes (fake_support/devices.rs).
+//! `devices` answers with the list `FAKE_DEVICES` describes (fake_support/devices.rs); mode `no_devices` never answers it.
 //!
 //! When `FAKE_LOG` names a file, every `load`, `complete` and `embed` the helper receives is appended to it as one
 //! line, `[<mode>] <op> gpu=<flag>`, so a test can see what each helper (the card one and the processor one run in
@@ -143,6 +143,7 @@ fn main() {
                 });
             }
             Request::Cancel => {}
+            Request::Devices if mode == "no_devices" => {}
             Request::Devices => {
                 let list = fake_devices::list();
                 send(&Event::Devices {

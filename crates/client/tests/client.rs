@@ -554,3 +554,28 @@ fn a_pc_with_integrated_graphics_or_no_graphics_has_no_discrete_card() {
     assert_eq!(cpu.devices().unwrap().devices.len(), 1);
     assert_eq!(cpu.discrete_card().unwrap(), None);
 }
+
+#[test]
+fn devices_gives_up_after_its_own_short_limit_and_does_not_blame_the_card() {
+    let _t = turn();
+    let (d, st) = state();
+    let failures = d.path().join("gpu-failures");
+    let mut cfg = config("", &st);
+    // The general limits are the defaults (120 s stall): only the devices limit can stop this in time.
+    cfg.limits.stall = Duration::from_secs(120);
+    cfg.limits.total = Duration::from_secs(30 * 60);
+    cfg.gpu_helper = Some(fake());
+    cfg.gpu_env = vec![("FAKE_MODE".into(), "no_devices".into())];
+    cfg.gpu_failures = Some(failures.clone());
+    let client = LlmClient::new(cfg);
+    let began = Instant::now();
+    assert_eq!(client.discrete_card().unwrap_err(), EngineError::TimedOut);
+    // 10 s, with a margin: nowhere near the 120 s stall limit.
+    assert!(
+        began.elapsed() < Duration::from_secs(15),
+        "{:?}",
+        began.elapsed()
+    );
+    // A timeout is not the card failing: nothing is remembered.
+    assert!(!failures.exists());
+}
