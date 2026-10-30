@@ -176,9 +176,10 @@ let gpu_by_default = card.is_some();
 ```
 
 It lists the adapters through DXGI and DXCore only (no model is loaded, no helper started), so it is cheap at startup. The
-card is the discrete adapter with the most memory, never an integrated, software or Microsoft one (no driver, a VM) or one with no dedicated memory: Miguel's RTX 5070 Ti with its Radeon iGPU
-answers yes, a Ryzen with only the Radeon answers no. It is also the card DirectML runs Parakeet on (not Windows'
-adapter 0, which can be the iGPU), and `backend().device` names it. Without the `directml` feature, or off Windows,
+card is the discrete adapter with the most memory, never an integrated, software or Microsoft one (no driver, a VM) or
+one with no dedicated memory: Miguel's RTX 5070 Ti with its Radeon iGPU answers yes, a Ryzen with only the Radeon
+answers no. It is also the card DirectML runs Parakeet on (not Windows' adapter 0, which can be the iGPU), and
+`backend().device` names it. Without the `directml` feature, or off Windows,
 `discrete_card()` cannot see adapters and returns None: an app built that way asks a card helper instead.
 
 For Whisper and the AI, the card helpers answer the same question: `SttClient::discrete_card()` and

@@ -32,7 +32,8 @@ pub struct Adapter {
 const MICROSOFT_VENDOR: u32 = 0x1414;
 
 /// The adapter to run on: the discrete one with the most dedicated memory (the first listed wins a tie), never an
-/// integrated, software or Microsoft one, and never one with no dedicated memory. None: DirectML is not tried and the model runs on the processor.
+/// integrated, software or Microsoft one, and never one with no dedicated memory. None: DirectML is not tried and the
+/// model runs on the processor.
 pub fn discrete(adapters: &[Adapter]) -> Option<&Adapter> {
     adapters
         .iter()
