@@ -356,6 +356,24 @@ voice-engine-stt      = { path = "C:/Dev/voice-engine/crates/stt" }
 voice-engine-models   = { path = "C:/Dev/voice-engine/crates/models" }
 ```
 
+## Benchmarks
+
+Speed on real models on an M3 Pro with 18 GB (Whisper Large Turbo on Metal 19.9x real time, Whisper Base and Parakeet
+Ultra on the processor for a 29 s clip, a 50-word cleanup with Qwen3.5 4B, Granite 4.2 3B and Qwen3.5 9B), the bars each
+one was held against, and what was not measured: [`docs/bench-2026-10-29.md`](docs/bench-2026-10-29.md). Run them on your
+own computer (they print times, sizes and counts, never text; always `--release`, the models must be on the computer):
+
+```text
+cargo run --release -p voice-engine-stt --example bench                       # `-- sweep` adds other thread counts
+cargo run --release -p voice-engine-client --example bench_llm                # needs: cargo build --release -p voice-engine-llm
+cargo run --release -p voice-engine-models --example download_proof           # downloads whisper-base and whisper-tiny
+```
+
+`bench` reads `whisper-turbo` and `parakeet-ultra` from `$VOICE_ENGINE_TEST_MODELS` (default Talaan's models folder) and
+`whisper-base` from the shared folder, and needs the macOS `say` command for its clip. `bench_llm` takes catalog ids
+(default `qwen3.5-4b` and `granite-4.2-3b`) and finds the helper at `$VOICE_ENGINE_TEST_HELPER` or
+`target/release/voice-engine-llm`. `download_proof` writes into the real shared model folder.
+
 ## Which app uses which tag
 
 | App | Engine tag |

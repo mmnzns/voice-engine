@@ -2,6 +2,16 @@
 
 ## Unreleased (v0.2.0)
 
+- bench: speed numbers on real models, and the downloader proved against Hugging Face, in `docs/bench-2026-10-29.md`.
+  New examples `voice-engine-stt` `bench` (load time, decode time and real-time factor for a 29 s clip, next to the apps'
+  bars), `voice-engine-client` `bench_llm` (a 50-word cleanup through `LlmClient` and the real helper) and
+  `voice-engine-models` `download_proof` (`SharedStore::download` against the real network, a cancel at half and the
+  resume). On an M3 Pro, 18 GB: Whisper Large Turbo on Metal 19.9x (the bar was about 25x, missed), Whisper Base on the
+  processor 0.79 s for 29 s (0.72 s with 6 threads; the bar was 0.50 s, missed), Parakeet Ultra on the processor 0.49 s
+  (0.44 s with 12 threads; the bar was 0.43 s, missed by 0.01 s). `whisper-base` downloaded at 67.6 MB/s and both files
+  matched the catalog's sha256; the cancelled `whisper-tiny` was `Partial { cancelled: true }`, then resumed to
+  `Installed`. The AI helper has no processor mode on the Mac: `gpu: false` still runs on Metal. Nothing in the engine
+  changed.
 - build: the native libraries have a fixed CPU baseline. `.cargo/config.toml` sets `GGML_NATIVE=OFF`, the x86 baseline
   `GGML_AVX/AVX2/FMA/F16C/BMI2=ON` (Intel Haswell and AMD Excavator, 2013 and 2015, and newer) and
   `MACOSX_DEPLOYMENT_TARGET=11.0`, and passes `-C target-feature=+avx2,+fma,+f16c,+bmi2` for `x86_64-pc-windows-msvc`.
