@@ -2,6 +2,21 @@
 
 ## Unreleased (v0.2.0)
 
+- llm: `gpu: false` now means the processor on the Mac too. Before, the helper put every layer on Metal whenever it had
+  not chosen a Vulkan device, so a `load`, `complete` or `embed` with `gpu: false` still ran on Metal and the helper
+  said `metal` (found by the benchmark of 2026-10-29); the client's fall back to the processor was meaningless on a
+  Mac, where both helpers are the same binary. Now `gpu: false` puts no layer on any graphics device, in a Metal build
+  and a Vulkan build alike, and keeps the KV cache and the big batches off it too; `gpu: true` is as before. Where a
+  request runs is part of what decides whether the loaded model can be reused: a model loaded for `gpu: true` is
+  loaded again for a `gpu: false` request (and the other way round), which is why `loaded.seconds` and
+  `done.load_seconds` are above 0 on the switch. `Reply` and `embedded` gain `backend` (the same `backend`, `device`
+  and `vram_mb` as `ready` and `loaded`, absent from an older helper): `cpu` for the processor, `metal` or `vulkan`
+  (with the device) for the card, said per request instead of once at start. `LlmClient`'s `Outcome::backend` now
+  uses it, so a request with `gpu: false` says `cpu` in a helper that started on Metal; from an older helper it keeps
+  what `ready` said. Protocol stays 2 (new fields have defaults). Measured on an M3 Pro with Qwen3.5 4B: 14-token
+  cleanup 0.52 s on Metal, 1.02 s on the processor, same text; 128 tokens 3.3 s against 5.3 s (38.6 against 24.1 tokens
+  per second), different text after 48 bytes. Processor rows for Qwen3.5 4B and Granite 4.2 3B are in
+  `docs/bench-2026-10-29.md`. The Vulkan build was not compiled here (no Vulkan SDK).
 - catalog: `keeps_fillers` is measured for `whisper-turbo` and `parakeet-ultra`: `Some(true)` for both (every other
   model stays `None`). New ignored test `crates/stt/tests/real_fillers.rs`: 7 sentences with 9 spoken fillers (um, uh,
   hmm, like) in three macOS voices, in `Timing::Words`, with `keep_fillers` false and true. Both models wrote 24 of the
@@ -17,8 +32,8 @@
   processor 0.79 s for 29 s (0.72 s with 6 threads; the bar was 0.50 s, missed), Parakeet Ultra on the processor 0.49 s
   (0.44 s with 12 threads; the bar was 0.43 s, missed by 0.01 s). `whisper-base` downloaded at 67.6 MB/s and both files
   matched the catalog's sha256; the cancelled `whisper-tiny` was `Partial { cancelled: true }`, then resumed to
-  `Installed`. The AI helper has no processor mode on the Mac: `gpu: false` still runs on Metal. Nothing in the engine
-  changed.
+  `Installed`. The AI helper had no processor mode on the Mac, `gpu: false` still ran on Metal (fixed in the entry
+  above). Nothing in the engine changed in this entry.
 - build: the native libraries have a fixed CPU baseline. `.cargo/config.toml` sets `GGML_NATIVE=OFF`, the x86 baseline
   `GGML_AVX/AVX2/FMA/F16C/BMI2=ON` (Intel Haswell and AMD Excavator, 2013 and 2015, and newer) and
   `MACOSX_DEPLOYMENT_TARGET=11.0`, and passes `-C target-feature=+avx2,+fma,+f16c,+bmi2` for `x86_64-pc-windows-msvc`.

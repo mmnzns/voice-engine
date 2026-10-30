@@ -322,3 +322,56 @@ fn a_helper_that_keeps_streaming_still_hits_the_total_limit() {
     assert_eq!(e, EngineError::TimedOut);
     assert!(began.elapsed() < Duration::from_secs(8));
 }
+
+#[test]
+fn every_outcome_says_where_that_request_ran_not_where_the_helper_started() {
+    let _t = turn();
+    let (_d, st) = state();
+    // The Mac helper says `metal` when it starts, and per request `cpu` for `gpu: false`.
+    let client = LlmClient::new(config("per_request", &st));
+    let on_card = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(on_card.backend.backend, "metal");
+    let mut c = completion();
+    c.gpu = false;
+    assert_eq!(
+        client.complete(c, &mut |_| {}).unwrap().backend.backend,
+        "cpu"
+    );
+    assert_eq!(
+        client
+            .load("/m.gguf", 512, false, &mut |_| {})
+            .unwrap()
+            .backend
+            .backend,
+        "cpu"
+    );
+    assert_eq!(
+        client
+            .load("/m.gguf", 512, true, &mut |_| {})
+            .unwrap()
+            .backend
+            .backend,
+        "metal"
+    );
+    let embed = |gpu| voice_engine_protocol::Embedding {
+        model_path: "/e.gguf".into(),
+        texts: vec!["a".into()],
+        gpu,
+    };
+    assert_eq!(client.embed(embed(false)).unwrap().backend.backend, "cpu");
+    assert_eq!(client.embed(embed(true)).unwrap().backend.backend, "metal");
+}
+
+#[test]
+fn a_helper_that_does_not_say_where_a_reply_ran_is_taken_at_its_start() {
+    let _t = turn();
+    let (d, st) = state();
+    // An older helper: replies carry no backend, so the outcome keeps what `ready` said (here a Vulkan card).
+    let client = LlmClient::new(with_gpu(
+        config("", &st),
+        "gpu_ok",
+        &d.path().join("gpu.txt"),
+    ));
+    let out = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(out.backend.backend, "vulkan");
+}

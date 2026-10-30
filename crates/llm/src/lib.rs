@@ -7,7 +7,9 @@
 //! Windows ships two builds: a processor-only one and a Vulkan one (`--features vulkan`), which the app starts only
 //! when System32 has a Vulkan loader. The GPU build uses one device, the discrete GPU with the most memory
 //! (`voice_engine_protocol::gpu::pick`), never splits a model across devices, and lets llama.cpp fit as many layers
-//! as that GPU's memory allows (`fit_params`). The Mac build: Metal, every layer.
+//! as that GPU's memory allows (`fit_params`). The Mac build: Metal, every layer. In every build a request with
+//! `gpu: false` runs on the processor, with no layer on any graphics device, and a model is loaded again when a
+//! request asks for the other place (`model::place`, `model::Key`).
 
 mod failure;
 mod generate;
@@ -18,7 +20,7 @@ mod think;
 
 use failure::Failure;
 use generate::{EMBED_MAX_TOKENS, complete, embed};
-use model::{Loaded, Target};
+use model::{Loaded, Place, Target, place_here};
 
 use llama_cpp_2::llama_backend::LlamaBackend;
 use std::io::{BufRead, Write};
@@ -79,19 +81,21 @@ fn choose(devices: &[Device]) -> Option<Device> {
     pick(devices).cloned()
 }
 
-fn backend(gpu: Option<&Device>) -> Backend {
-    match gpu {
-        Some(d) => Backend {
+/// What a request's model runs on, said truthfully: `cpu` for the processor (every request with `gpu: false`), `metal`
+/// on the Mac's card, and the device for a Vulkan card.
+fn backend(place: Place) -> Backend {
+    match place {
+        Place::Gpu(d) => Backend {
             backend: d.backend.to_ascii_lowercase(),
             device: Some(d.description.clone()),
             vram_mb: d.memory_mb,
         },
-        None if cfg!(target_os = "macos") => Backend {
+        Place::Metal => Backend {
             backend: "metal".into(),
             device: None,
             vram_mb: 0,
         },
-        None => Backend::cpu(),
+        Place::Processor => Backend::cpu(),
     }
 }
 
@@ -144,7 +148,8 @@ pub fn run(config: HelperConfig) {
             // A cancel with nothing running: the reply it meant has already finished.
             Ok(Request::Cancel) => {}
             Ok(Request::Ping) => send(&Event::Ready {
-                backend: backend(gpu.as_ref()),
+                // What a request that asks for the card (the default) gets.
+                backend: backend(place_here(true, gpu.as_ref())),
                 protocol: PROTOCOL_VERSION,
             }),
             Ok(Request::Devices) => send(&Event::Devices {
@@ -155,7 +160,7 @@ pub fn run(config: HelperConfig) {
                 fail_on_purpose(&config);
                 let target = Target {
                     path: &c.model_path,
-                    gpu: gpu.as_ref().filter(|_| c.gpu),
+                    place: place_here(c.gpu, gpu.as_ref()),
                     n_ctx: c.n_ctx,
                 };
                 match complete(&llama, &mut loaded, target, &c, &mut inbox) {
@@ -166,14 +171,14 @@ pub fn run(config: HelperConfig) {
             Ok(Request::Load(l)) => {
                 let target = Target {
                     path: &l.model_path,
-                    gpu: gpu.as_ref().filter(|_| l.gpu),
+                    place: place_here(l.gpu, gpu.as_ref()),
                     n_ctx: l.n_ctx,
                 };
                 match model::load(&llama, &mut loaded, target) {
                     Ok((model, seconds)) => send(&Event::Loaded {
                         seconds,
                         n_ctx_train: model.n_ctx_train(),
-                        backend: backend(target.gpu),
+                        backend: backend(target.place),
                     }),
                     Err(f) => send(&f.event()),
                 }
@@ -190,11 +195,11 @@ pub fn run(config: HelperConfig) {
                 fail_on_purpose(&config);
                 let target = Target {
                     path: &e.model_path,
-                    gpu: gpu.as_ref().filter(|_| e.gpu),
+                    place: place_here(e.gpu, gpu.as_ref()),
                     n_ctx: EMBED_MAX_TOKENS as u32,
                 };
                 match embed(&llama, &mut loaded, target, &e, &mut inbox) {
-                    Ok(vectors) => send(&Event::Embedded { vectors }),
+                    Ok((vectors, backend)) => send(&Event::Embedded { vectors, backend }),
                     Err(f) => send(&f.event()),
                 }
             }
@@ -223,7 +228,7 @@ mod tests {
         if !cfg!(feature = "vulkan") {
             assert_eq!(choose(&all), None);
             if cfg!(not(target_os = "macos")) {
-                assert_eq!(backend(None), Backend::cpu());
+                assert_eq!(backend(place_here(true, None)), Backend::cpu());
             }
         }
     }
@@ -243,6 +248,37 @@ mod tests {
     }
 
     #[test]
+    fn the_backend_says_where_the_model_really_is() {
+        let d = Device {
+            index: 0,
+            name: "Vulkan0".into(),
+            description: "Test card".into(),
+            backend: "Vulkan".into(),
+            kind: DeviceKind::Gpu,
+            memory_mb: 4096,
+        };
+        assert_eq!(backend(Place::Processor), Backend::cpu());
+        assert!(!backend(Place::Processor).on_gpu());
+        let metal = backend(Place::Metal);
+        assert_eq!(
+            (metal.backend.as_str(), metal.device, metal.vram_mb),
+            ("metal", None, 0)
+        );
+        assert_eq!(backend(Place::Gpu(&d)).backend, "vulkan");
+        // Through this build's rules: `gpu: false` is `cpu` everywhere, with or without a chosen device.
+        for chosen in [None, Some(&d)] {
+            assert_eq!(backend(place_here(false, chosen)), Backend::cpu());
+        }
+        let wanted = if cfg!(target_os = "macos") && !cfg!(feature = "vulkan") {
+            "metal"
+        } else {
+            "cpu"
+        };
+        assert_eq!(backend(place_here(true, None)).backend, wanted);
+        assert_eq!(backend(place_here(true, Some(&d))).backend, "vulkan");
+    }
+
+    #[test]
     fn the_gpu_backend_names_the_device() {
         let d = Device {
             index: 1,
@@ -252,7 +288,7 @@ mod tests {
             kind: DeviceKind::Gpu,
             memory_mb: 16303,
         };
-        let b = backend(Some(&d));
+        let b = backend(Place::Gpu(&d));
         assert_eq!(
             (b.backend.as_str(), b.device.as_deref(), b.vram_mb),
             ("vulkan", Some("NVIDIA GeForce RTX 5070 Ti"), 16303)

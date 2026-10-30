@@ -66,7 +66,9 @@ pub struct LlmConfig {
     pub limits: Limits,
 }
 
-/// A successful call: the value, where it ran, and whether the graphics card failed during this call and the
+/// A successful call: the value, where it ran (what the helper said for this request when it said anything: a
+/// request with `gpu: false` runs on the processor in a helper that started on Metal, and an older helper that says
+/// nothing counts as what it said when it started), and whether the graphics card failed during this call and the
 /// processor did the work instead (the app says so once and stops asking for the card).
 #[derive(Debug, Clone)]
 pub struct Outcome<T> {
@@ -159,7 +161,7 @@ impl LlmClient {
 
     pub fn embed(&self, embedding: Embedding) -> Result<Outcome<Vec<Vec<f32>>>, EngineError> {
         self.exchange(&Request::Embed(embedding), &mut |_| {}, &|ev| match ev {
-            Event::Embedded { vectors } => Some(vectors.clone()),
+            Event::Embedded { vectors, .. } => Some(vectors.clone()),
             _ => None,
         })
     }
@@ -250,10 +252,10 @@ impl LlmClient {
             let attempt = self.attempt(r, request, progress, pick);
             *self.live_stdin.lock().unwrap_or_else(|e| e.into_inner()) = None;
             match attempt {
-                Ok(value) => {
+                Ok((value, ran)) => {
                     return Ok(Outcome {
                         value,
-                        backend: r.backend.clone(),
+                        backend: ran.unwrap_or_else(|| r.backend.clone()),
                         fell_back,
                     });
                 }
@@ -302,7 +304,7 @@ impl LlmClient {
         request: &Request,
         progress: &mut dyn FnMut(&Event),
         pick: &dyn Fn(&Event) -> Option<T>,
-    ) -> Result<T, Attempt> {
+    ) -> Result<(T, Option<Backend>), Attempt> {
         if r.process.send(request).is_err() {
             return Err(Attempt::Died { answered: false });
         }
@@ -343,7 +345,7 @@ impl LlmClient {
                     answered = true;
                     last_event = Instant::now();
                     match pick(&ev) {
-                        Some(value) => return Ok(value),
+                        Some(value) => return Ok((value, ran_on(&ev))),
                         None => progress(&ev),
                     }
                 }
@@ -408,6 +410,17 @@ impl LlmClient {
         *self.cancel_asked.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
         let _ = write_line(&stdin, &encode(&Request::Cancel));
     }
+}
+
+/// Where the helper says the request that `ev` answers ran: `loaded`, `done` and `embedded` carry it. None for any
+/// other event, and for a helper from before replies said (an empty backend name).
+fn ran_on(ev: &Event) -> Option<Backend> {
+    let backend = match ev {
+        Event::Loaded { backend, .. } | Event::Embedded { backend, .. } => backend,
+        Event::Done(reply) => &reply.backend,
+        _ => return None,
+    };
+    (!backend.backend.is_empty()).then(|| backend.clone())
 }
 
 /// Starts the helper at `path` and tells it the idle policy. A helper that dies at startup is started again.

@@ -7,7 +7,9 @@
 //! request arrives); `oom` writes an out-of-memory message and dies on `complete`; `stall` never answers `complete`;
 //! `slow` writes progress until it gets `cancel`, then answers `cancelled`; `ignore_cancel` writes progress forever;
 //! `gpu_ok` reports a Vulkan GPU and works; `gpu_die` reports a GPU and dies on `complete`; `gpu_error` reports a GPU
-//! and answers `complete` with the graphics card failed.
+//! and answers `complete` with the graphics card failed; `per_request` is the Mac helper: `ready` says `metal`, and
+//! `loaded`, `done` and `embedded` say `metal` for a request with `gpu: true` and `cpu` for `gpu: false`. Every other
+//! mode answers like a helper from before replies said where they ran (no backend), so the client uses `ready`'s.
 
 use std::io::{BufRead, Write};
 use std::sync::mpsc;
@@ -39,7 +41,20 @@ fn main() {
     if mode == "die_at_start" || (mode == "die_at_start_twice" && bump(&state) < 2) {
         std::process::exit(138);
     }
-    let backend = if mode.starts_with("gpu") {
+    let metal = Backend {
+        backend: "metal".into(),
+        device: None,
+        vram_mb: 0,
+    };
+    // What a reply says for a request: the Mac helper's answer, or nothing (an older helper).
+    let says = |gpu: bool| match mode.as_str() {
+        "per_request" if gpu => metal.clone(),
+        "per_request" => Backend::cpu(),
+        _ => Backend::default(),
+    };
+    let backend = if mode == "per_request" {
+        metal.clone()
+    } else if mode.starts_with("gpu") {
         Backend {
             backend: "vulkan".into(),
             device: Some("Fake GPU".into()),
@@ -76,10 +91,14 @@ fn main() {
             Request::Configure(c) => send(&Event::Configured {
                 idle_secs: c.idle_secs,
             }),
-            Request::Load(_) => send(&Event::Loaded {
+            Request::Load(l) => send(&Event::Loaded {
                 seconds: 0.5,
                 n_ctx_train: 4096,
-                backend: backend.clone(),
+                backend: if mode == "per_request" {
+                    says(l.gpu)
+                } else {
+                    backend.clone()
+                },
             }),
             Request::Unload => send(&Event::Unloaded),
             Request::Inspect(_) => send(&Event::Inspected(Inspection {
@@ -88,11 +107,12 @@ fn main() {
                 n_ctx_train: 4096,
                 architecture: "fake".into(),
             })),
-            Request::Embed(_) => send(&Event::Embedded {
+            Request::Embed(e) => send(&Event::Embedded {
                 vectors: vec![vec![1.0]],
+                backend: says(e.gpu),
             }),
             Request::Cancel | Request::Devices => {}
-            Request::Complete(_) => match mode.as_str() {
+            Request::Complete(c) => match mode.as_str() {
                 "die_on_complete" | "gpu_die" => {
                     send(&Event::Progress {
                         phase: Phase::Loading,
@@ -105,7 +125,7 @@ fn main() {
                     if bump(&state) == 0 {
                         std::process::exit(139);
                     }
-                    answer();
+                    answer(says(c.gpu));
                 }
                 "oom" => {
                     eprintln!("GGML_ASSERT: out of memory");
@@ -143,13 +163,13 @@ fn main() {
                     message: "the graphics card failed".into(),
                     error: ErrorKind::GpuFailed { fell_back: false },
                 }),
-                _ => answer(),
+                _ => answer(says(c.gpu)),
             },
         }
     }
 }
 
-fn answer() {
+fn answer(backend: Backend) {
     send(&Event::Progress {
         phase: Phase::Writing,
         done: 1,
@@ -164,5 +184,6 @@ fn answer() {
         thinking_tokens: 0,
         load_seconds: 0.0,
         thinking_text: None,
+        backend,
     }));
 }

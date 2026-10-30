@@ -14,9 +14,8 @@
 //! the time until the helper reported the whole prompt read; tok/s is output tokens over reply minus prompt.
 //! Models are run one at a time (each helper is stopped before the next starts).
 //!
-//! On the Mac the helper has no processor mode: `gpu: false` still puts every layer on Metal (`model_params` in
-//! `crates/llm/src/model.rs`: 999 layers unless built with `vulkan`), so both rows there are Metal. On Windows
-//! `gpu: false` is the processor.
+//! `gpu: false` is the processor on every system, so the second row of a model is the processor. `backend` is what the
+//! helper said for that request (`metal` or `cpu`), not what it said when it started.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;

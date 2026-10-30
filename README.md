@@ -28,6 +28,12 @@ Reply schemas: llama.cpp enforces structure (objects, required keys, `additional
 array sizes). It can't enforce every keyword (a `pattern` using `\d` is accepted as any string), so apps keep
 checking replies themselves.
 
+`gpu` in `load`, `complete` and `embed` is honoured on every system: `gpu: true` (the default) uses the card (Metal on the
+Mac, the chosen Vulkan device on Windows, as many layers as fit), `gpu: false` puts nothing on any card and runs on the
+processor. The place is part of what a loaded model is kept for: a request for the other place loads the model again
+(`loaded.seconds` and `done.load_seconds` are above 0). `loaded`, `done` and `embedded` say where the request ran
+(`backend`: `cpu`, `metal` or `vulkan`); `LlmClient` returns it in `Outcome::backend`.
+
 On a Mac, starting several helpers at once can make one die with SIGBUS inside Apple's Metal shader cache; restart a
 helper that dies at startup.
 

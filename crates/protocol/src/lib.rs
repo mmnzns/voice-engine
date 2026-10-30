@@ -108,10 +108,11 @@ pub struct Completion {
     pub seed: Option<u32>,
 }
 
-/// What a helper runs on, reported when it says it's ready.
+/// What a helper runs on, reported when it says it's ready, when it loads a model and with every reply: it is per
+/// request, because a request with `gpu: false` runs on the processor in a helper that also has a graphics card.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Backend {
-    /// `vulkan` when a GPU was chosen, `metal` on the Mac, `cpu` otherwise.
+    /// `vulkan` when a GPU was chosen, `metal` on the Mac when the model is on it, `cpu` otherwise.
     #[serde(default)]
     pub backend: String,
     /// The chosen GPU's name ("NVIDIA GeForce RTX 5070 Ti"); None on the processor.
@@ -156,6 +157,9 @@ pub enum Event {
     /// One vector per input text, in order.
     Embedded {
         vectors: Vec<Vec<f32>>,
+        /// Where the vectors were made, as in `Reply::backend`.
+        #[serde(flatten, default)]
+        backend: Backend,
     },
     /// Every device ggml sees, and the index of the one the helper uses (None: the processor).
     Devices {
@@ -252,6 +256,11 @@ pub struct Reply {
     /// The thinking, when thinking was on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_text: Option<String>,
+    /// Where this reply was made: `cpu` when the model is on the processor (a request with `gpu: false` always is),
+    /// `metal` or `vulkan` (with the device) when it is on the graphics card. An older helper says nothing (an empty
+    /// `backend`), and the app uses what `ready` said.
+    #[serde(flatten, default)]
+    pub backend: Backend,
 }
 
 /// One message as one line (no newline inside: JSON escapes the ones in the text).
@@ -367,6 +376,38 @@ mod tests {
     }
 
     #[test]
+    fn a_reply_and_embedded_say_where_they_ran_and_an_old_one_says_nothing() {
+        let old: Event = serde_json::from_str(
+            r#"{"event":"done","text":"x","prompt_tokens":1,"output_tokens":1,"seconds":0.1,"truncated":false}"#,
+        )
+        .unwrap();
+        let Event::Done(reply) = old else { panic!() };
+        assert_eq!(reply.backend, Backend::default());
+        let old: Event = serde_json::from_str(r#"{"event":"embedded","vectors":[[1.0]]}"#).unwrap();
+        assert_eq!(
+            old,
+            Event::Embedded {
+                vectors: vec![vec![1.0]],
+                backend: Backend::default()
+            }
+        );
+        let line = encode(&Event::Embedded {
+            vectors: vec![vec![1.0]],
+            backend: Backend::cpu(),
+        });
+        assert_eq!(
+            line,
+            r#"{"event":"embedded","vectors":[[1.0]],"backend":"cpu","vram_mb":0}"#
+        );
+        let new: Event = serde_json::from_str(
+            r#"{"event":"done","text":"x","prompt_tokens":1,"output_tokens":1,"seconds":0.1,"truncated":false,"backend":"metal","vram_mb":0}"#,
+        )
+        .unwrap();
+        let Event::Done(reply) = new else { panic!() };
+        assert_eq!(reply.backend.backend, "metal");
+    }
+
+    #[test]
     fn ready_carries_the_protocol_version() {
         let line = encode(&Event::Ready {
             backend: Backend::cpu(),
@@ -449,6 +490,7 @@ mod tests {
                 thinking_tokens: 0,
                 load_seconds: 0.0,
                 thinking_text: None,
+                backend: Backend::cpu(),
             }),
             Event::Error {
                 message: "the AI model failed".into(),
@@ -604,6 +646,7 @@ mod tests {
                 thinking_tokens: 40,
                 load_seconds: 0.0,
                 thinking_text: Some("hmm".into()),
+                backend: Backend::cpu(),
             }),
         ];
         for ev in events {

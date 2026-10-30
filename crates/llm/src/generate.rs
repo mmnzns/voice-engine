@@ -13,7 +13,7 @@ use llama_cpp_2::model::{LlamaChatMessage, LlamaModel};
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 use std::time::Instant;
-use voice_engine_protocol::{Completion, Embedding, ErrorKind, Event, Phase, Reply};
+use voice_engine_protocol::{Backend, Completion, Embedding, ErrorKind, Event, Phase, Reply};
 
 const BATCH: usize = 512;
 
@@ -26,9 +26,9 @@ pub(crate) fn embed(
     t: Target,
     e: &Embedding,
     inbox: &mut Inbox,
-) -> Result<Vec<Vec<f32>>, Failure> {
+) -> Result<(Vec<Vec<f32>>, Backend), Failure> {
     let (model, _) = load(llama, loaded, t)?;
-    let ctx_params = context_params(EMBED_MAX_TOKENS as u32, t.gpu.is_some())
+    let ctx_params = context_params(EMBED_MAX_TOKENS as u32, t.place.on_card())
         .with_n_batch(EMBED_MAX_TOKENS as u32)
         .with_n_ubatch(EMBED_MAX_TOKENS as u32)
         .with_embeddings(true)
@@ -62,7 +62,7 @@ pub(crate) fn embed(
         let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-12);
         out.push(v.iter().map(|x| x / norm).collect());
     }
-    Ok(out)
+    Ok((out, crate::backend(t.place)))
 }
 
 pub(crate) fn complete(
@@ -135,7 +135,7 @@ pub(crate) fn complete(
         answer_sampler.take().expect("built above")
     };
 
-    let ctx_params = context_params(c.n_ctx, t.gpu.is_some())
+    let ctx_params = context_params(c.n_ctx, t.place.on_card())
         .with_n_batch(BATCH as u32)
         .with_n_ubatch(BATCH as u32);
     let mut ctx = model
@@ -251,6 +251,7 @@ pub(crate) fn complete(
         thinking_tokens: thought,
         load_seconds,
         thinking_text,
+        backend: crate::backend(t.place),
     })
 }
 
@@ -304,6 +305,7 @@ fn sampling_chain(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::Place;
 
     #[test]
     fn ensayo_a_missing_model_file_is_a_plain_error_not_a_crash() {
@@ -329,7 +331,7 @@ mod tests {
         };
         let target = Target {
             path: &c.model_path,
-            gpu: None,
+            place: Place::Processor,
             n_ctx: c.n_ctx,
         };
         let e = complete(&llama, &mut loaded, target, &c, &mut inbox).unwrap_err();

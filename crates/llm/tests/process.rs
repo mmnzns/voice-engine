@@ -259,3 +259,49 @@ fn inspect_a_missing_file_says_model_missing() {
     let _ = wait_exit(&mut child, Duration::from_secs(20));
     let _ = child.kill();
 }
+
+/// The default request asks for the card, so `ready` names what that gets: Metal on the Mac, the processor on a build
+/// with no card (the Windows processor build and Linux). A Vulkan build names its device, which CI cannot have.
+#[test]
+fn ready_names_what_a_request_for_the_card_gets() {
+    let _turn = one_at_a_time();
+    let mut child = spawn(None);
+    let mut stdin = child.stdin.take().unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    let line = ask(&mut stdin, &mut out, r#"{"op":"ping"}"#);
+    let ev = voice_engine_protocol::decode_event(&line).unwrap_or_else(|e| panic!("{e}: {line}"));
+    let voice_engine_protocol::Event::Ready { backend, .. } = ev else {
+        panic!("not ready: {line}")
+    };
+    if cfg!(target_os = "macos") {
+        assert_eq!((backend.backend.as_str(), backend.device), ("metal", None));
+    } else {
+        assert_eq!(backend, voice_engine_protocol::Backend::cpu());
+    }
+    drop(stdin);
+    let _ = wait_exit(&mut child, Duration::from_secs(20));
+    let _ = child.kill();
+}
+
+/// A request that asks for the processor is answered the same way as one that asks for the card when the file is
+/// missing: the place is not decided before the file is looked for, and neither is a crash.
+#[test]
+fn a_missing_file_says_model_missing_whichever_place_was_asked_for() {
+    let _turn = one_at_a_time();
+    let mut child = spawn(None);
+    let mut stdin = child.stdin.take().unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap());
+    for gpu in ["true", "false", "true"] {
+        let request = format!(
+            r#"{{"op":"load","model_path":"/nonexistent/m.gguf","n_ctx":512,"gpu":{gpu}}}"#
+        );
+        let line = ask(&mut stdin, &mut out, &request);
+        assert!(
+            line.contains(r#""kind":"model_missing""#),
+            "gpu={gpu}: {line}"
+        );
+    }
+    drop(stdin);
+    let _ = wait_exit(&mut child, Duration::from_secs(20));
+    let _ = child.kill();
+}

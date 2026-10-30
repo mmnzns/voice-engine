@@ -247,3 +247,159 @@ fn every_app_schema_gives_a_reply_with_its_required_keys() {
         }
     }
 }
+
+/// `gpu: false` is the processor on the Mac too, and a model is reloaded when a request asks for the other place.
+/// Prints the numbers (run with `--nocapture`).
+#[test]
+#[ignore]
+fn gpu_false_runs_on_the_processor_and_switching_reloads_the_model() {
+    let mut h = Helper::start();
+    let load = |h: &mut Helper, gpu: bool| {
+        h.send(
+            &serde_json::json!({"op": "load", "model_path": model(), "n_ctx": 8192, "gpu": gpu}),
+        );
+        match h.answer() {
+            Event::Loaded {
+                seconds, backend, ..
+            } => (seconds, backend),
+            other => panic!("expected loaded, got {other:?}"),
+        }
+    };
+    let ask = |h: &mut Helper, gpu: bool| {
+        h.send(&complete(
+            DICTATION,
+            serde_json::json!({"gpu": gpu, "max_tokens": 80}),
+        ));
+        done(h.answer())
+    };
+    let card = if cfg!(target_os = "macos") {
+        "metal"
+    } else {
+        "cpu"
+    };
+
+    // The card first.
+    let (seconds, backend) = load(&mut h, true);
+    assert!(seconds > 0.0, "first load");
+    assert_eq!((backend.backend.as_str(), backend.vram_mb), (card, 0));
+    let _warm = ask(&mut h, true);
+    let on_card = ask(&mut h, true);
+    assert_eq!(on_card.load_seconds, 0.0, "same place, no reload");
+    assert_eq!(on_card.backend.backend, card);
+
+    // The same request with `gpu: false`: the model is loaded again, on the processor.
+    let on_cpu_first = ask(&mut h, false);
+    assert!(
+        on_cpu_first.load_seconds > 0.0,
+        "gpu true then false must reload: {on_cpu_first:?}"
+    );
+    assert_eq!(on_cpu_first.backend, voice_engine_protocol::Backend::cpu());
+    let on_cpu = ask(&mut h, false);
+    assert_eq!(on_cpu.load_seconds, 0.0, "same place, no reload");
+    assert_eq!(on_cpu.backend, voice_engine_protocol::Backend::cpu());
+    // `load` says the same: nothing to load, and where it is.
+    let (seconds, backend) = load(&mut h, false);
+    assert_eq!((seconds, backend.backend.as_str()), (0.0, "cpu"));
+
+    // And back: gpu false then true reloads on the card.
+    let (seconds, backend) = load(&mut h, true);
+    assert!(seconds > 0.0, "gpu false then true must reload");
+    assert_eq!(backend.backend, card);
+    let back = ask(&mut h, true);
+    assert_eq!(
+        (back.load_seconds, back.backend.backend.as_str()),
+        (0.0, card)
+    );
+
+    // A longer reply for the speed: the cleanup above is 14 tokens, mostly the prompt. The model is on the card now.
+    let essay = |h: &mut Helper, gpu: bool| {
+        h.send(&complete(
+            "Describe in 120 words how a lighthouse works.",
+            serde_json::json!({"gpu": gpu, "max_tokens": 128, "system": "You are a writer."}),
+        ));
+        done(h.answer())
+    };
+    let _ = essay(&mut h, true);
+    let long_card = essay(&mut h, true);
+    let long_cpu_first = essay(&mut h, false);
+    assert!(long_cpu_first.load_seconds > 0.0, "the switch reloads");
+    let long_cpu = essay(&mut h, false);
+    assert_eq!(long_cpu.load_seconds, 0.0);
+    assert_eq!(long_cpu.backend, voice_engine_protocol::Backend::cpu());
+    assert_eq!(long_card.backend.backend, card);
+
+    let writing = |r: &voice_engine_protocol::Reply| r.seconds - r.load_seconds;
+    let rate = |r: &voice_engine_protocol::Reply| r.output_tokens as f32 / writing(r);
+    let shared = long_card
+        .text
+        .bytes()
+        .zip(long_cpu.text.bytes())
+        .take_while(|(a, b)| a == b)
+        .count();
+    eprintln!(
+        "cleanup (14 tokens): card ({card}) {:.2} s ({:.1} tok/s), processor {:.2} s ({:.1} tok/s); the first processor \
+         request loaded the model in {:.2} s; same text card/processor {}, card/back on the card {}\n\
+         long reply ({} tokens): card {:.2} s ({:.1} tok/s), processor {:.2} s ({:.1} tok/s, {} tokens), \
+         the first processor request loaded in {:.2} s; same text {} (the first {shared} of {} bytes agree)",
+        writing(&on_card),
+        rate(&on_card),
+        writing(&on_cpu),
+        rate(&on_cpu),
+        on_cpu_first.load_seconds,
+        on_card.text == on_cpu.text,
+        on_card.text == back.text,
+        long_card.output_tokens,
+        writing(&long_card),
+        rate(&long_card),
+        writing(&long_cpu),
+        rate(&long_cpu),
+        long_cpu.output_tokens,
+        long_cpu_first.load_seconds,
+        long_card.text == long_cpu.text,
+        long_card.text.len(),
+    );
+    assert_eq!(on_card.text, back.text, "same place, same text");
+    assert_eq!(
+        on_card.text, on_cpu.text,
+        "temperature 0 on the card and on the processor gave different text"
+    );
+    if cfg!(target_os = "macos") {
+        assert!(
+            writing(&long_cpu) > 1.2 * writing(&long_card),
+            "the processor must be measurably slower: {:.2} s against {:.2} s",
+            writing(&long_cpu),
+            writing(&long_card)
+        );
+    }
+}
+
+/// Asking for the processor first loads it there, and the card request after it reloads.
+#[test]
+#[ignore]
+fn a_load_with_gpu_false_comes_first_and_the_card_reloads_it() {
+    let mut h = Helper::start();
+    h.send(&serde_json::json!({"op": "load", "model_path": model(), "n_ctx": 8192, "gpu": false}));
+    let Event::Loaded {
+        seconds, backend, ..
+    } = h.answer()
+    else {
+        panic!("expected loaded")
+    };
+    assert!(seconds > 0.0);
+    assert_eq!(backend, voice_engine_protocol::Backend::cpu());
+    h.send(&complete(DICTATION, serde_json::json!({"gpu": false})));
+    let r = done(h.answer());
+    assert_eq!((r.load_seconds, r.backend.backend.as_str()), (0.0, "cpu"));
+    // The default (a request that doesn't say) is the card.
+    h.send(&complete(DICTATION, serde_json::json!({})));
+    let r = done(h.answer());
+    assert!(r.load_seconds > 0.0, "the card request reloads: {r:?}");
+    assert_eq!(
+        r.backend.backend,
+        if cfg!(target_os = "macos") {
+            "metal"
+        } else {
+            "cpu"
+        }
+    );
+}

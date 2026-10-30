@@ -1,6 +1,6 @@
 //! The client with the real AI helper and a real model. Ignored by default; run on the Mac before a tag:
 //!   cargo build --release -p voice-engine-llm
-//!   VOICE_ENGINE_TEST_HELPER=target/release/voice-engine-llm \
+//!   VOICE_ENGINE_TEST_HELPER=$PWD/target/release/voice-engine-llm \
 //!   VOICE_ENGINE_TEST_LLM=".../qwen3.5-4b/Qwen3.5-4B-Q4_K_M.gguf" \
 //!   cargo test -p voice-engine-client --release --test real_helper -- --ignored --test-threads=1
 
@@ -91,5 +91,38 @@ fn a_missing_model_is_a_model_missing_error() {
             path: "/nonexistent/m.gguf".into()
         }
     );
+    c.shutdown();
+}
+
+/// Through the client: `gpu: false` is the processor on the Mac, the outcome says so (not what the helper said when
+/// it started), and going back to the card reloads.
+#[test]
+#[ignore]
+fn the_client_reports_the_processor_for_gpu_false_and_reloads_when_the_place_changes() {
+    let c = client();
+    let path = completion("", 1).model_path;
+    let loaded = c.load(&path, 4096, true, &mut |_| {}).unwrap();
+    assert!(loaded.value.seconds > 0.0);
+    assert_eq!(loaded.backend.backend, "metal");
+    let mut cpu = completion("um so lets meet thursday", 60);
+    cpu.gpu = false;
+    let on_cpu = c.complete(cpu.clone(), &mut |_| {}).unwrap();
+    assert_eq!(on_cpu.backend.backend, "cpu");
+    assert!(on_cpu.value.load_seconds > 0.0, "the switch reloaded");
+    let again = c.complete(cpu, &mut |_| {}).unwrap();
+    assert_eq!(
+        (again.backend.backend.as_str(), again.value.load_seconds),
+        ("cpu", 0.0)
+    );
+    let on_card = c
+        .complete(completion("um so lets meet thursday", 60), &mut |_| {})
+        .unwrap();
+    assert_eq!(on_card.backend.backend, "metal");
+    assert!(on_card.value.load_seconds > 0.0, "back to the card reloads");
+    assert_eq!(on_card.value.text, on_cpu.value.text);
+    // A load for the processor says cpu, and reloads.
+    let loaded = c.load(&path, 4096, false, &mut |_| {}).unwrap();
+    assert_eq!(loaded.backend.backend, "cpu");
+    assert!(loaded.value.seconds > 0.0);
     c.shutdown();
 }
