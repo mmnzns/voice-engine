@@ -38,6 +38,7 @@
 
 mod api;
 pub mod diarize;
+pub mod directml;
 mod helper;
 pub mod parakeet_engine;
 pub mod threads;
@@ -144,6 +145,22 @@ pub fn context_params(
     }
     p.flash_attn(flash_attn);
     p
+}
+
+/// The graphics adapters DirectML can use (backend "DirectML", `index` DXGI's adapter number). Empty unless this is a
+/// Windows build with the `directml` feature.
+pub fn directml_devices() -> Vec<Device> {
+    directml::devices(&directml::adapters())
+}
+
+/// Whether this PC has a discrete graphics card the engine would use, and which, as this build sees it: the Vulkan
+/// card in a build with `vulkan`, else the DirectML one in a build with `directml` (see
+/// `voice_engine_protocol::gpu::discrete_card`). An app that runs Whisper and the AI in helpers asks the helper
+/// instead (`SttClient::discrete_card`, `LlmClient::discrete_card`).
+pub fn discrete_card() -> Option<Device> {
+    let mut all = devices();
+    all.extend(directml_devices());
+    voice_engine_protocol::gpu::discrete_card(&all).cloned()
 }
 
 /// Every device ggml registered (the CPU, and in the GPU build each Vulkan device).

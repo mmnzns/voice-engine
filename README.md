@@ -40,7 +40,7 @@ helper that dies at startup.
 ## The client
 
 `voice-engine-client` is what an app uses to talk to its AI helper: build an `LlmClient` with the helper paths and
-call `load`, `complete`, `embed`, `inspect`, `unload`, `set_idle` and `cancel` from any thread. Match failures on
+call `load`, `complete`, `embed`, `inspect`, `devices`, `unload`, `set_idle` and `cancel` from any thread. Match failures on
 `EngineError`, never on text. Each result says which backend ran it and whether the graphics card failed during the
 call (`fell_back`): show "Graphics card failed, used processor" once, then keep passing the same config.
 
@@ -102,8 +102,10 @@ audio after its last word, the engine decodes the rest again from there (up to 8
 `Transcript::stopped_early_at_ms` says where the first stop was, so an app can see how often a model gives up early.
 
 **Graphics card.** `LoadOptions::gpu` asks for the card: Metal on the Mac and Vulkan on Windows (the `vulkan` feature,
-used by the helper) for Whisper, DirectML on Windows (the `directml` feature) for Parakeet TDT. When the card cannot be
-used, or this build has no way to use it for this model, the model loads on the processor, nothing fails, and
+used by the helper) for Whisper, DirectML on Windows (the `directml` feature) for Parakeet TDT. Both use the PC's discrete
+card only, the one with the most memory, never the integrated graphics (DirectML is given that card's adapter number, not
+Windows' adapter 0, and `backend().device` names it). With only integrated graphics DirectML is not tried and the model
+runs on the processor. When the card cannot be used, or this build has no way to use it for this model, the model loads on the processor, nothing fails, and
 `backend()` says `cpu` with `fell_back: true`. That is also what an ONNX model on the Mac reports for `gpu: true`: there
 is no card path to fall back from, but the app asked for one, so it is told once and can pass `gpu: false` from then on.
 Nothing uses CoreML (parakeet-rs measures it slower than the processor for these graphs).
@@ -150,8 +152,8 @@ right through this code, as in Talaan). It always runs on the processor.
 
 **`SttClient` and the Windows helper.** On Windows, Whisper on the graphics card runs in a helper process (`run_helper`,
 protocol 2 in `voice_engine_protocol::stt`; the Vulkan build is never linked into the app's main program). The app builds
-a `SttClient` with the paths of its helpers (a Vulkan one and a processor one) and calls `load`, `transcribe`, `unload`,
-`cancel` and `shutdown` from any thread; failures are `EngineError` (`BadModel`, `TooLong`, `Unsupported`, `Crashed`,
+a `SttClient` with the paths of its helpers (a Vulkan one and a processor one) and calls `load`, `transcribe`, `devices`,
+`unload`, `cancel` and `shutdown` from any thread; failures are `EngineError` (`BadModel`, `TooLong`, `Unsupported`, `Crashed`,
 `OutOfMemory`, `Cancelled`, and the others). It works like `LlmClient`: it starts the helper, restarts it when it dies,
 tries the Vulkan helper first and falls back to the processor helper with the failure remembered (`fell_back`). The client
 remembers the model the app loaded and loads it into every helper it has to start again, so a crash costs the app one
@@ -159,6 +161,26 @@ remembers the model the app loaded and loads it into every helper it has to star
 `cancel` ends the call with `Cancelled`, but a Whisper decode cannot be interrupted, so unless the helper answers sooner,
 the call ends 2 s later by killing the helper, and the next call loads the model again. Audio goes to the helper as base64
 (about 2.5 MB for 30 s): an app that sends long recordings through the helper cuts them first.
+
+### Choosing the graphics card default on Windows
+
+On Windows the card is on by default only when the PC has a discrete card; with only built-in graphics it stays off until
+the app has measured it. The person can always switch it. An app finds out with one call, before the first model load,
+and the answer is the same for Whisper, the AI and Parakeet:
+
+```rust
+let card = speech_client.discrete_card()?;   // Result<Option<Device>, EngineError>; llm_client.discrete_card() is the same
+let gpu_by_default = card.is_some();         // card.map(|d| d.description): "NVIDIA GeForce RTX 5070 Ti"
+```
+
+Ask the card helper (the Vulkan one, built with `directml` too: `docs/building-helpers.md`), at startup. The call starts
+the helper if it is not running and loads no model. `devices()` gives the whole list (`DeviceList`: every device, Vulkan's
+and DirectML's adapters with backend `"DirectML"`, and the index of the one the helper uses) for a settings screen. The
+card is `voice_engine_protocol::gpu::discrete_card`: the discrete GPU with the most memory, never an integrated one, so
+Miguel's RTX 5070 Ti with its Radeon iGPU answers yes and a Ryzen with only the Radeon answers no. If the card helper is
+missing or failed earlier, the client asks the processor helper, which sees the processor only: the answer is no, and the
+default is off. What `Outcome::backend` says afterwards (`device`, and `directml` for Parakeet) is the card that was used.
+An app that links `voice-engine-stt` with `directml` in its own process can also call `voice_engine_stt::discrete_card()`.
 
 ### What runs where
 

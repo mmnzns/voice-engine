@@ -21,7 +21,9 @@
 //!   prompt (the catalog's `keeps_fillers` is measured separately).
 //! * The graphics card: with the `directml` feature on Windows, `gpu: true` runs the model through ONNX Runtime's
 //!   DirectML provider when the catalog says the model has that path (Parakeet TDT), on the GPU thread rule, and
-//!   falls back to the processor (`fell_back: true`, the processor's rule) when the provider does not start.
+//!   falls back to the processor (`fell_back: true`, the processor's rule) when the provider does not start. It runs
+//!   on the PC's discrete card (the one with the most memory, [`crate::directml`]) and `device` names it; with no
+//!   discrete card (only integrated graphics) DirectML is not tried and the model runs on the processor.
 //!   Without the feature, on the Mac, or for a model without a DirectML path, `gpu: true` runs on the processor
 //!   with `fell_back: true`: there is no card path to fall back from, but the app asked for one, so it is told.
 //!   Nothing here uses CoreML (parakeet-rs measures it slower than the processor for these graphs).
@@ -32,6 +34,7 @@ use crate::api::{
     ChunkOptions, LoadOptions, Segment, SpeechBackend, SpeechError, Timing, Transcriber,
     Transcript, Word,
 };
+use crate::directml::{self, Adapter};
 use crate::threads::{ThreadKind, logical_cores, resolve_threads};
 use crate::whisper_engine::{Pass, PassDecoder, decode_with_resume};
 use crate::words::clean;
@@ -315,7 +318,8 @@ pub fn transcribe_chunk(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Provider {
     Processor,
-    DirectMl,
+    /// DirectML on the adapter with this DXGI number.
+    DirectMl(u32),
 }
 
 /// What a load gives: the value, where it runs, and the thread count it was built with.
@@ -326,27 +330,31 @@ pub struct Loaded<T> {
     pub threads: usize,
 }
 
-/// Builds the model on the best provider for this load. `build(provider, threads)` makes it. With `gpu` and a
-/// DirectML path (`directml_built`, and the catalog's `model_has_directml`) DirectML is tried first with the GPU thread
-/// rule; if it does not start the processor builds it with its own rule and `fell_back` is true. In every other case
+/// Builds the model on the best provider for this load. `build(provider, threads)` makes it. With `gpu`, a discrete
+/// card to run DirectML on (`card`: None when the build has no DirectML or the PC has no discrete card) and a DirectML
+/// path in the catalog (`model_has_directml`) DirectML is tried first with the GPU thread rule, and the backend names
+/// the card; if it does not start the processor builds it with its own rule and `fell_back` is true. In every other case
 /// the processor builds it, and `fell_back` is whether the app asked for the card. `requested_threads` wins on
 /// every provider.
 pub fn load_on_best_provider<T>(
     gpu: bool,
-    directml_built: bool,
+    card: Option<&Adapter>,
     model_has_directml: bool,
     requested_threads: Option<usize>,
     logical: usize,
     mut build: impl FnMut(Provider, usize) -> Result<T, SpeechError>,
 ) -> Result<Loaded<T>, SpeechError> {
-    if gpu && directml_built && model_has_directml {
+    if gpu
+        && model_has_directml
+        && let Some(card) = card
+    {
         let threads = resolve_threads(ThreadKind::Gpu, requested_threads, logical);
-        if let Ok(value) = build(Provider::DirectMl, threads) {
+        if let Ok(value) = build(Provider::DirectMl(card.index), threads) {
             return Ok(Loaded {
                 value,
                 backend: SpeechBackend {
                     backend: "directml".into(),
-                    device: None,
+                    device: Some(card.name.clone()),
                     fell_back: false,
                 },
                 threads,
@@ -409,7 +417,7 @@ fn execution_config(provider: Provider, threads: usize) -> parakeet_rs::Executio
     let config = parakeet_rs::ExecutionConfig::new().with_intra_threads(threads);
     match provider {
         Provider::Processor => config,
-        Provider::DirectMl => with_provider(config, directml_provider()),
+        Provider::DirectMl(id) => with_provider(config, directml_provider(id)),
     }
 }
 
@@ -428,15 +436,19 @@ fn with_provider(
     })
 }
 
-/// The DirectML provider, which must start. Only a Windows build with the `directml` feature has one; every other
-/// build never asks for it (`DIRECTML_BUILT` is false and `load_on_best_provider` stays on the processor).
+/// The DirectML provider on the adapter with DXGI number `device_id`, which must start. Only a Windows build with the
+/// `directml` feature has one; every other build has no card to run on (`directml::card` is None and
+/// `load_on_best_provider` stays on the processor).
 #[cfg(all(windows, feature = "directml"))]
-fn directml_provider() -> ort::ep::ExecutionProviderDispatch {
-    ort::ep::DirectML::default().build().error_on_failure()
+fn directml_provider(device_id: u32) -> ort::ep::ExecutionProviderDispatch {
+    ort::ep::DirectML::default()
+        .with_device_id(device_id as i32)
+        .build()
+        .error_on_failure()
 }
 
 #[cfg(not(all(windows, feature = "directml")))]
-fn directml_provider() -> ort::ep::ExecutionProviderDispatch {
+fn directml_provider(_device_id: u32) -> ort::ep::ExecutionProviderDispatch {
     // Not reachable: without DirectML in the build the processor is the only provider tried. The processor
     // provider, required to start, keeps this a valid (and compile-checked) configuration.
     ort::ep::CPU::default().build().error_on_failure()
@@ -528,9 +540,11 @@ impl ParakeetEngine {
     pub fn load(model: &ModelInfo, dir: &Path, opts: LoadOptions) -> Result<Self, SpeechError> {
         check_files(model, &|name| dir.join(name).is_file())?;
         let kind = model.kind;
+        // The adapters are listed only when the card is wanted.
+        let card = if opts.gpu { directml::card() } else { None };
         let loaded = load_on_best_provider(
             opts.gpu,
-            DIRECTML_BUILT,
+            card.as_ref(),
             model.gpu.windows_directml,
             opts.threads,
             logical_cores(),
