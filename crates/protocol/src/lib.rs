@@ -11,7 +11,7 @@ pub mod gpu;
 pub mod stt;
 
 pub use config::HelperConfig;
-pub use gpu::{Device, DeviceKind};
+pub use gpu::{Device, DeviceKind, DeviceList};
 
 /// Bumped whenever a message changes shape. Each helper sends it in `Ready`; the app compares it with its own and
 /// reports a mismatch (a helper and an app from different builds) instead of failing later. 0 = a helper from before
@@ -42,7 +42,8 @@ pub enum Request {
     Embed(Embedding),
     /// Reads a GGUF file's metadata without loading it. Answers with `Event::Inspected`.
     Inspect(Inspect),
-    /// Answers with `Event::Devices`: every ggml device and the one the helper chose. For checks by hand.
+    /// Answers with `Event::Devices`: every ggml device and the one the helper chose. The app asks the card helper this
+    /// once at startup to learn whether the PC has a discrete card (`gpu::discrete_card`).
     Devices,
 }
 

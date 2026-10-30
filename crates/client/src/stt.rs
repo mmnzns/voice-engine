@@ -33,7 +33,7 @@ use std::time::{Duration, Instant};
 use voice_engine_protocol::stt::{
     ChunkOptions, SpeechBackend, SttEvent, SttLoad, SttRequest, Transcript, encode_samples,
 };
-use voice_engine_protocol::{Backend, PROTOCOL_VERSION, encode};
+use voice_engine_protocol::{Backend, Device, DeviceList, PROTOCOL_VERSION, encode};
 
 #[derive(Debug, Clone)]
 pub struct SttConfig {
@@ -168,6 +168,31 @@ impl SttClient {
             } => Some((transcript.clone(), Some(backend.clone()))),
             _ => None,
         })
+    }
+
+    /// Every device the helper sees and the one it uses: ggml's (Vulkan, the processor) and, when the helper is
+    /// built with `directml`, DirectML's adapters (backend "DirectML"). Asked of the graphics card helper when there
+    /// is one and it hasn't failed (else of the processor helper, which lists the processor only). Starts the helper
+    /// if none runs and loads no model, so an app asks once at startup, before the first load.
+    pub fn devices(&self) -> Result<DeviceList, EngineError> {
+        let mut running = lock(&self.running);
+        self.exchange(&mut running, &SttRequest::Devices, false, &|ev| match ev {
+            SttEvent::Devices { devices, chosen } => Some((
+                DeviceList {
+                    devices: devices.clone(),
+                    chosen: *chosen,
+                },
+                None,
+            )),
+            _ => None,
+        })
+        .map(|o| o.value)
+    }
+
+    /// The discrete graphics card the engine would use on this PC, or None: what an app on Windows asks before the
+    /// first load to decide whether the card is on by default (see [`DeviceList::discrete_card`]).
+    pub fn discrete_card(&self) -> Result<Option<Device>, EngineError> {
+        Ok(self.devices()?.discrete_card().cloned())
     }
 
     /// Frees the model's memory now and forgets it (a helper started later gets none). With no helper running there

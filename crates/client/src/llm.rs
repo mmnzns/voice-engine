@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use voice_engine_protocol::{
-    Backend, Completion, Configure, Embedding, Event, Inspect, Inspection, Load, PROTOCOL_VERSION,
-    Reply, Request, encode,
+    Backend, Completion, Configure, Device, DeviceList, Embedding, Event, Inspect, Inspection,
+    Load, PROTOCOL_VERSION, Reply, Request, encode,
 };
 
 /// How long a helper that was asked to stop may keep going before it is killed.
@@ -180,6 +180,26 @@ impl LlmClient {
             _ => None,
         })
         .map(|o| o.value)
+    }
+
+    /// Every device the helper sees and the one it uses. Asked of the graphics card helper when there is one and it
+    /// hasn't failed (else of the processor helper, which lists the processor only). Starts the helper if none runs,
+    /// so an app asks once at startup, before the first load.
+    pub fn devices(&self) -> Result<DeviceList, EngineError> {
+        self.exchange(&Request::Devices, &mut |_| {}, &|ev| match ev {
+            Event::Devices { devices, chosen } => Some(DeviceList {
+                devices: devices.clone(),
+                chosen: *chosen,
+            }),
+            _ => None,
+        })
+        .map(|o| o.value)
+    }
+
+    /// The discrete graphics card the engine would use on this PC, or None: what an app on Windows asks before the
+    /// first load to decide whether the card is on by default (see [`DeviceList::discrete_card`]).
+    pub fn discrete_card(&self) -> Result<Option<Device>, EngineError> {
+        Ok(self.devices()?.discrete_card().cloned())
     }
 
     /// Frees the loaded model's memory now. With no helper running there is nothing to free, and none is started.

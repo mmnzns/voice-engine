@@ -517,3 +517,40 @@ fn a_helper_that_does_not_say_where_a_reply_ran_is_taken_at_its_start() {
     let out = client.complete(completion(), &mut |_| {}).unwrap();
     assert_eq!(out.backend.backend, "vulkan");
 }
+
+const MIGUELS_PC: &str =
+    "igpu:Vulkan:AMD Radeon(TM) Graphics:512;gpu:Vulkan:NVIDIA GeForce RTX 5070 Ti:16303";
+
+fn with_devices(mut cfg: LlmConfig, devices: &str) -> LlmConfig {
+    cfg.env.push(("FAKE_DEVICES".into(), devices.into()));
+    cfg
+}
+
+#[test]
+fn devices_lists_what_the_helper_sees_and_names_the_discrete_card() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = LlmClient::new(with_devices(config("", &st), MIGUELS_PC));
+    let list = client.devices().unwrap();
+    assert_eq!(list.devices.len(), 3);
+    // ggml's order: the iGPU, the RTX, then the processor; the RTX is the one the helper chose.
+    assert_eq!(list.chosen, Some(1));
+    let card = client.discrete_card().unwrap().unwrap();
+    assert_eq!(card.description, "NVIDIA GeForce RTX 5070 Ti");
+    assert_eq!(card.memory_mb, 16303);
+}
+
+#[test]
+fn a_pc_with_integrated_graphics_or_no_graphics_has_no_discrete_card() {
+    let _t = turn();
+    let (_d, st) = state();
+    let igpu = LlmClient::new(with_devices(
+        config("", &st),
+        "igpu:Vulkan:Intel(R) UHD Graphics:8000",
+    ));
+    assert_eq!(igpu.devices().unwrap().chosen, None);
+    assert_eq!(igpu.discrete_card().unwrap(), None);
+    let cpu = LlmClient::new(config("", &st));
+    assert_eq!(cpu.devices().unwrap().devices.len(), 1);
+    assert_eq!(cpu.discrete_card().unwrap(), None);
+}
