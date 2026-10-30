@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## v0.2.1 (2026-10-30)
+
+Apps get a discrete graphics card check for the Windows default, and DirectML now picks the discrete card; no transcript or
+prompt text reaches logs or helper errors. The build and smoke scripts work on PowerShell 5.1, and the card can be measured on Windows.
 
 - tooling: the graphics card can be measured on Windows (#7). `bench` (speech) has Whisper rows on Vulkan in process
   (`--features vulkan`) and a Parakeet row on DirectML (`--features directml`), and every row prints `backend`, `device`
