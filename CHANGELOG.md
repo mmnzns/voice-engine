@@ -1,6 +1,8 @@
 # Changelog
 
-## v0.2.2 (unreleased)
+## v0.2.2 (2026-10-30)
+
+The Windows card check no longer counts a VM's or a driverless PC's display adapter as a card, and it answers within 10 s.
 
 - fix: an adapter with no real card is no longer a discrete card (#13). DirectML's `discrete()` also requires dedicated
   memory and a vendor other than Microsoft ("Microsoft Basic Display Adapter", Hyper-V and remote display adapters), and
