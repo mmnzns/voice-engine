@@ -85,7 +85,8 @@ lock_versions() {
 }
 
 # check_baseline <helper package> <native crate> <binary>: the CMake cache of the native library this helper was built
-# with says GGML_NATIVE is off, it was compiled for macOS 11.0, and so was the binary.
+# with says GGML_NATIVE is off, it was optimized (-O2 in CMAKE_C_FLAGS_RELEASE and CMAKE_CXX_FLAGS_RELEASE), it was
+# compiled for macOS 11.0, and so was the binary.
 check_baseline() {
   local pkg="$1" crate="$2" bin="$3" out cache flags minos
   out="$(jq -r --arg c "$crate" 'select(.reason == "build-script-executed" and (.package_id | (contains("#" + $c + "@") or startswith($c + " ")))) | .out_dir' "$json" | tail -n 1)"
@@ -99,6 +100,19 @@ check_baseline() {
   else
     fail "$pkg: $crate has $(grep -m1 '^GGML_NATIVE:' "$cache" || echo 'no GGML_NATIVE entry')"
   fi
+  # Always a release build here. cmake-rs alone strips /O under the Visual Studio generator (Windows builds at /Od); the
+  # two CMAKE_*_FLAGS_RELEASE lines of .cargo/config.toml put -O2 back.
+  local lang value
+  for lang in C CXX; do
+    value="$(sed -n "s/^CMAKE_${lang}_FLAGS_RELEASE:[A-Z]*=//p" "$cache")"
+    if [[ "$value" == *-O2* || "$value" == *"/O2"* ]]; then
+      pass "$pkg: $crate has CMAKE_${lang}_FLAGS_RELEASE=$value"
+    else
+      fail "$pkg: $crate is not optimized: CMAKE_${lang}_FLAGS_RELEASE='$value' has no -O2"
+    fi
+  done
+  # Not checked, only shown: what the cache says for OpenMP, llamafile and the build type.
+  printf 'INFO  %s: %s cache: %s\n' "$pkg" "$crate" "$(grep -E '^(GGML_OPENMP|GGML_LLAMAFILE|CMAKE_BUILD_TYPE|CMAKE_GENERATOR):' "$cache" | tr '\n' ' ')"
   if [[ "$(uname -s)" == Darwin ]]; then
     flags="$(grep -E '^CMAKE_(C|CXX)_FLAGS:' "$cache" | grep -o -- '-mmacosx-version-min=[0-9.]*' | sort -u | tr '\n' ' ')"
     if [[ "$flags" == "-mmacosx-version-min=11.0 " ]]; then
@@ -134,6 +148,10 @@ for h in "${wanted[@]}"; do
     stt) pkg=voice-engine-stt crate=whisper-rs-sys name="$stt_name" ;;
   esac
   echo "==> building $pkg for $target"
+  # The native library is always built again from CMake: its build script is not re-run when .cargo/config.toml changes
+  # (whisper-rs-sys has no rerun-if-env-changed), so a restored or older build folder can hold a library compiled
+  # without the settings the checks below ask for (-O2, the baseline).
+  cargo clean --release -p "$crate"
   # --locked: the versions in Cargo.lock are the ones that ship. The JSON on stdout says where the binary and each
   # CMake cache are; Cargo's own progress and warnings still go to stderr.
   cargo build --release --locked -p "$pkg" --message-format=json-render-diagnostics >"$json"

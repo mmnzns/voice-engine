@@ -31,6 +31,17 @@ GGML_BMI2 = { value = "ON", force = true }
 # rustc itself links for aarch64-apple-darwin.
 MACOSX_DEPLOYMENT_TARGET = { value = "11.0", force = true }
 
+# Optimization of the native libraries in release builds. cmake-rs strips the /O flags from CMAKE_<LANG>_FLAGS_RELEASE
+# under the Visual Studio generator, so without these two lines whisper.cpp and llama.cpp are built at MSVC's default of
+# /Od (no optimization) on Windows x64: a Whisper decode on the processor never finishes. The CMake-based -sys crates
+# forward CMAKE_* environment variables as CMake definitions, which stops the stripping. `-O2 -DNDEBUG` is accepted by
+# MSVC's cl, by clang-cl (Windows ARM64, Ninja) and by clang (the Mac, where CMake's own default is `-O3 -DNDEBUG`, so
+# this sets a flag CMake already sets, one level lower). Debug builds do not use CMAKE_<LANG>_FLAGS_RELEASE, so they are
+# not affected. The scripts and the CI that check the baseline also fail a release cache without -O2.
+# `force = true`: a value already in the shell must not win. Same two lines as Talaan's .cargo/config.toml.
+CMAKE_C_FLAGS_RELEASE = { value = "-O2 -DNDEBUG", force = true }
+CMAKE_CXX_FLAGS_RELEASE = { value = "-O2 -DNDEBUG", force = true }
+
 [target.x86_64-pc-windows-msvc]
 # Read by llama-cpp-sys-2's build.rs through CARGO_CFG_TARGET_FEATURE: avx2, fma, f16c and bmi2 become
 # GGML_AVX2, GGML_FMA, GGML_F16C and GGML_BMI2 = ON for llama.cpp (when `target-cpu=native` is absent, it also sets

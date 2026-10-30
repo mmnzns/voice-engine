@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, 'v0.2.0-step-*']
+    branches: [main, 'v0.2.0-*']
   pull_request:
   # Actions > CI > Run workflow: also builds the Vulkan GPU versions (windows-gpu, below).
   workflow_dispatch:
@@ -70,6 +70,23 @@ jobs:
               } else {
                 $has = @($lines | Where-Object { $_ -match "^$($check.Name):" }) -join ' '
                 Write-Host "FAIL  ${helper}: $crate needs $($check.Pattern), its cache has: $has ($cache)"
+                $failed = $true
+              }
+            }
+            # Optimized: cmake-rs strips /O from CMAKE_<LANG>_FLAGS_RELEASE under the Visual Studio generator (the libraries
+            # would be built at /Od); .cargo/config.toml puts -O2 back. Checked when the cache is a Release one (the helpers
+            # job below builds release and checks it with scripts/build-helpers.ps1). This job builds debug, whose cache
+            # is another configuration that does not read the RELEASE flags, so there they are only shown.
+            $isRelease = @($lines | Where-Object { $_ -match '^CMAKE_BUILD_TYPE:[A-Z]+=Release$' }).Count -gt 0
+            foreach ($lang in 'C', 'CXX') {
+              $flags = @($lines | Where-Object { $_ -match "^CMAKE_${lang}_FLAGS_RELEASE:[A-Z]+=(.*)$" } | ForEach-Object { $Matches[1] })
+              $build = @($lines | Where-Object { $_ -match '^CMAKE_BUILD_TYPE:' }) -join ' '
+              if (-not $isRelease) {
+                Write-Host "INFO  ${helper}: $crate has CMAKE_${lang}_FLAGS_RELEASE=$($flags -join ' ') (not checked: $build)"
+              } elseif ($flags.Count -gt 0 -and $flags[0] -match '[-/]O2') {
+                Write-Host "PASS  ${helper}: $crate has CMAKE_${lang}_FLAGS_RELEASE=$($flags[0])"
+              } else {
+                Write-Host "FAIL  ${helper}: $crate is not optimized: CMAKE_${lang}_FLAGS_RELEASE='$($flags -join ' ')' has no -O2"
                 $failed = $true
               }
             }

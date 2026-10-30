@@ -22,14 +22,21 @@ triple: `ensayo-llm-vulkan-x86_64-pc-windows-msvc.exe`. Vulkan builds exist for 
 llama.cpp and whisper.cpp are compiled from source by CMake while the helper is built. Left alone they are compiled for
 the machine that builds them: the newest instructions of that CPU (a build on a new CI runner can crash with "illegal
 instruction" on an older customer's PC), and the build machine's macOS as the minimum system. The engine's
-`.cargo/config.toml` fixes that (`GGML_NATIVE` off, the AVX2 baseline on Windows x64, macOS 11 on the Mac).
+`.cargo/config.toml` fixes that (`GGML_NATIVE` off, the AVX2 baseline on Windows x64, macOS 11 on the Mac). It also sets
+`CMAKE_C_FLAGS_RELEASE` and `CMAKE_CXX_FLAGS_RELEASE` to `-O2 -DNDEBUG`: `cmake-rs` strips the `/O` flags from them under
+the Visual Studio generator, so without those two lines the libraries are built at MSVC's `/Od`, with no optimization,
+and run roughly ten times slower (a Whisper decode on the processor does not finish).
 
 **Cargo reads `.cargo/config.toml` only for the workspace it is building.** An app that depends on the engine as a git
 dependency builds the engine's code inside the app's workspace, and Cargo never reads the engine's file there: the app
 gets none of those settings, and nothing warns it. The reusable workflow avoids the problem by checking out the engine
 repository itself at the requested tag and building there, so the engine's `.cargo/config.toml` is the one Cargo reads.
 Before it copies anything, `scripts/build-helpers.sh` and `scripts/build-helpers.ps1` read each CMake cache and the
-binaries and fail unless the baseline was applied (`GGML_NATIVE:BOOL=OFF`, `GGML_AVX2` on for x64, macOS 11.0 on the Mac).
+binaries and fail unless the baseline was applied (`GGML_NATIVE:BOOL=OFF`, `GGML_AVX2` on for x64, macOS 11.0 on the Mac) and the
+libraries are optimized (`-O2` in both `CMAKE_C_FLAGS_RELEASE` and `CMAKE_CXX_FLAGS_RELEASE`). The scripts also clean the
+native library (`cargo clean --release -p <crate>`) before each build, so it is always compiled again from CMake: its build
+script does not notice a change of `.cargo/config.toml`, and a restored build cache (CI) or an older build folder would
+otherwise hand them a library compiled without the settings.
 
 On Windows ARM64 the build also needs clang-cl and Ninja (MSVC's `cl` stops ggml at configure time), set up by
 `.github/actions/windows-arm64-toolchain`. There is no instruction-set line to copy for ARM64: with `GGML_NATIVE` off and

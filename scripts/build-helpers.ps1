@@ -15,8 +15,9 @@
 #   -EngineRef  the tag or commit being built; only written into build-info.txt.
 #
 # Run it from a clone of the engine: the build reads the engine's own .cargo/config.toml (the CPU baseline: GGML_NATIVE off
-# and AVX2 on x64), which Cargo does not do for an app that depends on the engine as a git dependency. The script checks
-# that the baseline was applied (the CMake caches) and fails if it was not.
+# and AVX2 on x64, and -O2 for the native libraries), which Cargo does not do for an app that depends on the engine as a
+# git dependency. The script checks that the baseline and the optimization were applied (the CMake caches) and fails if
+# they were not.
 #
 # Windows ARM64 needs clang-cl and Ninja, with CC, CXX, CMAKE_GENERATOR=Ninja and CXXFLAGS=/EHsc set, in a Visual Studio ARM64
 # environment: .github/actions/windows-arm64-toolchain does exactly that on a runner, and its comments say why.
@@ -95,6 +96,18 @@ function Test-Baseline([string]$pkg, [string]$crate, [object[]]$messages, [bool]
     if ($found.Count -gt 0) { Pass "${pkg}: $crate has $($found[0])" }
     else { Fail "${pkg}: $crate needs $($check.Pattern), its cache has: $(@($lines | Where-Object { $_ -match "^$($check.Name):" }) -join ' ')" }
   }
+  # Optimized: cmake-rs strips the /O flags from CMAKE_<LANG>_FLAGS_RELEASE under the Visual Studio generator, so without
+  # the two CMAKE_*_FLAGS_RELEASE lines of .cargo/config.toml the libraries are built at /Od (a Whisper decode on the
+  # processor never finishes). This is always a release build here, so both flags must hold -O2 (or /O2).
+  foreach ($lang in 'C', 'CXX') {
+    $flags = @($lines | Where-Object { $_ -match "^CMAKE_${lang}_FLAGS_RELEASE:[A-Z]+=(.*)$" } | ForEach-Object { $Matches[1] })
+    if ($flags.Count -gt 0 -and $flags[0] -match '[-/]O2') { Pass "${pkg}: $crate has CMAKE_${lang}_FLAGS_RELEASE=$($flags[0])" }
+    else { Fail "${pkg}: $crate is not optimized: CMAKE_${lang}_FLAGS_RELEASE='$($flags -join ' ')' has no -O2 (copy the CMAKE_*_FLAGS_RELEASE lines of .cargo/config.toml)" }
+  }
+  # Not checked, only shown (a Windows processor's Whisper speed depends on them): what the cache says for OpenMP, llamafile
+  # and the build type.
+  $shown = @($lines | Where-Object { $_ -match '^(GGML_OPENMP|GGML_LLAMAFILE|CMAKE_BUILD_TYPE|CMAKE_GENERATOR):' })
+  Write-Host "INFO  ${pkg}: $crate cache: $($shown -join ' ')"
   if (-not $x64) {
     $arch = @(Select-String -Path (Join-Path $out 'build\build.ninja') -Pattern '-m(arch|cpu)=\S+' -AllMatches -ErrorAction SilentlyContinue |
       ForEach-Object { $_.Matches.Value } | Sort-Object -Unique)
@@ -134,6 +147,11 @@ foreach ($h in $wanted) {
     $env:CARGO_TARGET_DIR = $VulkanTargetDir
   }
   try {
+    # The native library is always built again from CMake: its build script is not re-run when .cargo/config.toml changes
+    # (whisper-rs-sys has no rerun-if-env-changed), so a restored or older build folder can hold a library compiled
+    # without the settings the checks below ask for (-O2, the baseline). CARGO_TARGET_DIR (Vulkan) applies to the clean too.
+    & cargo clean --release -p $crate
+    if ($LASTEXITCODE -ne 0) { Die "cargo clean -p $crate failed" }
     $json = & cargo @cargoArgs
     if ($LASTEXITCODE -ne 0) { Die "cargo build -p $pkg failed" }
   } finally {

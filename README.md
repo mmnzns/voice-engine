@@ -317,6 +317,8 @@ GGML_FMA = { value = "ON", force = true }
 GGML_F16C = { value = "ON", force = true }
 GGML_BMI2 = { value = "ON", force = true }
 MACOSX_DEPLOYMENT_TARGET = { value = "11.0", force = true }   # the first macOS for Apple silicon; read by cc, cmake and rustc
+CMAKE_C_FLAGS_RELEASE = { value = "-O2 -DNDEBUG", force = true }     # optimization: cmake-rs strips /O under the Visual Studio generator
+CMAKE_CXX_FLAGS_RELEASE = { value = "-O2 -DNDEBUG", force = true }   # (Windows x64 builds at /Od, 10x slower); accepted by cl, clang-cl and clang
 
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+avx2,+fma,+f16c,+bmi2"]   # llama-cpp-sys-2 turns these into GGML_AVX2, GGML_FMA, ...
@@ -330,6 +332,16 @@ patch file in the next section), or sets the same variables in its release workf
 reusable workflow described in `docs/building-helpers.md`, which builds in the engine's own checkout and so carries
 them. The rustflags line is for Windows x64 only.
 
+**The two `CMAKE_*_FLAGS_RELEASE` lines are not optional on Windows.** `cmake-rs` strips the `/O` flags from
+`CMAKE_<LANG>_FLAGS_RELEASE` under the Visual Studio generator, so without them whisper.cpp and llama.cpp are compiled at
+MSVC's default of `/Od` (no optimization) in release builds: on a Ryzen 7 a Whisper decode on the processor never
+finished (Parakeet runs on ONNX Runtime and is not affected). Setting the two variables stops the
+stripping; `-O2 -DNDEBUG` is accepted by `cl`, `clang-cl` (Windows ARM64) and `clang` (the Mac, where CMake's own release
+default is `-O3 -DNDEBUG`). They only affect release builds. After adding them, run
+`cargo clean --release -p whisper-rs-sys -p llama-cpp-sys-2`. An app should fail its own release when a CMake cache of
+either library has no `-O2` in `CMAKE_C_FLAGS_RELEASE` or `CMAKE_CXX_FLAGS_RELEASE`, as `scripts/check-baseline.sh`,
+`scripts/build-helpers.sh` and `scripts/build-helpers.ps1` do here.
+
 **Windows ARM64** (`aarch64-pc-windows-msvc`) is built and tested in CI on the `windows-11-arm` runner, with clang-cl and
 Ninja: MSVC's own `cl` stops whisper.cpp's and llama.cpp's ggml-cpu at configure time ("MSVC is not supported for ARM").
 An app that builds it needs the Visual Studio ARM64 environment, `CC` and `CXX` set to clang-cl, `CMAKE_GENERATOR=Ninja`
@@ -342,8 +354,9 @@ Two things to know. A build script does not run again when one of these values c
 `cargo clean -p whisper-rs-sys -p llama-cpp-sys-2` (with `--release` for release builds). And `RUSTFLAGS` set in the
 environment replaces the `rustflags` line in the file instead of adding to it; put the `target-feature` flag in it too.
 `scripts/check-baseline.sh` (Mac and Linux) builds the two helpers and fails unless the CMake caches say
-`GGML_NATIVE:BOOL=OFF` and, on a Mac, the libraries were compiled for macOS 11.0 and the binaries say so; CI runs it,
-and a PowerShell check does the same for `GGML_NATIVE` and `GGML_AVX2` on Windows x64.
+`GGML_NATIVE:BOOL=OFF`, (release builds) `-O2` in `CMAKE_C_FLAGS_RELEASE` and `CMAKE_CXX_FLAGS_RELEASE` and, on a Mac, the
+libraries were compiled for macOS 11.0 and the binaries say so; CI runs it, and a PowerShell check does the same for
+`GGML_NATIVE` and `GGML_AVX2` on Windows x64 (the `-O2` check is made by the release build of the helpers job).
 
 ## Build the helpers for an app's release
 
