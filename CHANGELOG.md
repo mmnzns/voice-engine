@@ -129,6 +129,13 @@
   which keeps `App`). Apps use `SharedStore::open(app)`, then `move_in`, `status`/`list` and `download` instead of
   looking in folders themselves; Delete is `release`, Delete all data is `release_all`.
 
+**Native library versions.** The helpers and the speech crate are built from these, as pinned by `Cargo.lock` at this
+version: llama-cpp-2 and llama-cpp-sys-2 `=0.1.159` (llama.cpp), whisper-rs 0.16.0 with whisper-rs-sys 0.15.0
+(whisper.cpp), parakeet-rs 0.3.8 with ort `=2.0.0-rc.13` and ort-sys 2.0.0-rc.13, which downloads ONNX Runtime 1.28.0
+(every prebuilt in `ort-sys-2.0.0-rc.13/build/download/dist.tsv` is `ms@1.28.0`). Any change to one of these versions is
+announced in this change log. Every release's `build-info.txt` (see `docs/building-helpers.md`) lists the same versions
+for the helpers it holds.
+
 ## v0.1.0 (2026-10-28)
 
 First version, from Talaan's and Ensayo's engine code (see SOURCES.md).
