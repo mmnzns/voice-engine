@@ -20,12 +20,13 @@
   names it. `voice_engine_stt::directml` lists the adapters (DXGI, with DXCore for "integrated") and chooses by a pure
   function; with only integrated graphics DirectML is not tried and Parakeet runs on the processor with `fell_back`. The
   `directml` feature adds a Windows-only `windows` dependency. `load_on_best_provider` takes `card: Option<&Adapter>`
-  instead of `directml_built: bool`, and `Provider::DirectMl` carries the DXGI number. The speech helper's `devices`
-  answer includes the DirectML adapters when built with `directml`; new `voice_engine_stt::directml_devices` and
-  `discrete_card`.
-- build: `stt-vulkan` is built with `--features vulkan,directml` (`scripts/build-helpers.ps1`, and the manual CI job).
-  ONNX Runtime's DirectML build imports the system `DirectML.dll` (Windows 10 1903 and later), so no file is added to the
-  output (`docs/building-helpers.md`). CI builds, lints and tests `voice-engine-stt` with `directml` on Windows.
+  instead of `directml_built: bool`, and `Provider::DirectMl` carries the DXGI number. New
+  `voice_engine_stt::discrete_card()` answers in the app's process (DXGI and DXCore, no helper, cheap at startup) when the
+  app builds with `directml`, and returns None without it; `directml_devices()` lists the adapters.
+- build: the helpers stay `vulkan` only (they run Whisper only); an app enables `voice-engine-stt/directml` itself.
+  ONNX Runtime's DirectML build imports the system `DirectML.dll` (Windows 10 1903 and later), so nothing ships
+  (`docs/building-helpers.md`). CI builds, lints and tests `voice-engine-stt` with `directml` on Windows, and the push
+  trigger covers release candidate branches and tags (`v*-*`).
 
 ## v0.2.0 (2026-10-29)
 

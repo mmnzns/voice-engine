@@ -147,20 +147,19 @@ pub fn context_params(
     p
 }
 
-/// The graphics adapters DirectML can use (backend "DirectML", `index` DXGI's adapter number). Empty unless this is a
-/// Windows build with the `directml` feature.
+/// The graphics adapters DirectML can use (backend "DirectML", `index` DXGI's adapter number), software renderers left
+/// out. Empty unless this is a Windows build with the `directml` feature.
 pub fn directml_devices() -> Vec<Device> {
     directml::devices(&directml::adapters())
 }
 
-/// Whether this PC has a discrete graphics card the engine would use, and which, as this build sees it: the Vulkan
-/// card in a build with `vulkan`, else the DirectML one in a build with `directml` (see
-/// `voice_engine_protocol::gpu::discrete_card`). An app that runs Whisper and the AI in helpers asks the helper
-/// instead (`SttClient::discrete_card`, `LlmClient::discrete_card`).
+/// The discrete graphics card DirectML would run Parakeet on, in this process, with no helper: the DXGI adapter with
+/// the most memory, never an integrated one. It lists adapters through DXGI and DXCore only (no model, no ggml), so
+/// it is cheap enough for the app's startup. None means no discrete card, and also a build without the `directml`
+/// feature (or not Windows), which cannot see adapters: such an app asks the card helper instead
+/// (`SttClient::discrete_card`, `LlmClient::discrete_card`).
 pub fn discrete_card() -> Option<Device> {
-    let mut all = devices();
-    all.extend(directml_devices());
-    voice_engine_protocol::gpu::discrete_card(&all).cloned()
+    voice_engine_protocol::gpu::discrete_card(&directml_devices()).cloned()
 }
 
 /// Every device ggml registered (the CPU, and in the GPU build each Vulkan device).

@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, 'v0.2.0-*']
+    branches: [main, 'v*-*']
+    # A release candidate tag (v0.2.1-rc1) runs the helper jobs too.
+    tags: ['v*-*']
   pull_request:
   # Actions > CI > Run workflow: also builds the Vulkan GPU versions (windows-gpu, below).
   workflow_dispatch:
@@ -135,7 +137,7 @@ jobs:
             $env:PATH = "$(Split-Path $ninja);$env:PATH"
           }
           $env:CMAKE_GENERATOR = 'Ninja'
-          cargo test --release -p voice-engine-llm -p voice-engine-stt -p voice-engine-protocol --features voice-engine-llm/vulkan,voice-engine-stt/vulkan,voice-engine-stt/directml --target-dir C:\tg
+          cargo test --release -p voice-engine-llm -p voice-engine-stt -p voice-engine-protocol --features voice-engine-llm/vulkan,voice-engine-stt/vulkan --target-dir C:\tg
 
   # The reusable helper build (build-helpers.yml, the one an app's release workflow calls), run on this very commit so it is
   # proven here: it builds voice-engine-llm and voice-engine-stt for Mac Apple silicon, Windows x64 and Windows ARM64 as
