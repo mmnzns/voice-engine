@@ -44,6 +44,12 @@ call `load`, `complete`, `embed`, `inspect`, `unload`, `set_idle` and `cancel` f
 `EngineError`, never on text. Each result says which backend ran it and whether the graphics card failed during the
 call (`fell_back`): show "Graphics card failed, used processor" once, then keep passing the same config.
 
+When `gpu_helper` is set and the card helper fails (it dies, says the card failed, or failed in an earlier run), the
+processor helper gets the same request with `gpu: false` (`load`, `complete`, `embed` in `LlmClient`; the `load` in
+`SttClient`, including the one it repeats for a new helper), so on a Mac, where both helpers can be the same binary, it
+really runs on the processor. With no `gpu_helper` the one helper gets `gpu` as the app wrote it (on the Mac that is the
+Metal helper). A Metal helper that dies counts as a card failure like a Vulkan one.
+
 ## Local AI servers
 
 `voice_engine_client::servers::detect()` says which local AI servers are running on this computer: Ollama (port 11434)

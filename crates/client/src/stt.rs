@@ -70,6 +70,11 @@ struct Running {
     on_gpu: bool,
     /// The helper holds the model the client remembers.
     loaded: bool,
+    /// This is the processor helper, running because the card helper failed (now or in an earlier run) or could not
+    /// start. On the Mac the two helpers can be the same binary, which would load on Metal again for a `load` that
+    /// still says `gpu: true`, so every `load` sent to it says `gpu: false`. The model the client remembers keeps
+    /// what the app asked for.
+    processor_fallback: bool,
 }
 
 impl Running {
@@ -245,7 +250,13 @@ impl SttClient {
             }
             *lock(&self.live_stdin) = Some(r.process.stdin_handle());
             *lock(&self.cancel_asked) = None;
-            let attempt = self.attempt(r, request, needs_model, began, pick);
+            let sent = match request {
+                SttRequest::Load(spec) if r.processor_fallback => {
+                    SttRequest::Load(processor_only(spec.clone()))
+                }
+                other => other.clone(),
+            };
+            let attempt = self.attempt(r, &sent, needs_model, began, pick);
             *lock(&self.live_stdin) = None;
             match attempt {
                 Ok((value, spoken)) => {
@@ -333,9 +344,9 @@ impl SttClient {
                     kill: false,
                 });
             };
-            if self.gpu_disabled.load(Ordering::Relaxed) {
-                // The card failed in this process: the processor helper has no use for the app's old wish.
-                model.gpu = false;
+            if r.processor_fallback {
+                // The processor helper has no use for the app's wish for the card.
+                model = processor_only(model);
             }
             self.run(r, &SttRequest::Load(model), began, &|ev| match ev {
                 SttEvent::Loaded { backend, .. } => Some(((), Some(backend.clone()))),
@@ -417,6 +428,7 @@ impl SttClient {
                         ready,
                         on_gpu,
                         loaded: false,
+                        processor_fallback: false,
                     });
                 }
                 // A version mismatch is the app's problem, not the card's.
@@ -430,6 +442,9 @@ impl SttClient {
             ready,
             on_gpu: false,
             loaded: false,
+            // Without a card helper configured the one helper is the app's only choice (on the Mac it is the Metal
+            // one): the app's `gpu` goes through as it is.
+            processor_fallback: cfg.gpu_helper.is_some(),
         })
     }
 
@@ -438,6 +453,12 @@ impl SttClient {
         let cfg = lock(&self.config);
         gpu_memory::record(cfg.gpu_failures.as_deref(), &cfg.gpu_key);
     }
+}
+
+/// `model` as the processor helper must get it after the card helper failed: the same load with `gpu: false`.
+fn processor_only(mut model: SttLoad) -> SttLoad {
+    model.gpu = false;
+    model
 }
 
 /// Starts the helper at `path`. A helper that dies at startup is started again.

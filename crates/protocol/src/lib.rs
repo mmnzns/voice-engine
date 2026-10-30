@@ -132,9 +132,10 @@ impl Backend {
         }
     }
 
-    /// The helper chose a GPU (an old helper that says nothing counts as the processor).
+    /// The helper runs on a graphics card: Vulkan (with its device named) or Metal on the Mac (the AI helper says
+    /// `metal` and names no device). An old helper that says nothing counts as the processor.
     pub fn on_gpu(&self) -> bool {
-        self.device.is_some() && !self.backend.is_empty() && self.backend != "cpu"
+        !self.backend.is_empty() && self.backend != "cpu"
     }
 }
 
@@ -366,6 +367,13 @@ mod tests {
         assert_eq!(protocol, 0);
         assert!(!backend.on_gpu());
         assert!(!Backend::cpu().on_gpu());
+        // Metal is a graphics card although the AI helper names no device for it.
+        let metal = Backend {
+            backend: "metal".into(),
+            device: None,
+            vram_mb: 0,
+        };
+        assert!(metal.on_gpu());
         assert_eq!(
             encode(&Event::Ready {
                 backend: Backend::cpu(),

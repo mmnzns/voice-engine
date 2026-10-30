@@ -10,6 +10,12 @@
 //! and answers `complete` with the graphics card failed; `per_request` is the Mac helper: `ready` says `metal`, and
 //! `loaded`, `done` and `embedded` say `metal` for a request with `gpu: true` and `cpu` for `gpu: false`. Every other
 //! mode answers like a helper from before replies said where they ran (no backend), so the client uses `ready`'s.
+//! `metal_die` is the Mac helper asked for as the card helper: `ready` says `metal` with no device, and it dies on
+//! `complete` like `gpu_die`.
+//!
+//! When `FAKE_LOG` names a file, every `load`, `complete` and `embed` the helper receives is appended to it as one
+//! line, `[<mode>] <op> gpu=<flag>`, so a test can see what each helper (the card one and the processor one run in
+//! different modes) was asked.
 
 use std::io::{BufRead, Write};
 use std::sync::mpsc;
@@ -35,6 +41,20 @@ fn bump(path: &str) -> u32 {
     n
 }
 
+/// Appends `[<mode>] <op> gpu=<flag>` to the file `FAKE_LOG` names, if it names one.
+fn log(mode: &str, op: &str, gpu: bool) {
+    let Ok(path) = std::env::var("FAKE_LOG") else {
+        return;
+    };
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "[{mode}] {op} gpu={gpu}");
+    }
+}
+
 fn main() {
     let mode = std::env::var("FAKE_MODE").unwrap_or_default();
     let state = std::env::var("FAKE_STATE").unwrap_or_default();
@@ -52,7 +72,7 @@ fn main() {
         "per_request" => Backend::cpu(),
         _ => Backend::default(),
     };
-    let backend = if mode == "per_request" {
+    let backend = if mode == "per_request" || mode == "metal_die" {
         metal.clone()
     } else if mode.starts_with("gpu") {
         Backend {
@@ -91,15 +111,18 @@ fn main() {
             Request::Configure(c) => send(&Event::Configured {
                 idle_secs: c.idle_secs,
             }),
-            Request::Load(l) => send(&Event::Loaded {
-                seconds: 0.5,
-                n_ctx_train: 4096,
-                backend: if mode == "per_request" {
-                    says(l.gpu)
-                } else {
-                    backend.clone()
-                },
-            }),
+            Request::Load(l) => {
+                log(&mode, "load", l.gpu);
+                send(&Event::Loaded {
+                    seconds: 0.5,
+                    n_ctx_train: 4096,
+                    backend: if mode == "per_request" {
+                        says(l.gpu)
+                    } else {
+                        backend.clone()
+                    },
+                });
+            }
             Request::Unload => send(&Event::Unloaded),
             Request::Inspect(_) => send(&Event::Inspected(Inspection {
                 has_chat_template: true,
@@ -107,64 +130,70 @@ fn main() {
                 n_ctx_train: 4096,
                 architecture: "fake".into(),
             })),
-            Request::Embed(e) => send(&Event::Embedded {
-                vectors: vec![vec![1.0]],
-                backend: says(e.gpu),
-            }),
+            Request::Embed(e) => {
+                log(&mode, "embed", e.gpu);
+                send(&Event::Embedded {
+                    vectors: vec![vec![1.0]],
+                    backend: says(e.gpu),
+                });
+            }
             Request::Cancel | Request::Devices => {}
-            Request::Complete(c) => match mode.as_str() {
-                "die_on_complete" | "gpu_die" => {
-                    send(&Event::Progress {
-                        phase: Phase::Loading,
-                        done: 0,
-                        total: 0,
-                    });
-                    std::process::exit(139);
-                }
-                "die_on_first_complete" => {
-                    if bump(&state) == 0 {
+            Request::Complete(c) => {
+                log(&mode, "complete", c.gpu);
+                match mode.as_str() {
+                    "die_on_complete" | "gpu_die" | "metal_die" => {
+                        send(&Event::Progress {
+                            phase: Phase::Loading,
+                            done: 0,
+                            total: 0,
+                        });
                         std::process::exit(139);
                     }
-                    answer(says(c.gpu));
-                }
-                "oom" => {
-                    eprintln!("GGML_ASSERT: out of memory");
-                    std::process::exit(137);
-                }
-                "stall" => loop {
-                    std::thread::sleep(Duration::from_secs(60));
-                },
-                "slow" => loop {
-                    send(&Event::Progress {
-                        phase: Phase::Writing,
-                        done: 1,
-                        total: 0,
-                    });
-                    match rx.recv_timeout(Duration::from_millis(50)) {
-                        Ok(l) if matches!(decode_request(&l), Ok(Request::Cancel)) => {
-                            send(&Event::Error {
-                                message: "stopped by request".into(),
-                                error: ErrorKind::Cancelled,
-                            });
-                            break;
+                    "die_on_first_complete" => {
+                        if bump(&state) == 0 {
+                            std::process::exit(139);
                         }
-                        _ => {}
+                        answer(says(c.gpu));
                     }
-                },
-                "ignore_cancel" => loop {
-                    send(&Event::Progress {
-                        phase: Phase::Writing,
-                        done: 1,
-                        total: 0,
-                    });
-                    std::thread::sleep(Duration::from_millis(50));
-                },
-                "gpu_error" => send(&Event::Error {
-                    message: "the graphics card failed".into(),
-                    error: ErrorKind::GpuFailed { fell_back: false },
-                }),
-                _ => answer(says(c.gpu)),
-            },
+                    "oom" => {
+                        eprintln!("GGML_ASSERT: out of memory");
+                        std::process::exit(137);
+                    }
+                    "stall" => loop {
+                        std::thread::sleep(Duration::from_secs(60));
+                    },
+                    "slow" => loop {
+                        send(&Event::Progress {
+                            phase: Phase::Writing,
+                            done: 1,
+                            total: 0,
+                        });
+                        match rx.recv_timeout(Duration::from_millis(50)) {
+                            Ok(l) if matches!(decode_request(&l), Ok(Request::Cancel)) => {
+                                send(&Event::Error {
+                                    message: "stopped by request".into(),
+                                    error: ErrorKind::Cancelled,
+                                });
+                                break;
+                            }
+                            _ => {}
+                        }
+                    },
+                    "ignore_cancel" => loop {
+                        send(&Event::Progress {
+                            phase: Phase::Writing,
+                            done: 1,
+                            total: 0,
+                        });
+                        std::thread::sleep(Duration::from_millis(50));
+                    },
+                    "gpu_error" => send(&Event::Error {
+                        message: "the graphics card failed".into(),
+                        error: ErrorKind::GpuFailed { fell_back: false },
+                    }),
+                    _ => answer(says(c.gpu)),
+                }
+            }
         }
     }
 }

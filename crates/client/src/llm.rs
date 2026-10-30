@@ -89,6 +89,10 @@ struct Running {
     process: Process,
     backend: Backend,
     on_gpu: bool,
+    /// This is the processor helper, running because the card helper failed (now or in an earlier run) or could not
+    /// start. On the Mac the two helpers can be the same binary, which would load on Metal again for a request that
+    /// still says `gpu: true`, so every request sent to it says `gpu: false`.
+    processor_fallback: bool,
 }
 
 /// Why one attempt at a request ended without an answer.
@@ -249,7 +253,12 @@ impl LlmClient {
             *self.live_stdin.lock().unwrap_or_else(|e| e.into_inner()) =
                 Some(r.process.stdin_handle());
             *self.cancel_asked.lock().unwrap_or_else(|e| e.into_inner()) = None;
-            let attempt = self.attempt(r, request, progress, pick);
+            let sent = if r.processor_fallback {
+                processor_only(request)
+            } else {
+                request.clone()
+            };
+            let attempt = self.attempt(r, &sent, progress, pick);
             *self.live_stdin.lock().unwrap_or_else(|e| e.into_inner()) = None;
             match attempt {
                 Ok((value, ran)) => {
@@ -374,6 +383,7 @@ impl LlmClient {
                         process,
                         backend,
                         on_gpu,
+                        processor_fallback: false,
                     });
                 }
                 // A version mismatch is the app's problem, not the card's.
@@ -386,6 +396,9 @@ impl LlmClient {
             process,
             backend,
             on_gpu: false,
+            // Without a card helper configured the one helper is the app's only choice (on the Mac it is the Metal
+            // one): the app's `gpu` goes through as it is.
+            processor_fallback: cfg.gpu_helper.is_some(),
         })
     }
 
@@ -410,6 +423,18 @@ impl LlmClient {
         *self.cancel_asked.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
         let _ = write_line(&stdin, &encode(&Request::Cancel));
     }
+}
+
+/// `request` as the processor helper must get it after the card helper failed: the same request with `gpu: false`.
+fn processor_only(request: &Request) -> Request {
+    let mut request = request.clone();
+    match &mut request {
+        Request::Load(l) => l.gpu = false,
+        Request::Complete(c) => c.gpu = false,
+        Request::Embed(e) => e.gpu = false,
+        _ => {}
+    }
+    request
 }
 
 /// Where the helper says the request that `ev` answers ran: `loaded`, `done` and `embedded` carry it. None for any

@@ -405,6 +405,107 @@ fn a_graphics_card_helper_that_dies_hands_the_call_to_the_processor_helper_and_i
     assert!(!failures.exists());
 }
 
+/// What every fake helper was asked to load, one line each: `[<mode>] load gpu=<flag>` (the mode says which helper).
+fn asked(log: &Path) -> Vec<String> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// `config` with a log of what the fake helpers are asked to load.
+fn logged(mode: &str, state: &Path, log: &Path) -> SttConfig {
+    let mut cfg = config(mode, state);
+    cfg.env.push(("FAKE_LOG".into(), log.display().to_string()));
+    cfg
+}
+
+#[test]
+fn the_fallback_to_the_processor_helper_loads_the_model_with_gpu_false() {
+    let _t = turn();
+    let (d, st) = state();
+    let log = d.path().join("asked.log");
+    let failures = d.path().join("gpu.txt");
+    let client = SttClient::new(with_gpu(logged("", &st, &log), "gpu_die", &failures));
+    client.load(model("whisper-turbo")).unwrap();
+    // The card helper dies on the audio; the processor helper loads the remembered model, saying gpu: false, and
+    // answers; the app is told once.
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert!(out.fell_back);
+    assert_eq!(
+        asked(&log),
+        ["[gpu_die] load gpu=true", "[] load gpu=false"]
+    );
+    // Straight to the processor helper from now on: nothing is loaded again, and nothing more is said.
+    let next = client.transcribe(&audio(), &opts()).unwrap();
+    assert!(!next.fell_back);
+    assert_eq!(asked(&log).len(), 2);
+    // The app loads a model again (gpu: true, as it always asks) and the processor helper is told gpu: false.
+    let again = client.load(model("whisper-base")).unwrap();
+    assert!(!again.fell_back);
+    assert_eq!(asked(&log)[2..], ["[] load gpu=false"]);
+    // A new helper after `shutdown` is the processor one and gets the remembered model with gpu: false.
+    client.shutdown();
+    assert!(!client.transcribe(&audio(), &opts()).unwrap().fell_back);
+    assert_eq!(asked(&log)[3..], ["[] load gpu=false"]);
+}
+
+#[test]
+fn an_error_from_the_card_helper_also_loads_with_gpu_false_on_the_processor_helper() {
+    let _t = turn();
+    let (d, st) = state();
+    let log = d.path().join("asked.log");
+    let client = SttClient::new(with_gpu(
+        logged("", &st, &log),
+        "gpu_error",
+        &d.path().join("gpu.txt"),
+    ));
+    client.load(model("whisper-turbo")).unwrap();
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert!(out.fell_back);
+    assert_eq!(
+        asked(&log),
+        ["[gpu_error] load gpu=true", "[] load gpu=false"]
+    );
+}
+
+#[test]
+fn a_remembered_failure_loads_with_gpu_false_from_the_first_request() {
+    let _t = turn();
+    let (d, st) = state();
+    let log = d.path().join("asked.log");
+    let failures = d.path().join("gpu.txt");
+    std::fs::write(&failures, "test-build").unwrap();
+    let client = SttClient::new(with_gpu(logged("", &st, &log), "gpu_die", &failures));
+    let loaded = client.load(model("whisper-turbo")).unwrap();
+    assert!(!loaded.fell_back);
+    client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(asked(&log), ["[] load gpu=false"]);
+}
+
+#[test]
+fn a_helper_that_is_the_only_one_keeps_the_gpu_the_app_asked_for() {
+    let _t = turn();
+    let (d, st) = state();
+    let log = d.path().join("asked.log");
+    // No card helper configured: the one helper is the processor helper on a PC and the Metal one on the Mac, and
+    // the app's gpu: true is for it. A card helper that works gets the load as it is too.
+    SttClient::new(logged("", &st, &log))
+        .load(model("whisper-turbo"))
+        .unwrap();
+    let log2 = d.path().join("asked2.log");
+    SttClient::new(with_gpu(
+        logged("", &st, &log2),
+        "gpu_ok",
+        &d.path().join("gpu.txt"),
+    ))
+    .load(model("whisper-turbo"))
+    .unwrap();
+    assert_eq!(asked(&log), ["[] load gpu=true"]);
+    assert_eq!(asked(&log2), ["[gpu_ok] load gpu=true"]);
+}
+
 #[test]
 fn a_graphics_card_error_from_the_helper_also_falls_back() {
     let _t = turn();

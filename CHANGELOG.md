@@ -2,6 +2,17 @@
 
 ## Unreleased (v0.2.0)
 
+- client: the fall back to the processor helper says `gpu: false`. `LlmClient` and `SttClient` resent the request that
+  had failed on the card helper still saying `gpu: true`; since `gpu: false` means the processor on the Mac too, and
+  there both helpers can be the same binary, the processor helper loaded on Metal again. Now every `load`, `complete`
+  and `embed` (`LlmClient`) and every `load` (`SttClient`, also the one it repeats for a new helper after a restart or a
+  `shutdown`) that goes to the processor helper because a `gpu_helper` is configured and failed (now, in an earlier run
+  through the remembered failure file, or at start) says `gpu: false`; the model `SttClient` remembers keeps what the
+  app asked for. With no `gpu_helper` configured the app's `gpu` is sent as it is. `Backend::on_gpu()` is now true for
+  `metal` (the AI helper names no device on the Mac), so a Metal helper that dies while working is a card failure:
+  remembered, the request done again on the processor helper, `fell_back` true, and later calls go straight there,
+  instead of `Crashed`. The speech helper already named its Metal device, so it already behaved so. Tests: the fake
+  helpers log what they are asked (`FAKE_LOG`).
 - llm: `gpu: false` now means the processor on the Mac too. Before, the helper put every layer on Metal whenever it had
   not chosen a Vulkan device, so a `load`, `complete` or `embed` with `gpu: false` still ran on Metal and the helper
   said `metal` (found by the benchmark of 2026-10-29); the client's fall back to the processor was meaningless on a

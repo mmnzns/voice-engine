@@ -261,6 +261,148 @@ fn a_graphics_card_error_from_the_helper_also_falls_back() {
     assert_eq!(out.backend.backend, "cpu");
 }
 
+/// What every fake helper was asked, one line each: `[<mode>] <op> gpu=<flag>` (the mode says which helper).
+fn asked(log: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+/// `config` with a log of what the fake helpers are asked.
+fn logged(mode: &str, state: &std::path::Path, log: &std::path::Path) -> LlmConfig {
+    let mut cfg = config(mode, state);
+    cfg.env.push(("FAKE_LOG".into(), log.display().to_string()));
+    cfg
+}
+
+fn embedding(gpu: bool) -> voice_engine_protocol::Embedding {
+    voice_engine_protocol::Embedding {
+        model_path: "/e.gguf".into(),
+        texts: vec!["a".into()],
+        gpu,
+    }
+}
+
+#[test]
+fn the_fallback_to_the_processor_helper_says_gpu_false_and_the_next_calls_go_straight_there() {
+    let _t = turn();
+    let (d, st) = state();
+    let log = d.path().join("asked.log");
+    let failures = d.path().join("gpu.txt");
+    let client = LlmClient::new(with_gpu(logged("", &st, &log), "gpu_die", &failures));
+    // The app asks for the card (gpu: true); the card helper dies on it; the processor helper gets the same request
+    // but with gpu: false, so a helper that is also the Mac's Metal helper really runs on the processor.
+    let out = client.complete(completion(), &mut |_| {}).unwrap();
+    assert!(out.fell_back);
+    assert_eq!(
+        asked(&log),
+        ["[gpu_die] complete gpu=true", "[] complete gpu=false"]
+    );
+    // The next calls go straight to the processor helper (no more lines from the card helper), say nothing about a
+    // fallback, and every kind of request carries gpu: false although the app still says true.
+    let next = client.complete(completion(), &mut |_| {}).unwrap();
+    assert!(!next.fell_back);
+    client.load("/m.gguf", 512, true, &mut |_| {}).unwrap();
+    client.embed(embedding(true)).unwrap();
+    assert_eq!(
+        asked(&log)[2..],
+        [
+            "[] complete gpu=false",
+            "[] load gpu=false",
+            "[] embed gpu=false"
+        ]
+    );
+}
+
+#[test]
+fn an_error_from_the_card_helper_also_resends_with_gpu_false() {
+    let _t = turn();
+    let (d, st) = state();
+    let log = d.path().join("asked.log");
+    let client = LlmClient::new(with_gpu(
+        logged("", &st, &log),
+        "gpu_error",
+        &d.path().join("gpu.txt"),
+    ));
+    let out = client.complete(completion(), &mut |_| {}).unwrap();
+    assert!(out.fell_back);
+    assert_eq!(
+        asked(&log),
+        ["[gpu_error] complete gpu=true", "[] complete gpu=false"]
+    );
+}
+
+#[test]
+fn a_remembered_failure_sends_gpu_false_to_the_processor_helper_from_the_first_request() {
+    let _t = turn();
+    let (d, st) = state();
+    let log = d.path().join("asked.log");
+    let failures = d.path().join("gpu.txt");
+    std::fs::write(&failures, "test-build").unwrap();
+    let client = LlmClient::new(with_gpu(logged("", &st, &log), "gpu_die", &failures));
+    let out = client.complete(completion(), &mut |_| {}).unwrap();
+    assert!(!out.fell_back);
+    assert_eq!(asked(&log), ["[] complete gpu=false"]);
+}
+
+#[test]
+fn a_helper_that_is_the_only_one_keeps_the_gpu_the_app_asked_for() {
+    let _t = turn();
+    let (d, st) = state();
+    let log = d.path().join("asked.log");
+    // No card helper is configured: the one helper is the processor helper on a PC, and Metal's on the Mac, and the
+    // app's gpu: true is for it. Only a fallback from a card helper turns the flag off.
+    let client = LlmClient::new(logged("", &st, &log));
+    client.complete(completion(), &mut |_| {}).unwrap();
+    // A card helper that works gets the request as it is too.
+    let log2 = d.path().join("asked2.log");
+    let with_card = LlmClient::new(with_gpu(
+        logged("", &st, &log2),
+        "gpu_ok",
+        &d.path().join("gpu.txt"),
+    ));
+    with_card.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(asked(&log), ["[] complete gpu=true"]);
+    assert_eq!(asked(&log2), ["[gpu_ok] complete gpu=true"]);
+}
+
+#[test]
+fn a_metal_helper_that_dies_is_a_card_failure_too() {
+    let _t = turn();
+    let (d, st) = state();
+    let log = d.path().join("asked.log");
+    let failures = d.path().join("gpu.txt");
+    // The Mac: the same binary is both helpers; the card one says `metal` and names no device.
+    let client = LlmClient::new(with_gpu(logged("", &st, &log), "metal_die", &failures));
+    let out = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(out.value.text, "hi");
+    assert_eq!(out.backend.backend, "cpu");
+    assert!(out.fell_back, "not a plain crash");
+    assert_eq!(
+        std::fs::read_to_string(&failures).unwrap().trim(),
+        "test-build"
+    );
+    assert_eq!(
+        asked(&log),
+        ["[metal_die] complete gpu=true", "[] complete gpu=false"]
+    );
+    // Remembered: the next call, and a new client, go straight to the processor helper.
+    assert!(
+        !client
+            .complete(completion(), &mut |_| {})
+            .unwrap()
+            .fell_back
+    );
+    let again = LlmClient::new(with_gpu(logged("", &st, &log), "metal_die", &failures));
+    assert!(!again.complete(completion(), &mut |_| {}).unwrap().fell_back);
+    assert_eq!(
+        asked(&log)[2..],
+        ["[] complete gpu=false", "[] complete gpu=false"]
+    );
+}
+
 #[test]
 fn cancel_stops_the_request_and_the_helper_keeps_going() {
     let _t = turn();

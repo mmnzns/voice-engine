@@ -19,6 +19,10 @@
 //!   though the card was asked for (`fell_back` in `loaded` and `transcribed`).
 //! - `too_long` answers `transcribe` with too long (max 40 s); `missing` answers `load` with model missing;
 //!   `slow_load` takes 700 ms to load.
+//!
+//! When `FAKE_LOG` names a file, every `load` the helper receives is appended to it as one line, `[<mode>] load
+//! gpu=<flag>`, so a test can see what each helper (the card one and the processor one run in different modes) was
+//! asked.
 
 use std::io::{BufRead, Write};
 use std::sync::mpsc;
@@ -43,6 +47,20 @@ fn bump(path: &str) -> u32 {
         .unwrap_or(0);
     let _ = std::fs::write(path, (n + 1).to_string());
     n
+}
+
+/// Appends `[<mode>] load gpu=<flag>` to the file `FAKE_LOG` names, if it names one.
+fn log_load(mode: &str, gpu: bool) {
+    let Ok(path) = std::env::var("FAKE_LOG") else {
+        return;
+    };
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(file, "[{mode}] load gpu={gpu}");
+    }
 }
 
 fn error(kind: SttErrorKind) {
@@ -115,6 +133,7 @@ fn main() {
             SttRequest::Devices | SttRequest::Cancel => {}
             SttRequest::Load(l) => {
                 loaded = None;
+                log_load(&mode, l.gpu);
                 if mode == "missing" {
                     error(SttErrorKind::ModelMissing {
                         path: format!("{}/model.bin", l.model_dir),
