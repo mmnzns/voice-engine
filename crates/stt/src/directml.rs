@@ -23,25 +23,33 @@ pub struct Adapter {
     pub software: bool,
     /// Memory on the card itself; an integrated adapter has little or none.
     pub dedicated_mb: u64,
+    /// The PCI vendor id (0x10DE NVIDIA, 0x1002 AMD, 0x8086 Intel, 0x1414 Microsoft).
+    pub vendor_id: u32,
 }
 
+/// Microsoft's vendor id: "Microsoft Basic Display Adapter" (no driver installed) and Hyper-V or remote display
+/// adapters are not cards, however they are flagged, and DirectML fails on them.
+const MICROSOFT_VENDOR: u32 = 0x1414;
+
 /// The adapter to run on: the discrete one with the most dedicated memory (the first listed wins a tie), never an
-/// integrated or software one. None: DirectML is not tried and the model runs on the processor.
+/// integrated, software or Microsoft one, and never one with no dedicated memory. None: DirectML is not tried and the model runs on the processor.
 pub fn discrete(adapters: &[Adapter]) -> Option<&Adapter> {
     adapters
         .iter()
-        .filter(|a| !a.software && !a.integrated)
+        .filter(|a| {
+            !a.software && !a.integrated && a.vendor_id != MICROSOFT_VENDOR && a.dedicated_mb > 0
+        })
         // max_by_key keeps the last of equal maxima; reversed, the first one listed wins a tie.
         .rev()
         .max_by_key(|a| a.dedicated_mb)
 }
 
-/// The adapters as protocol devices (backend "DirectML", `index` the DXGI number), software ones left out, for the
-/// speech helper's `devices` answer.
+/// The adapters as protocol devices (backend "DirectML", `index` the DXGI number), software and Microsoft ones left
+/// out, for the speech helper's `devices` answer.
 pub fn devices(adapters: &[Adapter]) -> Vec<Device> {
     adapters
         .iter()
-        .filter(|a| !a.software)
+        .filter(|a| !a.software && a.vendor_id != MICROSOFT_VENDOR)
         .map(|a| Device {
             index: a.index as usize,
             name: format!("{DIRECTML}{}", a.index),
@@ -113,6 +121,7 @@ mod dxgi {
                         .unwrap_or(true),
                     software: desc.Flags & (DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32) != 0,
                     dedicated_mb: bytes_to_mb(desc.DedicatedVideoMemory),
+                    vendor_id: desc.VendorId,
                 });
             }
             index += 1;
@@ -150,6 +159,14 @@ mod tests {
             integrated,
             software: false,
             dedicated_mb,
+            vendor_id: 0x10DE,
+        }
+    }
+
+    fn basic_display_adapter(index: u32) -> Adapter {
+        Adapter {
+            vendor_id: MICROSOFT_VENDOR,
+            ..adapter(index, "Microsoft Basic Display Adapter", false, 0)
         }
     }
 
@@ -187,6 +204,34 @@ mod tests {
     }
 
     #[test]
+    fn a_basic_display_adapter_or_a_vm_with_only_microsoft_adapters_means_no_directml() {
+        assert_eq!(discrete(&[basic_display_adapter(0)]), None);
+        // Hyper-V: a Microsoft display adapter next to the software renderer.
+        let vm = [
+            Adapter {
+                vendor_id: MICROSOFT_VENDOR,
+                ..adapter(0, "Microsoft Hyper-V Video", false, 512)
+            },
+            software(1),
+        ];
+        assert_eq!(discrete(&vm), None);
+    }
+
+    #[test]
+    fn an_adapter_with_no_dedicated_memory_is_not_a_card() {
+        assert_eq!(discrete(&[adapter(0, "Some Vendor GPU", false, 0)]), None);
+    }
+
+    #[test]
+    fn a_basic_display_adapter_does_not_hide_the_real_card() {
+        let adapters = vec![
+            basic_display_adapter(0),
+            adapter(1, "NVIDIA GeForce RTX 5070 Ti", false, 16303),
+        ];
+        assert_eq!(discrete(&adapters).unwrap().index, 1);
+    }
+
+    #[test]
     fn the_largest_card_wins_and_a_tie_goes_to_the_first_listed() {
         let adapters = vec![
             adapter(0, "small", false, 4096),
@@ -205,6 +250,11 @@ mod tests {
         ];
         let devices = devices(&adapters);
         assert_eq!(devices.len(), 2, "the software renderer is not listed");
+        assert_eq!(
+            super::devices(&[basic_display_adapter(0)]).len(),
+            0,
+            "a Microsoft adapter is not listed"
+        );
         assert_eq!(
             (
                 devices[0].kind,

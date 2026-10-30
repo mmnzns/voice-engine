@@ -73,10 +73,15 @@ pub fn pick(devices: &[Device]) -> Option<&Device> {
 }
 
 /// Whether this PC has a discrete graphics card the engine would use, and which: the card `pick` chooses for ggml,
-/// else (a build with DirectML only, which is Parakeet's) the DirectML adapter with the most memory. Apps turn the
-/// card on by default on Windows only when this is Some.
+/// else (a build with DirectML only, which is Parakeet's) the DirectML adapter with the most memory. A device that
+/// reports no memory is not a card (a PC without a graphics driver), though `pick` still takes it: a ggml device
+/// whose memory query failed can still run Whisper. Apps turn the card on by default on Windows only when this is
+/// Some.
 pub fn discrete_card(devices: &[Device]) -> Option<&Device> {
-    pick(devices).or_else(|| best(devices, true))
+    let has_memory = |d: &&Device| d.memory_mb > 0;
+    pick(devices)
+        .filter(has_memory)
+        .or_else(|| best(devices, true).filter(has_memory))
 }
 
 /// whisper.cpp's `gpu_device` for a chosen device: whisper.cpp counts only GPU and iGPU devices, in ggml's order,
@@ -194,6 +199,27 @@ mod tests {
             discrete_card(&[directml(0, "iGPU", DeviceKind::Igpu, 512)]),
             None
         );
+    }
+
+    #[test]
+    fn a_gpu_with_no_memory_is_not_a_discrete_card_but_pick_still_takes_it() {
+        let devices = [dev(0, "Basic", DeviceKind::Gpu, 0)];
+        assert_eq!(discrete_card(&devices), None);
+        assert_eq!(pick(&devices).unwrap().index, 0);
+        let dml = [directml(0, "Basic", DeviceKind::Gpu, 0)];
+        assert_eq!(discrete_card(&dml), None);
+        // A real card next to it still answers.
+        let both = [
+            dev(0, "Basic", DeviceKind::Gpu, 0),
+            dev(1, "NVIDIA GeForce RTX 5070 Ti", DeviceKind::Gpu, 16303),
+        ];
+        assert_eq!(discrete_card(&both).unwrap().index, 1);
+        // A ggml device with no memory does not hide a DirectML card.
+        let mixed = [
+            dev(0, "Basic", DeviceKind::Gpu, 0),
+            directml(0, "NVIDIA GeForce RTX 5070 Ti", DeviceKind::Gpu, 16384),
+        ];
+        assert_eq!(discrete_card(&mixed).unwrap().backend, "DirectML");
     }
 
     #[test]

@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.2 (unreleased)
+
+- fix: an adapter with no real card is no longer a discrete card (#13). DirectML's `discrete()` also requires dedicated
+  memory and a vendor other than Microsoft ("Microsoft Basic Display Adapter", Hyper-V and remote display adapters), and
+  `devices()` leaves Microsoft adapters out; the protocol's `discrete_card` ignores a GPU that reports 0 MB (`pick`
+  for Whisper and the AI is unchanged).
+
 ## v0.2.1 (2026-10-30)
 
 Apps get a discrete graphics card check for the Windows default, and DirectML now picks the discrete card; no transcript or
