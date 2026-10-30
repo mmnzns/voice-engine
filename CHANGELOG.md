@@ -2,6 +2,9 @@
 
 ## Unreleased (v0.2.0)
 
+- tests: Windows re-check fixes. `bench_llm`'s default helper path ends in `.exe` on Windows (#4). With the `directml`
+  feature, `real_parakeet`'s thread test expects the card's thread rule when `gpu: true` really ran on DirectML, and a
+  new ignored test asserts that `gpu: true` gives `directml` (not fell back) or `cpu` with `fell_back` true (#5).
 - bench: why Whisper Base and Whisper Large Turbo missed their bars (`docs/bench-2026-10-29.md`, "Why the bars were
   missed"). New example `voice-engine-stt` `bench_timing` (the engine, Talaan's own `transcribe` and a direct whisper-rs
   call with token timestamps on and off, on the same 29 s clip). Whisper's token timestamps cost 1 to 4 percent on Base

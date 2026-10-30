@@ -291,7 +291,7 @@ is false for `Cancelled` and `Stalled`: nothing went wrong, the partial file is 
 ## Use it in an app
 
 ```toml
-voice-engine-protocol = { git = "https://github.com/mmnzns/voice-engine", tag = "v0.1.0" }
+voice-engine-protocol = { git = "https://github.com/mmnzns/voice-engine", tag = "v0.2.0" }
 ```
 
 Every engine crate in one app uses the same tag. Each helper program stays in the app as a 3-line `main.rs`:
@@ -402,7 +402,7 @@ model id) when that is set, else in the shared folder, then in Talaan's real fol
 file named by `$VOICE_ENGINE_TEST_CLIP` (16-bit PCM or 32-bit float; repeated and cut to 29 s), and the macOS `say` command
 only when that is not set and the computer is a Mac. `bench_llm` takes catalog ids (default `qwen3.5-4b` and
 `granite-4.2-3b`), reads them from `$VOICE_ENGINE_TEST_MODELS` or else the shared folder, and finds the helper at
-`$VOICE_ENGINE_TEST_HELPER` or `target/release/voice-engine-llm`. `download_proof` writes into the real shared model folder.
+`$VOICE_ENGINE_TEST_HELPER` or `target/release/voice-engine-llm` (`.exe` on Windows). `download_proof` writes into the real shared model folder.
 
 ### Run the speed check and the real-model tests on a Windows PC
 
@@ -418,6 +418,7 @@ $env:VOICE_ENGINE_TEST_CLIP = "$PWD\docs\data\clip-bench.wav"           # or any
 cargo run --release -p voice-engine-stt --example bench                    # Whisper Turbo and Parakeet Ultra on the processor
 $env:VOICE_ENGINE_TEST_CLIP = "$PWD\docs\data\clip-sentence.wav"
 cargo test --release -p voice-engine-stt -- --ignored --test-threads=1     # the real-model tests (Whisper, Parakeet, voice detection)
+cargo test --release -p voice-engine-stt --features directml -- --ignored --test-threads=1   # also: gpu: true gives directml, or cpu with fell_back
 ```
 
 The real tests expect the clip to say that sentence. A test that needs the `say` command's own wording or several
