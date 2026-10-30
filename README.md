@@ -183,7 +183,7 @@ Nothing uses CoreML. On the Mac, `gpu: true` for an ONNX model runs on the proce
 
 Every entry carries: `id`, `name`, `maker`, `note`, `kind`, `languages`, `english_only`, `speed` and `accuracy` (1 to
 3), `licence` (SPDX name and link), `files` (each with a url pinned to a commit, size and sha256), `gpu` (which of Mac
-Metal, Windows Vulkan and Windows DirectML run it), `keeps_fillers` (None until measured), `chunk_secs` (the longest
+Metal, Windows Vulkan and Windows DirectML run it), `keeps_fillers` (whether it keeps "um", "uh" and "like"; measured, so `None` for a model that was not: only Whisper Large Turbo and Parakeet Ultra have a value so far, `Some(true)`, see `docs/bench-2026-10-29.md`), `chunk_secs` (the longest
 chunk to send; None means any length) and `llm` (local AI only: `context_max`, `context_8gb`, `context_16gb`,
 `thinks`). Look models up with `catalog::find`, `catalog::all()`, `catalog::speech()` and `catalog::local_ai()`.
 

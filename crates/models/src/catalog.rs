@@ -122,7 +122,8 @@ pub struct ModelInfo {
     pub licence: Licence,
     pub files: &'static [ModelFile],
     pub gpu: GpuSupport,
-    /// Speech: whether it keeps "um" and "uh" when asked to. None until measured (spec 9.4).
+    /// Speech: whether it keeps "um", "uh" and "like" when asked to. `None` until measured (spec 9.4); measured
+    /// for `whisper-turbo` and `parakeet-ultra` (docs/bench-2026-10-29.md, "Fillers").
     pub keeps_fillers: Option<bool>,
     /// Speech: the longest chunk to send (seconds). None: any length (Whisper).
     pub chunk_secs: Option<u32>,
@@ -181,7 +182,7 @@ pub static CATALOG: &[ModelInfo] = &[
             sha256: "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
         }],
         gpu: gpu::WHISPER_AND_LLM,
-        keeps_fillers: None,
+        keeps_fillers: Some(true),
         chunk_secs: None,
         llm: None,
     },
@@ -704,7 +705,7 @@ pub static CATALOG: &[ModelInfo] = &[
             },
         ],
         gpu: gpu::PARAKEET_TDT,
-        keeps_fillers: None,
+        keeps_fillers: Some(true),
         chunk_secs: Some(40),
         llm: None,
     },
@@ -1317,6 +1318,20 @@ mod tests {
                 }
                 Kind::Whisper => assert_eq!(m.chunk_secs, None, "{}", m.id),
                 _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn only_measured_models_have_a_fillers_value() {
+        // Measured on a recording with fillers (crates/stt/tests/real_fillers.rs, docs/bench-2026-10-29.md); the
+        // others stay None until someone measures them.
+        let measured = ["whisper-turbo", "parakeet-ultra"];
+        for m in all() {
+            if measured.contains(&m.id) {
+                assert_eq!(m.keeps_fillers, Some(true), "{}", m.id);
+            } else {
+                assert_eq!(m.keeps_fillers, None, "{} was not measured", m.id);
             }
         }
     }

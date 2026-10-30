@@ -2,6 +2,13 @@
 
 ## Unreleased (v0.2.0)
 
+- catalog: `keeps_fillers` is measured for `whisper-turbo` and `parakeet-ultra`: `Some(true)` for both (every other
+  model stays `None`). New ignored test `crates/stt/tests/real_fillers.rs`: 7 sentences with 9 spoken fillers (um, uh,
+  hmm, like) in three macOS voices, in `Timing::Words`, with `keep_fillers` false and true. Both models wrote 24 of the
+  27 spoken fillers with the option off; Whisper 25 with it on (the option added one "hmm"), Parakeet 24 (it ignores the
+  option). `um`, `uh` and `like` came back every time; `hmm` rarely (Whisper) or never (Parakeet, which wrote "um"
+  instead or nothing). Text-to-speech fillers are cleaner than real ones, so this likely overstates real speech:
+  the table and the caveats are in `docs/bench-2026-10-29.md`, "Fillers". Nothing in the engine changed.
 - bench: speed numbers on real models, and the downloader proved against Hugging Face, in `docs/bench-2026-10-29.md`.
   New examples `voice-engine-stt` `bench` (load time, decode time and real-time factor for a 29 s clip, next to the apps'
   bars), `voice-engine-client` `bench_llm` (a 50-word cleanup through `LlmClient` and the real helper) and
