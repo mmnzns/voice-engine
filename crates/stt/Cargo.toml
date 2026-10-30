@@ -34,6 +34,15 @@ ort = { version = "=2.0.0-rc.13", default-features = false }
 [target.'cfg(target_os = "macos")'.dependencies]
 whisper-rs = { version = "0.16.0", features = ["metal"] }
 
+# Windows only, with the `directml` feature: lists the graphics adapters (DXGI, and DXCore for "integrated") so DirectML runs on the
+# discrete card, not adapter 0 (directml.rs).
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_DXCore",
+] }
+
 [dev-dependencies]
 tempfile.workspace = true
 # The real-model tests find the default model folder (~/Library/Application Support/Talaan/models).
@@ -43,6 +52,7 @@ dirs.workspace = true
 # Windows GPU build: needs the Vulkan SDK (VULKAN_SDK) to build and vulkan-1.dll to run. Never linked into an app's
 # main program.
 vulkan = ["whisper-rs/vulkan"]
-# Windows only: Parakeet on the graphics card through ONNX Runtime's DirectML provider (`gpu: true`), with the
-# processor as the fallback. Without it, or on the Mac, `gpu: true` runs on the processor and says so.
-directml = ["ort/directml"]
+# Windows only: Parakeet on the graphics card through ONNX Runtime's DirectML provider (`gpu: true`), on the discrete
+# card only (never the iGPU), with the processor as the fallback. Without it, or on the Mac, `gpu: true` runs on the
+# processor and says so. In the helper it also adds the DirectML adapters to the `devices` answer.
+directml = ["ort/directml", "dep:windows"]

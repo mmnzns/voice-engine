@@ -11,6 +11,21 @@
   binds (it is a `[string[]]`; a quoted comma string still works), and the smoke test no longer sets
   `ProcessStartInfo.StandardInputEncoding`, which .NET Framework lacks (it writes the UTF-8 ping as bytes). CI runs
   both scripts on Windows under `shell: powershell` (#6).
+- client: a way for apps to ask whether the PC has a discrete graphics card (#9). `LlmClient::devices()` and
+  `SttClient::devices()` return the helper's `DeviceList` (every device and the one it uses); `discrete_card()` on both
+  returns `Option<Device>`. The protocol has `gpu::discrete_card` (the discrete GPU with the most memory, never an
+  integrated one) and `DeviceList`. On Windows the card is on by default only when this answers yes (README, "Choosing the
+  graphics card default on Windows"). The fake helpers answer `devices` from `FAKE_DEVICES`.
+- stt: DirectML runs Parakeet on the discrete card, not Windows' adapter 0 (which can be the iGPU), and `backend().device`
+  names it. `voice_engine_stt::directml` lists the adapters (DXGI, with DXCore for "integrated") and chooses by a pure
+  function; with only integrated graphics DirectML is not tried and Parakeet runs on the processor with `fell_back`. The
+  `directml` feature adds a Windows-only `windows` dependency. `load_on_best_provider` takes `card: Option<&Adapter>`
+  instead of `directml_built: bool`, and `Provider::DirectMl` carries the DXGI number. The speech helper's `devices`
+  answer includes the DirectML adapters when built with `directml`; new `voice_engine_stt::directml_devices` and
+  `discrete_card`.
+- build: `stt-vulkan` is built with `--features vulkan,directml` (`scripts/build-helpers.ps1`, and the manual CI job).
+  ONNX Runtime's DirectML build imports the system `DirectML.dll` (Windows 10 1903 and later), so no file is added to the
+  output (`docs/building-helpers.md`). CI builds, lints and tests `voice-engine-stt` with `directml` on Windows.
 
 ## v0.2.0 (2026-10-29)
 

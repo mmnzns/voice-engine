@@ -28,6 +28,15 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      # The Windows-only DirectML code (the card choice) is only compiled with the feature; the first run of this on a runner
+      # downloads ONNX Runtime's DirectML build.
+      - name: DirectML build (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cargo clippy -p voice-engine-stt --features directml --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          cargo test -p voice-engine-stt --features directml --lib --test parakeet_api
+        shell: pwsh
       # The native libraries must be built for a fixed CPU baseline (.cargo/config.toml), not this runner's CPU. The debug
       # profile reuses the build above; the CMake configuration is the same in release.
       - name: Check the native baseline (macOS)
@@ -126,7 +135,7 @@ jobs:
             $env:PATH = "$(Split-Path $ninja);$env:PATH"
           }
           $env:CMAKE_GENERATOR = 'Ninja'
-          cargo test --release -p voice-engine-llm -p voice-engine-stt -p voice-engine-protocol --features voice-engine-llm/vulkan,voice-engine-stt/vulkan --target-dir C:\tg
+          cargo test --release -p voice-engine-llm -p voice-engine-stt -p voice-engine-protocol --features voice-engine-llm/vulkan,voice-engine-stt/vulkan,voice-engine-stt/directml --target-dir C:\tg
 
   # The reusable helper build (build-helpers.yml, the one an app's release workflow calls), run on this very commit so it is
   # proven here: it builds voice-engine-llm and voice-engine-stt for Mac Apple silicon, Windows x64 and Windows ARM64 as

@@ -172,7 +172,9 @@ fn fail_on_purpose(config: &HelperConfig, engine: &dyn Transcriber) {
 pub fn run_helper(config: HelperConfig) {
     // whisper.cpp and ggml log to stderr by default; drop it (errors come back as events).
     whisper_rs::install_logging_hooks();
-    let all = crate::devices();
+    // ggml's devices first (their indices are ggml's), then DirectML's adapters when this build has them.
+    let mut all = crate::devices();
+    all.extend(crate::directml_devices());
     let mac = cfg!(target_os = "macos");
 
     let mut loaded: Option<Box<dyn Transcriber>> = None;

@@ -9,7 +9,7 @@
 #                    for the machine that runs the build. Windows is scripts/build-helpers.ps1.
 #   <outdir>         receives <name>-<target triple> for each helper, SHA256SUMS and build-info.txt.
 #   --helpers        which to build, a comma list of llm and stt (default llm,stt). The Vulkan variants (llm-vulkan,
-#                    stt-vulkan) exist for x86_64-pc-windows-msvc only: build-helpers.ps1.
+#                    stt-vulkan) exist for x86_64-pc-windows-msvc only: build-helpers.ps1 (the speech one is built with Vulkan and DirectML).
 #   --llm-name       the sidecar's base name for the AI helper (default voice-engine-llm); --stt-name the same for speech
 #                    (default voice-engine-stt). The engine does not fix them: the app does.
 #   --engine-ref     the tag or commit being built; only written into build-info.txt.

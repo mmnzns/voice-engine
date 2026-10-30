@@ -6,6 +6,7 @@
 
 use std::collections::VecDeque;
 use voice_engine_models::catalog::{self, Kind, ModelInfo};
+use voice_engine_stt::directml::Adapter;
 use voice_engine_stt::parakeet_engine::{
     DEFAULT_MAX_SECS, PAD_SAMPLES, Provider, RawWord, WordModel, check_files,
     load_on_best_provider, nemotron_locale, pad_both_sides, segments_from_words, sentence_text,
@@ -624,17 +625,30 @@ fn a_model_error_comes_back_as_it_is() {
 /// What a load gave (provider, backend, threads) and every (provider, threads) the build closure was asked for.
 type LoadResult = Result<(Provider, SpeechBackend, usize), SpeechError>;
 
+/// The PC's discrete card, listed after the Radeon iGPU (so DXGI number 1, not DirectML's default adapter 0).
+fn rtx() -> Adapter {
+    Adapter {
+        index: 1,
+        name: "NVIDIA GeForce RTX 5070 Ti".into(),
+        integrated: false,
+        software: false,
+        dedicated_mb: 16303,
+    }
+}
+
+/// `has_card`: DirectML is in the build and the PC has a discrete card.
 fn load_with(
     gpu: bool,
-    built: bool,
+    has_card: bool,
     model_has: bool,
     threads: Option<usize>,
     gpu_works: bool,
 ) -> (LoadResult, Vec<(Provider, usize)>) {
     let mut tried = vec![];
-    let got = load_on_best_provider(gpu, built, model_has, threads, 16, |p, n| {
+    let card = has_card.then(rtx);
+    let got = load_on_best_provider(gpu, card.as_ref(), model_has, threads, 16, |p, n| {
         tried.push((p, n));
-        if p == Provider::DirectMl && !gpu_works {
+        if matches!(p, Provider::DirectMl(_)) && !gpu_works {
             Err(SpeechError::Internal("provider".into()))
         } else {
             Ok(p)
@@ -660,8 +674,9 @@ fn without_the_gpu_option_it_runs_on_the_processor_and_did_not_fall_back() {
 }
 
 #[test]
-fn the_gpu_option_without_directml_in_the_build_gives_the_processor_with_fell_back() {
-    // the Mac, or a Windows build without the `directml` feature: nothing to fall back from, but the app asked
+fn the_gpu_option_without_a_discrete_card_to_run_directml_on_gives_the_processor_with_fell_back() {
+    // the Mac, a Windows build without the `directml` feature, or a PC with integrated graphics only: no card to run
+    // on and nothing to fall back from, but the app asked
     let (got, tried) = load_with(true, false, true, None, true);
     assert_eq!(got, Ok((Provider::Processor, cpu(true), 12)));
     assert_eq!(
@@ -682,18 +697,19 @@ fn a_model_the_catalog_says_has_no_directml_path_runs_on_the_processor_with_fell
 fn directml_that_starts_is_reported_and_takes_the_gpu_thread_rule() {
     let (got, tried) = load_with(true, true, true, None, true);
     let (provider, backend, threads) = got.unwrap();
-    assert_eq!(provider, Provider::DirectMl);
+    // The RTX's DXGI number is what DirectML is given, and its name is what the app is told.
+    assert_eq!(provider, Provider::DirectMl(1));
     assert_eq!(
         backend,
         SpeechBackend {
             backend: "directml".into(),
-            device: None,
+            device: Some("NVIDIA GeForce RTX 5070 Ti".into()),
             fell_back: false
         }
     );
     assert_eq!(threads, default_threads(ThreadKind::Gpu, 16));
     assert_eq!(threads, 8);
-    assert_eq!(tried, vec![(Provider::DirectMl, 8)]);
+    assert_eq!(tried, vec![(Provider::DirectMl(1), 8)]);
 }
 
 #[test]
@@ -703,7 +719,7 @@ fn directml_that_fails_to_start_loads_on_the_processor_and_says_so() {
     // the processor's own thread rule after the fallback, not the card's
     assert_eq!(
         tried,
-        vec![(Provider::DirectMl, 8), (Provider::Processor, 12)]
+        vec![(Provider::DirectMl(1), 8), (Provider::Processor, 12)]
     );
 }
 
@@ -720,8 +736,8 @@ fn the_apps_thread_count_wins_on_every_provider() {
 
 #[test]
 fn when_the_processor_cannot_load_it_either_that_error_is_the_one_returned() {
-    let got = load_on_best_provider::<()>(true, true, true, None, 16, |p, _| match p {
-        Provider::DirectMl => Err(SpeechError::Internal("gpu".into())),
+    let got = load_on_best_provider::<()>(true, Some(&rtx()), true, None, 16, |p, _| match p {
+        Provider::DirectMl(_) => Err(SpeechError::Internal("gpu".into())),
         Provider::Processor => Err(SpeechError::BadModel),
     });
     assert_eq!(got.unwrap_err(), SpeechError::BadModel);
