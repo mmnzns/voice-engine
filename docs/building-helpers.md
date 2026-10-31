@@ -238,3 +238,7 @@ toolchain of `.github/actions/windows-arm64-toolchain` set up first, and the Vul
 `scripts/smoke-helpers.ps1 -Dir <folder> -Triple <triple> -Names <name>,<name>` does that, and checks `SHA256SUMS`, for
 files you already have; this repository's CI runs it on every artifact, on a runner of the same kind, after the workflow
 has built them.
+
+A Vulkan helper built locally on Windows with the Visual Studio 2026 BuildTools (MSVC 19.51) and Vulkan SDK 1.4.363.0
+can fail with an MSBuild ordering error in `vulkan-shaders-gen`. Building with one job works, though slower:
+`cargo build --release -j 1 --features vulkan`. The release builds use the workflow and are not affected.
