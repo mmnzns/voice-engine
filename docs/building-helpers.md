@@ -28,6 +28,14 @@ Nothing ships with the app, and the helpers do not import any of it. Not checked
 `DirectML.dll` is new enough for this ONNX Runtime on every Windows 10 build; if it is not, Parakeet falls back to the
 processor with `fell_back`.
 
+## Which environment variables the helpers read
+
+The helpers this workflow and the build scripts make are the engine's own binaries, built from the engine's checkout with
+the prefix `VOICE_ENGINE`. They read `VOICE_ENGINE_GPU` (for example `fail`, the forced card failure check) and
+`VOICE_ENGINE_LLM_IDLE_SECS`, whatever `llm-name` and `stt-name` say. An app's own dev helper, built from its 3-line
+`main.rs` with `env_prefix`, reads `<PREFIX>_GPU` and `<PREFIX>_LLM_IDLE_SECS` (Talaan: `TALAAN_GPU`). Both are
+test-only settings.
+
 ## Why the engine builds them, and not the app
 
 llama.cpp and whisper.cpp are compiled from source by CMake while the helper is built. Left alone they are compiled for

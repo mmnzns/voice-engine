@@ -336,6 +336,11 @@ fn main() {
 }
 ```
 
+The `env_prefix` names the test-only settings the helper reads, for example `TALAAN_GPU` and `TALAAN_LLM_IDLE_SECS`. The
+helpers that `build-helpers.yml` and the build scripts make are the engine's own binaries, built from the engine's
+checkout, so they read `VOICE_ENGINE_GPU` and `VOICE_ENGINE_LLM_IDLE_SECS`. An app's own dev helper, built from the
+3-line `main.rs`, reads `<PREFIX>_GPU` and the rest. Both are for tests only.
+
 ## Build settings an app must copy
 
 llama.cpp and whisper.cpp are built from source by CMake while an app compiles. Left alone they are compiled for the
