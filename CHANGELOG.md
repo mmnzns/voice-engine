@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.3.0 (unreleased)
+
+- feat: `build-helpers.yml` has a `targets` input, a list of target triples (default: all three), so an app can skip
+  one such as Windows ARM64 (#34). An unknown triple or an empty list fails the run with a clear message.
+
 ## v0.2.3 (2026-10-31)
 
 Fixes from Talaan's move: apps can retry the card without a restart, no example or test writes into the real shared

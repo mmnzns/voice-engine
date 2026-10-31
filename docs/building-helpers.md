@@ -124,9 +124,33 @@ Inputs:
 | --- | --- | --- |
 | `engine-ref` | none, required | The engine tag or commit to build. |
 | `helpers` | `llm,stt` | A comma list among `llm`, `stt`, `llm-vulkan`, `stt-vulkan`. A Vulkan variant is built on Windows x64 only; the other two targets skip it. |
+| `targets` | all three | The target triples to build, separated by commas or spaces. See "Building fewer targets". |
 | `llm-name` | `voice-engine-llm` | Base name of the AI helper's file. |
 | `stt-name` | `voice-engine-stt` | Base name of the speech helper's file. |
 | `cache` | `true` | Cache Cargo's registry and build folder between runs. `false` builds from scratch. |
+
+### Building fewer targets
+
+By default the workflow builds all three targets. An app that does not ship one of them can leave it out with `targets`.
+It is a list of target triples, separated by commas or spaces. These are the three it knows: `aarch64-apple-darwin`,
+`x86_64-pc-windows-msvc` and `aarch64-pc-windows-msvc`. This builds Windows x64 and Apple silicon only, with no
+Windows ARM64 job:
+
+```yaml
+  helpers:
+    uses: mmnzns/voice-engine/.github/workflows/build-helpers.yml@v0.2.3
+    with:
+      engine-ref: v0.2.3
+      targets: x86_64-pc-windows-msvc,aarch64-apple-darwin
+      llm-name: ensayo-llm
+      stt-name: ensayo-stt
+```
+
+An unknown triple fails the run before any build starts, and the message lists the three it knows. An empty list fails
+too. A repeated triple is built once. Only the chosen targets upload an artifact, so the app's own matrix must list the
+same targets: a job that downloads `helpers-aarch64-pc-windows-msvc` fails when that target was not built. The Vulkan
+variants still build for `x86_64-pc-windows-msvc` only, so `helpers: llm-vulkan` with `targets: aarch64-apple-darwin`
+builds nothing.
 
 Each target uploads one artifact, `helpers-<target triple>`, with:
 

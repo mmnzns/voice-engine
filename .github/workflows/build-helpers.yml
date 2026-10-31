@@ -1,8 +1,9 @@
 name: Build helpers
 
 # Builds the engine's two helper programs (the AI helper, voice-engine-llm, and the speech helper, voice-engine-stt) for
-# Mac Apple silicon, Windows x64 and Windows ARM64, named as Tauri sidecars: <name>-<target triple>[.exe]. An app's release
-# workflow calls it instead of copying files from the engine by hand; docs/building-helpers.md has a complete example.
+# Mac Apple silicon, Windows x64 and Windows ARM64 (the `targets` input picks fewer), named as Tauri sidecars:
+# <name>-<target triple>[.exe]. An app's release workflow calls it instead of copying files from the engine by hand;
+# docs/building-helpers.md has a complete example.
 #
 # It checks out the ENGINE repository at `engine-ref` and builds there, so the engine's own .cargo/config.toml (the CPU
 # baseline: GGML_NATIVE off, AVX2 on x64, macOS 11) applies. Cargo does not read that file for an app that depends on the
@@ -22,6 +23,10 @@ on:
         description: 'Comma list among llm, stt, llm-vulkan and stt-vulkan. The Vulkan variants are built for x86_64-pc-windows-msvc only.'
         type: string
         default: 'llm,stt'
+      targets:
+        description: 'Target triples to build, separated by commas or spaces, among aarch64-apple-darwin, x86_64-pc-windows-msvc and aarch64-pc-windows-msvc. Default: all three.'
+        type: string
+        default: 'aarch64-apple-darwin,x86_64-pc-windows-msvc,aarch64-pc-windows-msvc'
       llm-name:
         description: 'The sidecar base name of the AI helper. The file is <name>-<target triple>[.exe].'
         type: string
@@ -44,6 +49,10 @@ on:
         description: 'Comma list among llm, stt, llm-vulkan and stt-vulkan. The Vulkan variants are built for x86_64-pc-windows-msvc only.'
         type: string
         default: 'llm,stt'
+      targets:
+        description: 'Target triples to build, separated by commas or spaces, among aarch64-apple-darwin, x86_64-pc-windows-msvc and aarch64-pc-windows-msvc. Default: all three.'
+        type: string
+        default: 'aarch64-apple-darwin,x86_64-pc-windows-msvc,aarch64-pc-windows-msvc'
       llm-name:
         description: 'The sidecar base name of the AI helper. The file is <name>-<target triple>[.exe].'
         type: string
@@ -61,18 +70,56 @@ permissions:
   contents: read
 
 jobs:
+  # Turns `targets` into the build matrix, and stops the run before any runner starts when the list is empty or names a
+  # triple this workflow does not build. The input reaches the shell through the environment, never pasted into the script.
+  plan:
+    name: Choose the targets
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - name: Check the targets and make the matrix
+        id: pick
+        shell: bash
+        env:
+          TARGETS: ${{ inputs.targets }}
+        run: |
+          set -euo pipefail
+          set -f
+          known='aarch64-apple-darwin x86_64-pc-windows-msvc aarch64-pc-windows-msvc'
+          runner_for() {
+            case "$1" in
+              aarch64-apple-darwin) echo macos-latest ;;
+              x86_64-pc-windows-msvc) echo windows-latest ;;
+              aarch64-pc-windows-msvc) echo windows-11-arm ;;
+            esac
+          }
+          list="${TARGETS//,/ }"
+          chosen=()
+          for t in $list; do
+            if [[ " $known " != *" $t "* ]]; then
+              echo "::error::unknown target '$t'. The targets are: ${known// /, }."
+              exit 1
+            fi
+            if [[ " ${chosen[*]:-} " != *" $t "* ]]; then chosen+=("$t"); fi
+          done
+          if [ "${#chosen[@]}" -eq 0 ]; then
+            echo "::error::targets is empty. Choose at least one of: ${known// /, }."
+            exit 1
+          fi
+          matrix='[]'
+          for t in "${chosen[@]}"; do
+            matrix=$(jq -c --arg triple "$t" --arg os "$(runner_for "$t")" '. + [{triple: $triple, os: $os}]' <<<"$matrix")
+          done
+          echo "matrix={\"include\":$matrix}" >> "$GITHUB_OUTPUT"
+          echo "targets: ${chosen[*]}"
+
   build:
     name: Helpers (${{ matrix.triple }})
+    needs: plan
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - triple: aarch64-apple-darwin
-            os: macos-latest
-          - triple: x86_64-pc-windows-msvc
-            os: windows-latest
-          - triple: aarch64-pc-windows-msvc
-            os: windows-11-arm
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
       # Which commit of the engine, and which helpers this target builds. Inputs reach the shell through the environment,
