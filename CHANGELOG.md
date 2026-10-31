@@ -12,6 +12,8 @@
   program instead of falling back to the processor; check imports with `dumpbin /dependents` (#18).
 - tests: with `VOICE_ENGINE_TEST_EXPECT_CARD=1` the card tests (`real_fallback`, `real_whisper`, `real_parakeet`) fail when
   the card did not run, instead of skipping or accepting the processor; the README's Windows card check sets it (#16).
+- fix: no test failure message shows transcript or reply text any more: it prints counts, lengths and times instead
+  (`stt` and `client` real-model tests, `llm`'s `real_model.rs`) (#17).
 ## v0.2.2 (2026-10-30)
 
 The Windows card check no longer counts a VM's or a driverless PC's display adapter as a card, and it answers within 10 s.

@@ -122,8 +122,14 @@ fn check_words(t: &Transcript, clip_ms: u64) {
     assert!(words.len() >= 10, "{} words", words.len());
     let mut last = 0;
     for w in words {
-        assert!(w.start_ms >= last && w.start_ms <= w.end_ms, "{w:?}");
-        assert!(w.end_ms <= clip_ms, "{w:?} past the {clip_ms} ms clip");
+        let info = format!(
+            "word {}..{} ms, {} chars",
+            w.start_ms,
+            w.end_ms,
+            w.text.len()
+        );
+        assert!(w.start_ms >= last && w.start_ms <= w.end_ms, "{info}");
+        assert!(w.end_ms <= clip_ms, "{info} past the {clip_ms} ms clip");
         last = w.start_ms;
     }
 }
@@ -176,8 +182,16 @@ fn a_say_clip_through_the_real_helper_and_the_model_stays_loaded_between_calls()
         text(&words.value).chars().count()
     );
     let said = text(&words.value);
-    assert!(said.contains("thursday"), "{said}");
-    assert!(said.contains("speech helper"), "{said}");
+    assert!(
+        said.contains("thursday"),
+        "thursday not heard in {} chars",
+        said.len()
+    );
+    assert!(
+        said.contains("speech helper"),
+        "speech helper not heard in {} chars",
+        said.len()
+    );
     check_words(&words.value, ms(&clip));
     assert!(words.value.segments.iter().all(|s| s.words.len() == 1));
     assert_eq!(words.backend.backend, "metal");
@@ -296,8 +310,8 @@ fn cancel_a_long_transcription_then_transcribe_again_with_the_model_loaded_back_
     );
     assert!(
         text(&out.value).contains("thursday"),
-        "{}",
-        text(&out.value)
+        "thursday not heard in {} chars",
+        text(&out.value).len()
     );
     c.shutdown();
 }

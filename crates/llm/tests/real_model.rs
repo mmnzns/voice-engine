@@ -77,10 +77,35 @@ fn complete(user: &str, extra: serde_json::Value) -> serde_json::Value {
     r
 }
 
+/// The name of an event's variant, for a failure message: the event itself can carry a reply.
+fn kind(ev: &Event) -> String {
+    let all = format!("{ev:?}");
+    all.split(|c: char| !c.is_alphanumeric())
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// A reply for a failure message: counts, sizes and times, never its text or its thinking.
+fn info(r: &voice_engine_protocol::Reply) -> String {
+    format!(
+        "{} chars, {} output tokens, {} thinking tokens ({} chars of thinking), truncated {}, \
+         {:.2} s, load {:.2} s, backend {}",
+        r.text.chars().count(),
+        r.output_tokens,
+        r.thinking_tokens,
+        r.thinking_text.as_deref().map_or(0, |t| t.chars().count()),
+        r.truncated,
+        r.seconds,
+        r.load_seconds,
+        r.backend.backend
+    )
+}
+
 fn done(ev: Event) -> voice_engine_protocol::Reply {
     match ev {
         Event::Done(r) => r,
-        other => panic!("expected done, got {other:?}"),
+        other => panic!("expected done, got {}", kind(&other)),
     }
 }
 
@@ -95,18 +120,25 @@ fn thinking_off_answers_straight_away_and_logs_no_user_text() {
     let r = done(h.answer());
     assert!(
         !r.text.contains("<think>") && !r.text.contains("</think>"),
-        "{r:?}"
+        "the reply has think tags: {}",
+        info(&r)
     );
     assert_eq!(
         (r.thinking_tokens, r.thinking_text.is_none()),
         (0, true),
-        "{r:?}"
+        "{}",
+        info(&r)
     );
-    assert!(r.text.to_lowercase().contains("thursday"), "{r:?}");
+    assert!(
+        r.text.to_lowercase().contains("thursday"),
+        "the reply lost the day: {}",
+        info(&r)
+    );
     let err = h.stderr();
     assert!(
         !err.contains("thursday") && !err.contains("friday"),
-        "stderr leaks the prompt: {err}"
+        "stderr leaks the prompt ({} bytes of stderr)",
+        err.len()
     );
 }
 
@@ -136,15 +168,18 @@ fn thinking_on_is_counted_apart_and_kept_within_its_budget() {
     let r = done(h.answer());
     assert!(
         r.thinking_tokens > 0 && r.thinking_tokens <= 64 + 8,
-        "{r:?}"
+        "{}",
+        info(&r)
     );
     assert!(
         r.thinking_text.as_deref().is_some_and(|t| !t.is_empty()),
-        "{r:?}"
+        "{}",
+        info(&r)
     );
     assert!(
         !r.text.contains("think>") && !r.text.trim().is_empty(),
-        "{r:?}"
+        "{}",
+        info(&r)
     );
 }
 
@@ -160,7 +195,12 @@ fn the_same_request_gives_the_same_reply() {
         let a = done(h.answer()).text;
         h.send(&complete(DICTATION, extra));
         let b = done(h.answer()).text;
-        assert_eq!(a, b);
+        assert!(
+            a == b,
+            "the same request gave different replies ({} and {} chars)",
+            a.chars().count(),
+            b.chars().count()
+        );
     }
 }
 
@@ -262,7 +302,7 @@ fn gpu_false_runs_on_the_processor_and_switching_reloads_the_model() {
             Event::Loaded {
                 seconds, backend, ..
             } => (seconds, backend),
-            other => panic!("expected loaded, got {other:?}"),
+            other => panic!("expected loaded, got {}", kind(&other)),
         }
     };
     let ask = |h: &mut Helper, gpu: bool| {
@@ -291,7 +331,8 @@ fn gpu_false_runs_on_the_processor_and_switching_reloads_the_model() {
     let on_cpu_first = ask(&mut h, false);
     assert!(
         on_cpu_first.load_seconds > 0.0,
-        "gpu true then false must reload: {on_cpu_first:?}"
+        "gpu true then false must reload: {}",
+        info(&on_cpu_first)
     );
     assert_eq!(on_cpu_first.backend, voice_engine_protocol::Backend::cpu());
     let on_cpu = ask(&mut h, false);
@@ -358,10 +399,17 @@ fn gpu_false_runs_on_the_processor_and_switching_reloads_the_model() {
         long_card.text == long_cpu.text,
         long_card.text.len(),
     );
-    assert_eq!(on_card.text, back.text, "same place, same text");
-    assert_eq!(
-        on_card.text, on_cpu.text,
-        "temperature 0 on the card and on the processor gave different text"
+    assert!(
+        on_card.text == back.text,
+        "same place, same text ({} and {} chars)",
+        on_card.text.chars().count(),
+        back.text.chars().count()
+    );
+    assert!(
+        on_card.text == on_cpu.text,
+        "temperature 0 on the card and on the processor gave different text ({} and {} chars)",
+        on_card.text.chars().count(),
+        on_cpu.text.chars().count()
     );
     if cfg!(target_os = "macos") {
         assert!(
@@ -393,7 +441,11 @@ fn a_load_with_gpu_false_comes_first_and_the_card_reloads_it() {
     // The default (a request that doesn't say) is the card.
     h.send(&complete(DICTATION, serde_json::json!({})));
     let r = done(h.answer());
-    assert!(r.load_seconds > 0.0, "the card request reloads: {r:?}");
+    assert!(
+        r.load_seconds > 0.0,
+        "the card request reloads: {}",
+        info(&r)
+    );
     assert_eq!(
         r.backend.backend,
         if cfg!(target_os = "macos") {
