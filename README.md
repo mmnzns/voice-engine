@@ -59,6 +59,23 @@ client's memory, and stops the processor helper if that is the one running, so t
 running. The engine compares `gpu_key` only, so an app should fold the graphics driver version into it: a driver update
 then tries the card again.
 
+**Crashes and memory.** A helper that dies while working on a request ends it with `EngineError::OutOfMemory` when it
+ran out of memory, and with `EngineError::Crashed { exit_code, signal, detail }` otherwise. It counts as out of memory
+when its stderr says so (`out of memory`, `failed to allocate`, `memory allocation of`, `std::bad_alloc`,
+`cannot allocate`, `unable to allocate`, `insufficient memory`, `ErrorOutOfDeviceMemory`, in any case), when it exits
+with Windows' `STATUS_NO_MEMORY` (0xC0000017), or when a Unix signal 9 (SIGKILL, the system's out-of-memory killer)
+ends it. `exit_code` is what it exited with (none after a signal), `signal` is the Unix signal, `detail` is the last 5
+lines of its stderr, each cut to 200 characters, with control characters turned into spaces. `detail` holds no user
+text: neither helper writes a prompt, a reply or a transcript to stderr (llama.cpp's and whisper.cpp's logs are
+switched off; what is left is the helper's own `GPU=fail` note and the abort and assert lines of ggml, which name a file,
+a line and a check). It is meant for the app's log and bug report; `Display` prints it on one line. A helper that did
+not exit within a second of closing its output is stopped by the client and reports no code and no signal.
+
+### Moving from v0.2.x to v0.3.0
+
+- `EngineError::Crashed` is a struct variant now: match `EngineError::Crashed { .. }`, or read `exit_code`, `signal` and
+  `detail` for the log.
+
 ## Local AI servers
 
 `voice_engine_client::servers::detect()` says which local AI servers are running on this computer: Ollama (port 11434)

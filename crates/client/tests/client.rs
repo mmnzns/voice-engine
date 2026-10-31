@@ -114,7 +114,14 @@ fn a_helper_that_dies_mid_request_is_a_crash_and_the_next_call_starts_a_new_one(
     let (_d, st) = state();
     let client = LlmClient::new(config("die_on_complete", &st));
     let e = client.complete(completion(), &mut |_| {}).unwrap_err();
-    assert_eq!(e, EngineError::Crashed);
+    assert_eq!(
+        e,
+        EngineError::Crashed {
+            exit_code: Some(139),
+            signal: None,
+            detail: String::new()
+        }
+    );
     // load isn't scripted to die, so this proves a fresh helper was started.
     assert!(client.load("/m.gguf", 512, true, &mut |_| {}).is_ok());
 }
@@ -140,6 +147,91 @@ fn an_out_of_memory_death_is_reported_as_out_of_memory() {
     let _t = turn();
     let (_d, st) = state();
     let client = LlmClient::new(config("oom", &st));
+    let e = client.complete(completion(), &mut |_| {}).unwrap_err();
+    assert_eq!(e, EngineError::OutOfMemory);
+}
+
+/// A client whose helper dies on `complete` the `die_noisy` way: `stderr` (lines separated by `~`) written, then exit.
+fn noisy(stderr: &str, exit: &str, long: Option<usize>, state: &std::path::Path) -> LlmClient {
+    let mut cfg = config("die_noisy", state);
+    cfg.env.push(("FAKE_STDERR".into(), stderr.into()));
+    cfg.env.push(("FAKE_EXIT".into(), exit.into()));
+    if let Some(n) = long {
+        cfg.env.push(("FAKE_STDERR_LONG".into(), n.to_string()));
+    }
+    LlmClient::new(cfg)
+}
+
+#[test]
+fn a_crash_carries_the_exit_code_and_a_short_stderr_tail() {
+    let _t = turn();
+    let (_d, st) = state();
+    // Seven lines, the last one 300 characters long, and an escape code in the second.
+    let lines: Vec<String> = (1..=7).map(|n| format!("line {n}")).collect();
+    let mut text = lines.join("~");
+    text.push_str("~\u{1b}[31mred\u{1b}[0m");
+    let client = noisy(&text, "3", Some(300), &st);
+    let e = client.complete(completion(), &mut |_| {}).unwrap_err();
+    let EngineError::Crashed {
+        exit_code,
+        signal,
+        detail,
+    } = e
+    else {
+        panic!("{e:?}")
+    };
+    assert_eq!((exit_code, signal), (Some(3), None));
+    let lines: Vec<&str> = detail.lines().collect();
+    assert_eq!(lines.len(), 5, "{detail}");
+    // The last five lines: line 5, 6, 7, the colored one (control characters turned into spaces), the long one.
+    assert_eq!(&lines[..3], ["line 5", "line 6", "line 7"]);
+    assert_eq!(lines[3], "[31mred [0m");
+    assert_eq!(lines[4].chars().count(), 200);
+}
+
+#[test]
+fn a_crash_that_wrote_nothing_has_an_empty_detail_and_shows_its_code_in_the_log_line() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = noisy("", "42", None, &st);
+    let e = client.complete(completion(), &mut |_| {}).unwrap_err();
+    assert_eq!(
+        e,
+        EngineError::Crashed {
+            exit_code: Some(42),
+            signal: None,
+            detail: String::new()
+        }
+    );
+    assert_eq!(e.to_string(), "the helper crashed (exit code 42)");
+}
+
+#[test]
+fn every_out_of_memory_message_is_reported_as_out_of_memory() {
+    let _t = turn();
+    let (_d, st) = state();
+    for message in [
+        "terminate called after throwing an instance of 'std::bad_alloc'",
+        "memory allocation of 8589934592 bytes failed",
+        "Cannot allocate memory",
+        "unable to allocate CUDA0 buffer",
+        "ggml: insufficient memory",
+        "vk::Device::allocateMemory: ErrorOutOfDeviceMemory",
+        "ggml_backend_cpu_buffer_type_alloc_buffer: failed to allocate buffer",
+        "GGML_ASSERT: Out Of Memory",
+    ] {
+        let client = noisy(message, "1", None, &st);
+        let e = client.complete(completion(), &mut |_| {}).unwrap_err();
+        assert_eq!(e, EngineError::OutOfMemory, "{message}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_helper_ended_by_sigkill_is_reported_as_out_of_memory() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = LlmClient::new(config("sigkill", &st));
     let e = client.complete(completion(), &mut |_| {}).unwrap_err();
     assert_eq!(e, EngineError::OutOfMemory);
 }

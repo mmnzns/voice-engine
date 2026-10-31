@@ -331,8 +331,7 @@ impl LlmClient {
                 }
                 Err(Attempt::Died { answered }) => {
                     let mut dead = running.take().expect("running above");
-                    let out_of_memory = dead.process.died_of_memory();
-                    dead.process.kill();
+                    let death = dead.process.reap();
                     if dead.on_gpu {
                         // The graphics card helper died: remember it and do the work on the processor.
                         self.gpu_failed();
@@ -344,11 +343,7 @@ impl LlmClient {
                         retried = true;
                         continue;
                     }
-                    return Err(if out_of_memory {
-                        EngineError::OutOfMemory
-                    } else {
-                        EngineError::Crashed
-                    });
+                    return Err(EngineError::died(death));
                 }
                 Err(Attempt::Failed { error, kill }) => {
                     if matches!(error, EngineError::GpuFailed { .. }) && r.on_gpu {

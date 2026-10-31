@@ -21,12 +21,17 @@
 //! - `too_long` answers `transcribe` with too long (max 40 s); `missing` answers `load` with model missing;
 //!   `slow_load` takes 4 s to load, far past the tests' 600 ms stall limit (the client stops it at the limit).
 //!
+//! - `die_noisy` writes what `FAKE_STDERR` (lines separated by `~`) and `FAKE_STDERR_LONG` (one line of that many
+//!   letters) say to stderr and exits with `FAKE_EXIT` on `transcribe`; `sigkill` ends itself with SIGKILL there.
+//!
 //! `devices` answers with the list `FAKE_DEVICES` describes (fake_support/devices.rs); mode `no_devices` never answers it.
 //!
 //! When `FAKE_LOG` names a file, every `load` the helper receives is appended to it as one line, `[<mode>] load
 //! gpu=<flag>`, so a test can see what each helper (the card one and the processor one run in different modes) was
 //! asked.
 
+#[path = "fake_support/crash.rs"]
+mod fake_crash;
 #[path = "fake_support/devices.rs"]
 mod fake_devices;
 
@@ -190,6 +195,8 @@ fn main() {
                         eprintln!("GGML_ASSERT: out of memory");
                         std::process::exit(137);
                     }
+                    "die_noisy" => fake_crash::die_noisy(),
+                    "sigkill" => fake_crash::sigkill(),
                     "stall_once" => {
                         if bump(&state) == 0 {
                             loop {

@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.3.0 (unreleased)
+
+Breaking: `EngineError::Crashed` is `Crashed { exit_code, signal, detail }`; match `Crashed { .. }`.
+
+- feat: out-of-memory deaths are recognised from more messages, Windows' `STATUS_NO_MEMORY` and a Unix SIGKILL, and
+  `EngineError::Crashed` carries the exit code, the signal and a short stderr tail with no user text (#26). A helper
+  that exits by itself is waited for up to 1 s so its exit status can be read.
+
 ## v0.2.3 (2026-10-31)
 
 Fixes from Talaan's move: apps can retry the card without a restart, no example or test writes into the real shared

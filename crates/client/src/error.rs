@@ -2,6 +2,7 @@
 //! and the speech helper share it: a variant that one of them never produces (`PromptTooLong` for speech, `TooLong`
 //! for the AI) is simply never returned by that client.
 
+use crate::process::Death;
 use voice_engine_protocol::ErrorKind;
 use voice_engine_protocol::stt::SttErrorKind;
 
@@ -43,8 +44,20 @@ pub enum EngineError {
     Internal {
         message: String,
     },
-    /// The helper process died and trying again did not help.
-    Crashed,
+    /// The helper process died and trying again did not help. What is known of how it died, for the app's log and
+    /// its bug report; the app matches on the variant.
+    ///
+    /// `detail` is a short tail of the helper's stderr: at most 5 lines of at most 200 characters, empty when it wrote
+    /// nothing. It holds no user text: the helpers write nothing a person said or typed to stderr (llama.cpp's and
+    /// whisper.cpp's own logs are switched off, and what is left is the helper's one `GPU=fail` note and the
+    /// library's abort and assert lines, which name a file, a line and a check, never a prompt or a transcript).
+    Crashed {
+        /// The code it exited with, when it exited by itself with one (none after a signal).
+        exit_code: Option<i32>,
+        /// The signal that ended it (Unix only).
+        signal: Option<i32>,
+        detail: String,
+    },
     /// The helper and the app were built against different protocol versions.
     VersionMismatch {
         helper: u32,
@@ -59,6 +72,18 @@ pub enum EngineError {
 }
 
 impl EngineError {
+    /// How a helper that died ends the request: `OutOfMemory` when it looks like lack of memory, else `Crashed`.
+    pub(crate) fn died(death: Death) -> Self {
+        if death.out_of_memory() {
+            return EngineError::OutOfMemory;
+        }
+        EngineError::Crashed {
+            exit_code: death.exit_code,
+            signal: death.signal,
+            detail: death.detail,
+        }
+    }
+
     /// The error a helper reported, as the app sees it.
     pub fn from_helper(error: ErrorKind, message: String) -> Self {
         match error {
@@ -103,7 +128,25 @@ impl EngineError {
 impl std::fmt::Display for EngineError {
     /// For logs only. Apps show their own wording and match on the variant.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{self:?}")
+        match self {
+            EngineError::Crashed {
+                exit_code,
+                signal,
+                detail,
+            } => {
+                write!(f, "the helper crashed")?;
+                match (exit_code, signal) {
+                    (Some(code), _) => write!(f, " (exit code {code})")?,
+                    (None, Some(signal)) => write!(f, " (signal {signal})")?,
+                    (None, None) => {}
+                }
+                if !detail.is_empty() {
+                    write!(f, ": {}", detail.replace('\n', " | "))?;
+                }
+                Ok(())
+            }
+            other => write!(f, "{other:?}"),
+        }
     }
 }
 
@@ -157,6 +200,26 @@ mod tests {
             EngineError::from_helper(ErrorKind::BadSchema { detail: "d".into() }, String::new()),
             EngineError::BadSchema { detail: "d".into() }
         );
+    }
+
+    #[test]
+    fn a_crash_says_how_the_helper_died_in_the_log_line() {
+        let died = |exit_code, signal, detail: &str| {
+            EngineError::Crashed {
+                exit_code,
+                signal,
+                detail: detail.into(),
+            }
+            .to_string()
+        };
+        assert_eq!(died(None, None, ""), "the helper crashed");
+        assert_eq!(
+            died(Some(139), None, "one\ntwo"),
+            "the helper crashed (exit code 139): one | two"
+        );
+        assert_eq!(died(None, Some(11), ""), "the helper crashed (signal 11)");
+        // The other variants keep showing as themselves.
+        assert_eq!(EngineError::TimedOut.to_string(), "TimedOut");
     }
 
     #[test]

@@ -152,6 +152,61 @@ fn loading_another_model_replaces_the_first_and_a_failed_load_leaves_none() {
     );
 }
 
+/// A crash that exited with `code` and wrote nothing to stderr.
+fn crashed(code: i32) -> EngineError {
+    EngineError::Crashed {
+        exit_code: Some(code),
+        signal: None,
+        detail: String::new(),
+    }
+}
+
+#[test]
+fn a_crash_carries_the_exit_code_and_a_short_stderr_tail_and_a_known_message_is_out_of_memory() {
+    let _t = turn();
+    let (_d, st) = state();
+    let noisy = |stderr: &str, exit: &str, mode: &str| {
+        let mut cfg = config(mode, &st);
+        cfg.env.push(("FAKE_STDERR".into(), stderr.into()));
+        cfg.env.push(("FAKE_EXIT".into(), exit.into()));
+        cfg.env.push(("FAKE_STDERR_LONG".into(), "250".into()));
+        let client = SttClient::new(cfg);
+        client.load(model("whisper-base")).unwrap();
+        client.transcribe(&audio(), &opts()).unwrap_err()
+    };
+    let e = noisy("a~b~c~d~e~f", "9", "die_noisy");
+    let EngineError::Crashed {
+        exit_code,
+        signal,
+        detail,
+    } = e
+    else {
+        panic!("{e:?}")
+    };
+    assert_eq!((exit_code, signal), (Some(9), None));
+    let lines: Vec<&str> = detail.lines().collect();
+    assert_eq!(lines.len(), 5, "{detail}");
+    assert_eq!(&lines[..4], ["c", "d", "e", "f"]);
+    assert_eq!(lines[4].chars().count(), 200);
+    assert_eq!(
+        noisy("std::bad_alloc", "1", "die_noisy"),
+        EngineError::OutOfMemory
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_speech_helper_ended_by_sigkill_is_reported_as_out_of_memory() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = SttClient::new(config("sigkill", &st));
+    client.load(model("whisper-base")).unwrap();
+    assert_eq!(
+        client.transcribe(&audio(), &opts()).unwrap_err(),
+        EngineError::OutOfMemory
+    );
+}
+
 #[test]
 fn a_helper_that_dies_mid_call_is_a_crash_and_the_next_call_starts_a_new_one_with_the_model_loaded_again()
  {
@@ -161,7 +216,7 @@ fn a_helper_that_dies_mid_call_is_a_crash_and_the_next_call_starts_a_new_one_wit
     let client = SttClient::new(config("die_on_first_transcribe", &st));
     client.load(model("whisper-turbo")).unwrap();
     let e = client.transcribe(&audio(), &opts()).unwrap_err();
-    assert_eq!(e, EngineError::Crashed);
+    assert_eq!(e, crashed(139));
     // The app does not load again: the client puts the remembered model into the new helper.
     let out = client.transcribe(&audio(), &opts()).unwrap();
     assert_eq!(out.value.language.as_deref(), Some("whisper-turbo"));
@@ -172,7 +227,7 @@ fn a_helper_that_dies_mid_call_is_a_crash_and_the_next_call_starts_a_new_one_wit
     client.load(model("whisper-turbo")).unwrap();
     assert_eq!(
         client.transcribe(&audio(), &opts()).unwrap_err(),
-        EngineError::Crashed
+        crashed(139)
     );
     assert!(client.load(model("whisper-turbo")).is_ok());
 }

@@ -351,8 +351,7 @@ impl SttClient {
                 }
                 Err(Attempt::Died { delivered }) => {
                     let mut dead = running.take().expect("running above");
-                    let out_of_memory = dead.process.died_of_memory();
-                    dead.process.kill();
+                    let death = dead.process.reap();
                     if !delivered {
                         // It was already gone before it got the request (it was killed, or crashed, while nobody was
                         // waiting): a fresh helper answers it, once.
@@ -360,7 +359,7 @@ impl SttClient {
                             retried = true;
                             continue;
                         }
-                        return Err(EngineError::Crashed);
+                        return Err(EngineError::died(death));
                     }
                     if dead.on_gpu {
                         // The graphics card helper died while working: remember it and do the work on the processor.
@@ -368,11 +367,7 @@ impl SttClient {
                         fell_back = true;
                         continue;
                     }
-                    return Err(if out_of_memory {
-                        EngineError::OutOfMemory
-                    } else {
-                        EngineError::Crashed
-                    });
+                    return Err(EngineError::died(death));
                 }
                 Err(Attempt::Failed { error, kill }) => {
                     if matches!(error, EngineError::GpuFailed { .. }) && r.on_gpu {

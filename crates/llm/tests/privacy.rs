@@ -70,3 +70,29 @@ fn llama_logging_stays_off() {
     let text = std::fs::read_to_string(lib).unwrap();
     assert!(text.contains("with_logs_enabled(false)"));
 }
+
+#[test]
+fn the_only_line_the_helper_writes_to_stderr_is_the_gpu_fail_note() {
+    // The client keeps a tail of stderr (at most 5 short lines) in `EngineError::Crashed`, and says it holds no user
+    // text. That holds while this is the helper's only `eprintln!`, and its text is fixed.
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut found = vec![];
+    for entry in std::fs::read_dir(&src).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().is_none_or(|e| e != "rs") {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        // Test code in `#[cfg(test)]` modules is not the helper.
+        let helper = text.split("#[cfg(test)]").next().unwrap();
+        for line in helper.lines() {
+            if line.contains("eprintln!") || line.contains("eprint!") {
+                found.push(line.trim().to_string());
+            }
+        }
+    }
+    assert_eq!(
+        found,
+        [r#"eprintln!("ggml_vulkan: {env}=fail, stopping on purpose");"#]
+    );
+}

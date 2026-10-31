@@ -13,12 +13,17 @@
 //! before replies said where they ran (no backend), so the client uses `ready`'s. `metal_die` is the Mac helper asked
 //! for as the card helper: `ready` says `metal` with no device, and it dies on `complete` like `gpu_die`.
 //!
+//! `die_noisy` writes what `FAKE_STDERR` (lines separated by `~`) and `FAKE_STDERR_LONG` (one line of that many
+//! letters) say to stderr and exits with `FAKE_EXIT` on `complete`; `sigkill` ends itself with SIGKILL on `complete`.
+//!
 //! `devices` answers with the list `FAKE_DEVICES` describes (fake_support/devices.rs); mode `no_devices` never answers it.
 //!
 //! When `FAKE_LOG` names a file, every `load`, `complete` and `embed` the helper receives is appended to it as one
 //! line, `[<mode>] <op> gpu=<flag>`, so a test can see what each helper (the card one and the processor one run in
 //! different modes) was asked.
 
+#[path = "fake_support/crash.rs"]
+mod fake_crash;
 #[path = "fake_support/devices.rs"]
 mod fake_devices;
 
@@ -183,6 +188,8 @@ fn main() {
                         eprintln!("GGML_ASSERT: out of memory");
                         std::process::exit(137);
                     }
+                    "die_noisy" => fake_crash::die_noisy(),
+                    "sigkill" => fake_crash::sigkill(),
                     "stall" => loop {
                         std::thread::sleep(Duration::from_secs(60));
                     },
