@@ -301,7 +301,9 @@ let everything = store.list();                    // every catalog model with it
 - Delete in an app's settings is `release(id)`: it removes this app's marker, and only the last user to let go
   erases the files (`Released::Erased`; `Kept { users }` when other apps still use it, with an empty list when
   another app has it loaded right now and `collect` will erase it later; `NotUsing`). Delete all data is
-  `release_all()`. Never remove a model folder yourself.
+  `release_all()`. Never remove a model folder yourself, with one exception: the old copy `move_in` left (see "The
+  one-time move"). `release` does not touch it, and its bytes stay on disk, so an app removes its own old file when the
+  person deletes a model.
 - Test and dev builds use `SharedStore::open_at(app, dir)` with a folder of their own. It never moves anything in
   and never looks at another app's folders (`move_in` returns `already_done`). Tests must never use the real folder.
 - `SharedStore::read_only(app, dir)` looks without creating anything (not even the folder): for "what is on this
@@ -320,6 +322,8 @@ is false for `Cancelled` and `Stalled`: nothing went wrong, the partial file is 
 - Your own old models are moved (renamed, so no copy and no extra disk space) into `<model id>/`, and a hard link is
   left at the old path, so an older version of the app still finds them. If the model is already in the shared folder
   the old copy is deleted and replaced by a link.
+  That link is a second name for the same bytes, not a copy. After `release` erases the shared folder, the bytes stay
+  on disk as long as the link exists, so the app deletes its own old path when the person deletes the model.
 - Models that another app has in its old folder and the shared folder does not are hard-linked in, never moved or
   changed, and that app is recorded as a user. A link that cannot be made (a different disk) is skipped.
 - A model counts only when every file is there with the catalog's exact size. Parlato's Parakeet-family files were
@@ -387,6 +391,10 @@ silently does not apply. Commit the file; the local patch in the next section go
 variables in its release workflow, or builds the helpers with the reusable workflow described in
 `docs/building-helpers.md`, which builds in the engine's own checkout and so carries them. The rustflags line is for
 Windows x64 only.
+
+**Windows ARM64 needs a toolchain for an in-process build.** An app that links `voice-engine-stt` in its own process
+also needs clang-cl and Ninja for its own build, as the helpers do (MSVC's `cl` stops ggml at configure time). See
+`.github/actions/windows-arm64-toolchain` and `docs/building-helpers.md`.
 
 **Keep `lto = false` (the default) in the app's release profile.** With `lto = true` or `"thin"`, linking on macOS fails
 with `Undefined symbols: ___isPlatformVersionAtLeast`, referenced from ggml's Metal objects. We reproduced it at v0.2.2
