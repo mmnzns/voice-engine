@@ -16,6 +16,9 @@ asked for and the processor ran, so match `CardFailed | CardOutOfMemory` to say 
 - feat: `LlmClient::complete_within(limit, completion, progress)` holds one reply to its own limit, which starts after the
   model is loaded (from the send when it already is) and ends with `TimedOut` and a stopped helper; the load keeps the
   config's limits (#28). The helper sends a `reading` progress with `done: 0` once the model and prompt are ready.
+- feat: a GGUF without a chat template no longer fails with `NoChatTemplate`: the helper writes a plain prompt (system
+  text, blank line, user text, blank line) and the reply carries `plain_format: true`, so an app can warn on import;
+  `inspect` already said `has_chat_template: false` (#29). Verified with a real model whose template key was renamed.
 
 ## v0.2.3 (2026-10-31)
 

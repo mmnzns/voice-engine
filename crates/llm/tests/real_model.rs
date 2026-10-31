@@ -129,6 +129,7 @@ fn thinking_off_answers_straight_away_and_logs_no_user_text() {
         "{}",
         info(&r)
     );
+    assert!(!r.plain_format, "the model has its template");
     assert!(
         r.text.to_lowercase().contains("thursday"),
         "the reply lost the day: {}",
@@ -453,5 +454,79 @@ fn a_load_with_gpu_false_comes_first_and_the_card_reloads_it() {
         } else {
             "cpu"
         }
+    );
+}
+
+/// A copy of the model file in `dir` whose chat template cannot be found: every key that starts with
+/// `tokenizer.chat_template` is renamed in the header, in place, to a name of the same length, which leaves the file
+/// valid (the weights are untouched). A model file made this way has no template, like an imported base model.
+fn without_template(dir: &std::path::Path) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    let copy = dir.join("no-template.gguf");
+    std::fs::copy(model(), &copy).unwrap();
+    let key = b"tokenizer.chat_template";
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&copy)
+        .unwrap();
+    // The metadata comes first; 64 MB is far more than any model's.
+    let mut head = vec![0u8; 64 << 20];
+    let n = file.read(&mut head).unwrap();
+    head.truncate(n);
+    let mut renamed = 0;
+    let mut at = 0;
+    while let Some(found) = head[at..].windows(key.len()).position(|w| w == key) {
+        let end = at + found + key.len() - 1;
+        head[end] = b'X';
+        renamed += 1;
+        at = end + 1;
+    }
+    assert!(renamed > 0, "the model has no chat template to remove");
+    file.seek(SeekFrom::Start(0)).unwrap();
+    std::io::Write::write_all(&mut file, &head).unwrap();
+    copy.display().to_string()
+}
+
+#[test]
+#[ignore]
+fn a_model_without_a_chat_template_answers_in_the_plain_format_and_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = without_template(dir.path());
+    let mut h = Helper::start();
+    // `inspect` says so up front, and the model with its template says the opposite.
+    h.send(&serde_json::json!({"op": "inspect", "model_path": path}));
+    let Event::Inspected(found) = h.answer() else {
+        panic!("expected inspected")
+    };
+    assert!(!found.has_chat_template && !found.thinks);
+    h.send(&serde_json::json!({"op": "inspect", "model_path": model()}));
+    let Event::Inspected(with) = h.answer() else {
+        panic!("expected inspected")
+    };
+    assert!(with.has_chat_template);
+
+    // `complete` works instead of failing with `no_chat_template`.
+    let mut request = complete(DICTATION, serde_json::json!({"max_tokens": 40}));
+    request["model_path"] = path.clone().into();
+    h.send(&request);
+    let r = done(h.answer());
+    assert!(r.plain_format, "{}", info(&r));
+    assert!(r.output_tokens > 0, "{}", info(&r));
+    // Thinking is off for a model with no template, even when asked for.
+    request["thinking"] = true.into();
+    h.send(&request);
+    let r = done(h.answer());
+    assert_eq!(
+        (r.plain_format, r.thinking_tokens),
+        (true, 0),
+        "{}",
+        info(&r)
+    );
+    let err = h.stderr();
+    assert!(
+        !err.contains("thursday") && !err.contains("friday"),
+        "stderr leaks the prompt ({} bytes of stderr)",
+        err.len()
     );
 }

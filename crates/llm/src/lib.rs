@@ -16,6 +16,7 @@ mod generate;
 mod inbox;
 mod inspect;
 mod model;
+mod plain;
 mod think;
 
 use failure::Failure;

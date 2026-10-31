@@ -75,6 +75,20 @@ fn a_reply_comes_back_with_progress_and_the_backend() {
 }
 
 #[test]
+fn a_reply_says_when_the_helper_used_the_plain_format() {
+    let _t = turn();
+    let (_d, st) = state();
+    let out = LlmClient::new(config("plain", &st))
+        .complete(completion(), &mut |_| {})
+        .unwrap();
+    assert!(out.value.plain_format);
+    let out = LlmClient::new(config("", &st))
+        .complete(completion(), &mut |_| {})
+        .unwrap();
+    assert!(!out.value.plain_format);
+}
+
+#[test]
 fn a_helper_that_dies_at_startup_is_restarted() {
     let _t = turn();
     let (_d, st) = state();

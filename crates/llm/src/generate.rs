@@ -3,6 +3,7 @@
 use crate::failure::Failure;
 use crate::inbox::Inbox;
 use crate::model::{Loaded, Target, context_params, load};
+use crate::plain;
 use crate::send;
 use crate::think;
 use llama_cpp_2::context::LlamaContext;
@@ -75,27 +76,37 @@ pub(crate) fn complete(
     let started = Instant::now();
     let (model, load_seconds) = load(llama, loaded, t)?;
 
-    let template = model.chat_template(None).map_err(|e| {
-        Failure::new(
-            ErrorKind::NoChatTemplate,
-            format!("the model has no chat template: {e}"),
-        )
-    })?;
-    // Only a template with a thinking step gets a prompt ending, and only then can a reply have thinking.
-    let thinks = think::template_thinks(&template.to_string().unwrap_or_default());
+    // A file with a chat template gets its own format; one without gets the plain format (plain.rs) and says so.
+    let (prompt, thinks, plain_format) = match model.chat_template(None) {
+        Ok(template) => {
+            // Only a template with a thinking step gets a prompt ending, and only then can a reply have thinking.
+            let thinks = think::template_thinks(&template.to_string().unwrap_or_default());
+            let thinking = thinks && c.thinking;
+            let messages = [
+                LlamaChatMessage::new("system".into(), c.system.clone()).map_err(|_| {
+                    Failure::internal("couldn't build the prompt: a null byte in the text")
+                })?,
+                LlamaChatMessage::new("user".into(), c.user.clone()).map_err(|_| {
+                    Failure::internal("couldn't build the prompt: a null byte in the text")
+                })?,
+            ];
+            let mut prompt = model
+                .apply_chat_template(&template, &messages, true)
+                .map_err(|e| Failure::internal(prompt_error(&e)))?;
+            prompt.push_str(think::prompt_ending(thinks, thinking));
+            (prompt, thinks, false)
+        }
+        Err(_) => (plain::prompt(&c.system, &c.user), false, true),
+    };
     let thinking = thinks && c.thinking;
-    let messages = [
-        LlamaChatMessage::new("system".into(), c.system.clone())
-            .map_err(|_| Failure::internal("couldn't build the prompt: a null byte in the text"))?,
-        LlamaChatMessage::new("user".into(), c.user.clone())
-            .map_err(|_| Failure::internal("couldn't build the prompt: a null byte in the text"))?,
-    ];
-    let mut prompt = model
-        .apply_chat_template(&template, &messages, true)
-        .map_err(|e| Failure::internal(prompt_error(&e)))?;
-    prompt.push_str(think::prompt_ending(thinks, thinking));
     let vocab = model.vocab();
-    let tokens = vocab.tokenize(prompt.as_bytes(), false, true);
+    // A chat template writes the model's special tokens itself (its start-of-text one included), and they are parsed
+    // as such. The plain prompt has none: the tokenizer adds the start-of-text token, and the text stays plain text.
+    let tokens = if plain_format {
+        vocab.tokenize(prompt.as_bytes(), true, false)
+    } else {
+        vocab.tokenize(prompt.as_bytes(), false, true)
+    };
     let n_prompt = tokens.len() as u32;
     let budget = if thinking {
         c.thinking_budget.unwrap_or(0)
@@ -259,6 +270,7 @@ pub(crate) fn complete(
         load_seconds,
         thinking_text,
         backend: crate::backend(t.place),
+        plain_format,
     })
 }
 

@@ -18,6 +18,7 @@
 //! `no_card_path` is a Mac helper that has no card runtime for the model: `ready` says `metal`, and every reply says
 //! `cpu`. `gpu_oom` reports a Vulkan GPU and dies of memory on `complete` (an out-of-memory line on stderr).
 //!
+//! `plain` answers `complete` like a model with no chat template: the reply says `plain_format`.
 //! `slow_reply` loads for `FAKE_LOAD_MS` and replies for `FAKE_REPLY_MS` (both default 0), like the real helper: a model
 //! it does not hold yet is announced with a `loading` progress, loaded in silence, and the prompt is ready with a
 //! `reading` progress; then it writes progress every 50 ms until the reply is done. `load` and `complete` both load, and
@@ -196,13 +197,13 @@ fn main() {
                             });
                             std::process::exit(139);
                         }
-                        answer(says(c.gpu));
+                        answer(says(c.gpu), false);
                     }
                     "die_on_first_complete" => {
                         if bump(&state) == 0 {
                             std::process::exit(139);
                         }
-                        answer(says(c.gpu));
+                        answer(says(c.gpu), false);
                     }
                     "oom" | "gpu_oom" => {
                         eprintln!("GGML_ASSERT: out of memory");
@@ -227,8 +228,9 @@ fn main() {
                             });
                             std::thread::sleep(Duration::from_millis(50));
                         }
-                        answer(says(c.gpu));
+                        answer(says(c.gpu), false);
                     }
+                    "plain" => answer(says(c.gpu), true),
                     "die_noisy" => fake_crash::die_noisy(),
                     "sigkill" => fake_crash::sigkill(),
                     "stall" => loop {
@@ -263,7 +265,7 @@ fn main() {
                         message: "the graphics card failed".into(),
                         error: ErrorKind::GpuFailed { fell_back: false },
                     }),
-                    _ => answer(says(c.gpu)),
+                    _ => answer(says(c.gpu), false),
                 }
             }
         }
@@ -280,7 +282,7 @@ fn slow_load(took: Duration) {
     std::thread::sleep(took);
 }
 
-fn answer(backend: Backend) {
+fn answer(backend: Backend, plain_format: bool) {
     send(&Event::Progress {
         phase: Phase::Writing,
         done: 1,
@@ -296,5 +298,6 @@ fn answer(backend: Backend) {
         load_seconds: 0.0,
         thinking_text: None,
         backend,
+        plain_format,
     }));
 }

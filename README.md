@@ -28,6 +28,15 @@ Reply schemas: llama.cpp enforces structure (objects, required keys, `additional
 array sizes). It can't enforce every keyword (a `pattern` using `\d` is accepted as any string), so apps keep
 checking replies themselves.
 
+**Models without a chat template.** A GGUF file with no `tokenizer.chat_template` (an imported base model, a fine-tune
+that lost it) no longer fails with `no_chat_template`: `complete` writes a plain prompt instead (the system text, a blank
+line, the user text, a blank line; just the user text and a blank line when the system text is blank), tokenizes it as
+ordinary text with the model's start-of-text token, and the model continues from there. The reply says so with
+`plain_format: true` (`Reply::plain_format`, left out of the message when false), so an app can warn that answers may be
+worse. `inspect` tells the app before any load: `Inspection::has_chat_template` is false (and `thinks` too; a model
+with no template never thinks). `ErrorKind::NoChatTemplate` stays in the protocol for a v0.2 helper but the helper
+no longer sends it.
+
 `gpu` in `load`, `complete` and `embed` is honoured on every system: `gpu: true` (the default) uses the card (Metal on the
 Mac, the chosen Vulkan device on Windows, as many layers as fit), `gpu: false` puts nothing on any card and runs on the
 processor. The place is part of what a loaded model is kept for: a request for the other place loads the model again
@@ -95,6 +104,9 @@ a line and a check). It is meant for the app's log and bug report; `Display` pri
 not exit within a second of closing its output is stopped by the client and reports no code and no signal.
 
 ### Moving from v0.2.x to v0.3.0
+
+Nothing to change for the additions: `complete_within` and `Reply::plain_format` (a new field on a struct an app only
+reads; an app that builds a `Reply` itself, in a test, adds `plain_format: false`).
 
 - `EngineError::Crashed` is a struct variant now: match `EngineError::Crashed { .. }`, or read `exit_code`, `signal` and
   `detail` for the log.

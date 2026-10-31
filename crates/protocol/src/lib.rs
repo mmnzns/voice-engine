@@ -230,6 +230,8 @@ pub enum Phase {
 /// What a GGUF file says about itself.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Inspection {
+    /// The file has a chat template. When it does not, `complete` still works: the helper uses a plain format and says
+    /// so in the reply (`Reply::plain_format`).
     pub has_chat_template: bool,
     /// Its chat template has a thinking step (`<think>`).
     pub thinks: bool,
@@ -254,6 +256,8 @@ pub enum ErrorKind {
     BadSchema {
         detail: String,
     },
+    /// No longer sent: a file without a chat template gets the plain format (`Reply::plain_format`). A helper from
+    /// before v0.3.0 sends it.
     NoChatTemplate,
     Cancelled,
     /// The graphics card failed. `fell_back`: the work was done on the processor instead (the app can say so once
@@ -288,6 +292,12 @@ pub struct Reply {
     /// `backend`), and the app uses what `ready` said.
     #[serde(flatten, default)]
     pub backend: Backend,
+    /// True when the model file has no chat template and the helper used the plain format instead (the system text,
+    /// a blank line, the user text, a blank line): replies can be worse than from a model with its template, so an
+    /// app can warn, for example when the person imports the file (`Inspection::has_chat_template` says it up front).
+    /// An older helper never sends it (false), and it is left out of the message when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plain_format: bool,
 }
 
 /// One message as one line (no newline inside: JSON escapes the ones in the text).
@@ -540,6 +550,7 @@ mod tests {
                 load_seconds: 0.0,
                 thinking_text: None,
                 backend: Backend::cpu(),
+                plain_format: false,
             }),
             Event::Error {
                 message: "the AI model failed".into(),
@@ -696,6 +707,7 @@ mod tests {
                 load_seconds: 0.0,
                 thinking_text: Some("hmm".into()),
                 backend: Backend::cpu(),
+                plain_format: false,
             }),
         ];
         for ev in events {
@@ -747,6 +759,24 @@ mod tests {
             panic!()
         };
         assert_eq!(error, ErrorKind::Internal);
+    }
+
+    #[test]
+    fn a_reply_says_when_the_plain_format_was_used_and_an_old_reply_says_it_was_not() {
+        let line = r#"{"event":"done","text":"x","prompt_tokens":1,"output_tokens":1,"seconds":0.1,"truncated":false}"#;
+        let Event::Done(old) = decode_event(line).unwrap() else {
+            panic!()
+        };
+        assert!(!old.plain_format);
+        // False is left out of the message, so a reply from a model with a template reads as it did before.
+        assert!(!encode(&Event::Done(old.clone())).contains("plain_format"));
+        let plain = Reply {
+            plain_format: true,
+            ..old
+        };
+        let line = encode(&Event::Done(plain.clone()));
+        assert!(line.contains(r#""plain_format":true"#), "{line}");
+        assert_eq!(decode_event(&line).unwrap(), Event::Done(plain));
     }
 
     #[test]
