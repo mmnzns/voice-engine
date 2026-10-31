@@ -145,7 +145,11 @@ file name they chose.
 **Voice detection.** `vad::detect(model_dir, &audio)` returns the speech spans `(start_ms, end_ms)` of a track, in order,
 on the audio's clock (whisper.cpp's Silero detector with Talaan's settings, from the catalog's `vad` model, under 1 MB).
 Only speech needs to go to a speech model: silence costs time and makes models invent text. No speech is an empty list,
-not an error. It always runs on the processor.
+not an error. It always runs on the processor. `vad::detect_with(model_dir, &audio, &VadSettings { .. })` takes the app's
+own settings: `threshold` (0.5), `min_speech_ms` (250), `min_silence_ms` (300) and `padding_ms` (0). `VadSettings::default()`
+is those numbers, which is what `detect` uses. Padding is added after detection: each span grows on both sides, stops at
+the ends of the audio, and spans that overlap or touch after growing are merged. A dictation app can use a smaller
+minimum silence with a little padding (Parlato used 100 ms and 30 ms) to get more, tighter spans.
 
 **Speaker separation.** `diarize::load(model_dir, threads)` returns a `Diarizer`; `run(&track)` gives one `SpeakerFrame`
 per 10 ms, with a probability from 0 to 1 for each of up to 8 speakers (NVIDIA's Nemotron 3 Diarization through

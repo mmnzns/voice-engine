@@ -6,6 +6,10 @@
 //! (through whisper-rs), ported from Talaan's `transcriber/vad.rs` (MIT) with its settings: threshold 0.5, 250 ms
 //! minimum speech, 300 ms minimum silence, no padding (the apps pad and cut their own chunks).
 //!
+//! [`detect_with`] takes the settings from the app ([`VadSettings`]; `detect` is `detect_with` and the defaults,
+//! which are those numbers). Padding is added here, after detection, not by whisper.cpp: each span grows on both
+//! sides, stops at the ends of the audio, and spans that overlap or touch after growing become one.
+//!
 //! It always runs on the processor, on a small fixed thread count the apps do not set (see `THREADS`). The model
 //! is the catalog's `vad` entry (`ggml-silero-v6.2.0.bin`) in `model_dir`; it is under 1 MB, so each call loads it
 //! and drops it again, and the function keeps no state.
@@ -30,12 +34,30 @@ pub const FRAME_SAMPLES: usize = 512;
 /// synchronisation. Apps do not set this.
 const THREADS: i32 = 4;
 
-/// Threshold above which a frame counts as speech.
-const THRESHOLD: f32 = 0.5;
-/// A span shorter than this is dropped (clicks, coughs).
-const MIN_SPEECH_MS: i32 = 250;
-/// Silence shorter than this does not end a span (a breath inside a sentence).
-const MIN_SILENCE_MS: i32 = 300;
+/// What the detector is told. `Default` is Talaan's settings, which `detect` has always used.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VadSettings {
+    /// Probability above which a frame counts as speech (0.0 to 1.0). Default 0.5.
+    pub threshold: f32,
+    /// A span shorter than this is dropped (clicks, coughs). Default 250 ms.
+    pub min_speech_ms: u32,
+    /// Silence shorter than this does not end a span (a breath inside a sentence). Default 300 ms.
+    pub min_silence_ms: u32,
+    /// Added before and after every span, after detection. Stops at the ends of the audio; spans that overlap or
+    /// touch after it are merged. Default 0.
+    pub padding_ms: u32,
+}
+
+impl Default for VadSettings {
+    fn default() -> Self {
+        VadSettings {
+            threshold: 0.5,
+            min_speech_ms: 250,
+            min_silence_ms: 300,
+            padding_ms: 0,
+        }
+    }
+}
 
 /// whisper.cpp's time (centiseconds, a float) in whole milliseconds, rounded to the nearest. `None` for a value
 /// that is not a time (NaN, infinite, negative).
@@ -69,14 +91,38 @@ pub fn spans_from_centiseconds(raw: &[(f32, f32)], audio_ms: u64) -> Vec<(u64, u
     merged
 }
 
+/// `spans` (sorted, not overlapping, in milliseconds) grown by `padding_ms` on both sides: never before 0 or after
+/// `audio_ms`, and spans that overlap or touch after growing merged into one.
+pub fn pad_spans(spans: &[(u64, u64)], padding_ms: u64, audio_ms: u64) -> Vec<(u64, u64)> {
+    let mut out: Vec<(u64, u64)> = Vec::with_capacity(spans.len());
+    for &(start, end) in spans {
+        let start = start.saturating_sub(padding_ms);
+        let end = end.saturating_add(padding_ms).min(audio_ms);
+        match out.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => out.push((start, end)),
+        }
+    }
+    out
+}
+
 /// Audio too short to hold a frame: no speech, no need to load anything.
 pub fn is_shorter_than_a_frame(samples: &[f32]) -> bool {
     samples.len() < FRAME_SAMPLES
 }
 
 /// The speech spans of `samples` (16 kHz mono) as `(start_ms, end_ms)`, in order, on the audio's clock. Empty when
-/// there is no speech. `model_dir` is the folder of the catalog's `vad` model.
+/// there is no speech. `model_dir` is the folder of the catalog's `vad` model. The default [`VadSettings`].
 pub fn detect(model_dir: &Path, samples: &[f32]) -> Result<Vec<(u64, u64)>, SpeechError> {
+    detect_with(model_dir, samples, &VadSettings::default())
+}
+
+/// [`detect`] with the app's own settings.
+pub fn detect_with(
+    model_dir: &Path,
+    samples: &[f32],
+    settings: &VadSettings,
+) -> Result<Vec<(u64, u64)>, SpeechError> {
     let name = catalog::find("vad")
         .and_then(|m| m.files.first())
         .map(|f| f.name)
@@ -100,9 +146,10 @@ pub fn detect(model_dir: &Path, samples: &[f32]) -> Result<Vec<(u64, u64)>, Spee
     let mut ctx =
         whisper_rs::WhisperVadContext::new(path, ctx_params).map_err(|_| SpeechError::BadModel)?;
     let mut params = whisper_rs::WhisperVadParams::new();
-    params.set_threshold(THRESHOLD);
-    params.set_min_speech_duration(MIN_SPEECH_MS);
-    params.set_min_silence_duration(MIN_SILENCE_MS);
+    params.set_threshold(settings.threshold);
+    params.set_min_speech_duration(settings.min_speech_ms.min(i32::MAX as u32) as i32);
+    params.set_min_silence_duration(settings.min_silence_ms.min(i32::MAX as u32) as i32);
+    // whisper.cpp's own padding is not used: `pad_spans` does it, so it clamps and merges the same way everywhere.
     params.set_speech_pad(0);
     let segments = ctx
         .segments_from_samples(params, samples)
@@ -116,5 +163,6 @@ pub fn detect(model_dir: &Path, samples: &[f32]) -> Result<Vec<(u64, u64)>, Spee
         })
         .collect();
     let audio_ms = samples.len() as u64 * 1000 / 16_000;
-    Ok(spans_from_centiseconds(&raw, audio_ms))
+    let spans = spans_from_centiseconds(&raw, audio_ms);
+    Ok(pad_spans(&spans, settings.padding_ms as u64, audio_ms))
 }

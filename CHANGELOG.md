@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.0 (unreleased)
+
+- feat: voice detection settings (#31). `vad::VadSettings` (`threshold`, `min_speech_ms`, `min_silence_ms`, `padding_ms`;
+  `Default` is the old fixed values) and `vad::detect_with(model_dir, &audio, &settings)`. `detect` is unchanged.
+  Padding grows each span, stops at the ends of the audio and merges spans that meet.
+
 ## v0.2.3 (2026-10-31)
 
 Fixes from Talaan's move: apps can retry the card without a restart, no example or test writes into the real shared
