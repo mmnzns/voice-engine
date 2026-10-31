@@ -50,6 +50,14 @@ processor helper gets the same request with `gpu: false` (`load`, `complete`, `e
 really runs on the processor. With no `gpu_helper` the one helper gets `gpu` as the app wrote it (on the Mac that is the
 Metal helper). A Metal helper that dies counts as a card failure like a Vulkan one.
 
+A card failure is remembered in the `gpu_failures` file (when the config names one) under the app's `gpu_key` (a build
+string such as `"1.2.0 | driver 560.94"`), and in the client itself until the app restarts. The app's "Try again" calls
+`retry_gpu()` on each live `LlmClient` and `SttClient`: it waits for a request in progress, clears the file and the
+client's memory, and stops the processor helper if that is the one running, so the next request starts on the card (the
+`SttClient` loads its remembered model into the new helper); a running card helper is left alone. `clear_gpu_failure(path)`
+only removes the file, which is enough for a client built afterwards but not for one already running. The engine compares
+`gpu_key` only, so an app should fold the graphics driver version into it: a driver update then tries the card again.
+
 ## Local AI servers
 
 `voice_engine_client::servers::detect()` says which local AI servers are running on this computer: Ollama (port 11434)
@@ -443,7 +451,7 @@ own computer (they print times, sizes and counts, never text; always `--release`
 ```text
 cargo run --release -p voice-engine-stt --example bench                       # `-- sweep` adds other thread counts
 cargo run --release -p voice-engine-client --example bench_llm                # needs: cargo build --release -p voice-engine-llm
-cargo run --release -p voice-engine-models --example download_proof           # downloads whisper-base and whisper-tiny
+cargo run --release -p voice-engine-models --example download_proof -- --real # downloads whisper-base and whisper-tiny (or set VOICE_ENGINE_MODELS_DIR)
 ```
 
 `bench` and `bench_timing` look for each model on its own: in `$VOICE_ENGINE_TEST_MODELS` (a folder that holds a folder per
@@ -453,7 +461,7 @@ model id) when that is set, else in the shared folder, then in Talaan's real fol
 file named by `$VOICE_ENGINE_TEST_CLIP` (16-bit PCM or 32-bit float; repeated and cut to 29 s), and the macOS `say` command
 only when that is not set and the computer is a Mac. `bench_llm` takes catalog ids (default `qwen3.5-4b` and
 `granite-4.2-3b`), reads them from `$VOICE_ENGINE_TEST_MODELS` or else the shared folder, and finds the helper at
-`$VOICE_ENGINE_TEST_HELPER` or `target/release/voice-engine-llm` (`.exe` on Windows). `download_proof` writes into the real shared model folder.
+`$VOICE_ENGINE_TEST_HELPER` or `target/release/voice-engine-llm` (`.exe` on Windows). `download_proof` refuses to run unless `VOICE_ENGINE_MODELS_DIR` is set or `--real` is passed, and then writes into that folder (the real shared model folder for `--real`).
 
 ### Run the speed check and the real-model tests on a Windows PC
 

@@ -14,7 +14,8 @@
 //! - `stall` never answers a `transcribe` and never reads `cancel` (a decode that cannot be interrupted, like the real
 //!   helper); `stall_once` does that for the first one only (over all starts); `cancellable` waits for `cancel` and
 //!   answers `cancelled`; `chatter` writes events that are not the answer, forever, and ignores `cancel`.
-//! - `gpu_ok` reports a Vulkan card and works; `gpu_die` reports a card and dies on `transcribe`; `gpu_error` reports a
+//! - `gpu_ok` reports a Vulkan card and works; `gpu_die` reports a card and dies on `transcribe`; `gpu_die_once`
+//!   does that for the first `transcribe` (over all starts) and works after; `gpu_error` reports a
 //!   card and answers `transcribe` with the graphics card failed; `cpu_fallback` runs the model on the processor
 //!   though the card was asked for (`fell_back` in `loaded` and `transcribed`).
 //! - `too_long` answers `transcribe` with too long (max 40 s); `missing` answers `load` with model missing;
@@ -173,6 +174,12 @@ fn main() {
                 };
                 match mode.as_str() {
                     "die_on_transcribe" | "gpu_die" => std::process::exit(139),
+                    "gpu_die_once" => {
+                        if bump(&state) == 0 {
+                            std::process::exit(139);
+                        }
+                        send(&answer(model, &audio_b64, &options, &ran_on));
+                    }
                     "die_on_first_transcribe" => {
                         if bump(&state) == 0 {
                             std::process::exit(139);

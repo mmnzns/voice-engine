@@ -2,6 +2,14 @@
 
 ## v0.2.3 (unreleased)
 
+- fix: `LlmClient::retry_gpu()` and `SttClient::retry_gpu()` re-enable the card in a running client (#24). They wait
+  for a request in progress, clear the `gpu_failures` file and the client's own failure memory, and stop the processor
+  helper that took over, so the next request starts on the card (the speech client loads its remembered model there); a
+  running card helper is left alone. `clear_gpu_failure` alone does not reach a live client. The README tells apps to
+  fold the graphics driver version into `gpu_key`.
+- fix: the `download_proof` example no longer writes into the real shared model folder by accident (#23). It refuses to
+  run unless `VOICE_ENGINE_MODELS_DIR` is set or `--real` is passed, and prints the folder first; a guard test fails if
+  a test or example calls `SharedStore::open(` without setting `VOICE_ENGINE_MODELS_DIR` first.
 - docs: the build settings go in a committed `.cargo/config.toml` in the folder cargo runs from, usually the repo root,
   not in `src-tauri/.cargo`; the local `[patch]` goes in `~/.cargo/config.toml` or `--config` (#20).
 - docs: helpers built by `build-helpers.yml` and the build scripts are the engine's own binaries and read

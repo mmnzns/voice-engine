@@ -705,3 +705,75 @@ fn devices_gives_up_after_its_own_short_limit_and_does_not_blame_the_card() {
     // A timeout is not the card failing: nothing is remembered.
     assert!(!failures.exists());
 }
+
+#[test]
+fn retry_gpu_puts_a_running_client_back_on_the_card_and_loads_the_model_there() {
+    let _t = turn();
+    let (d, st) = state();
+    let log = d.path().join("asked.log");
+    let failures = d.path().join("gpu.txt");
+    let client = SttClient::new(with_gpu(logged("", &st, &log), "gpu_die_once", &failures));
+    client.load(model("whisper-turbo")).unwrap();
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(out.backend.backend, "cpu");
+    assert!(out.fell_back);
+    assert!(failures.exists());
+    // Still on the processor, whatever the app does to the file alone.
+    voice_engine_client::clear_gpu_failure(&failures);
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(
+        out.backend.backend, "cpu",
+        "clear_gpu_failure alone does not reach the client"
+    );
+    // The app's "Try again": the next call loads the remembered model on a new card helper.
+    client.retry_gpu();
+    assert!(!failures.exists());
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(out.backend.backend, "vulkan");
+    assert_eq!(out.value.language.as_deref(), Some("whisper-turbo"));
+    assert!(!out.fell_back);
+    assert!(!failures.exists());
+    assert_eq!(
+        asked(&log),
+        [
+            "[gpu_die_once] load gpu=true",
+            "[] load gpu=false",
+            "[gpu_die_once] load gpu=true"
+        ]
+    );
+    // With the card helper running, retry_gpu leaves it (and its loaded model) alone.
+    client.retry_gpu();
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(out.backend.backend, "vulkan");
+    assert_eq!(asked(&log).len(), 3);
+    client.shutdown();
+}
+
+#[test]
+fn retry_gpu_on_a_client_that_started_on_a_remembered_failure_tries_the_card() {
+    let _t = turn();
+    let (d, st) = state();
+    let failures = d.path().join("gpu.txt");
+    std::fs::write(&failures, "test-build").unwrap();
+    let client = SttClient::new(with_gpu(config("", &st), "gpu_ok", &failures));
+    let loaded = client.load(model("whisper-turbo")).unwrap();
+    assert_eq!(loaded.backend.backend, "cpu");
+    client.retry_gpu();
+    assert!(!failures.exists());
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(out.backend.backend, "vulkan");
+    client.shutdown();
+}
+
+#[test]
+fn retry_gpu_without_a_card_helper_or_a_file_does_nothing_harmful() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = SttClient::new(config("", &st));
+    client.retry_gpu();
+    client.load(model("whisper-turbo")).unwrap();
+    client.retry_gpu();
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(out.backend.backend, "cpu");
+    client.shutdown();
+}
