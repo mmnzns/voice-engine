@@ -10,6 +10,8 @@
 
 mod common;
 
+#[cfg(feature = "directml")]
+use common::{EXPECT_CARD_ENV, expect_card};
 use common::{SENTENCE, check_shape, guard, lower_letters, model_dir, ms, say, text_of, words_of};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -481,7 +483,13 @@ fn the_gpu_option_uses_directml_or_reports_the_fallback() {
                 "{b:?}"
             );
         }
-        "cpu" => assert!(b.fell_back, "{b:?}"),
+        "cpu" => {
+            assert!(b.fell_back, "{b:?}");
+            assert!(
+                !expect_card(),
+                "{EXPECT_CARD_ENV} is set, but the card did not run: {b:?}"
+            );
+        }
         other => panic!("unexpected backend {other}: {b:?}"),
     }
     let b = engine(LoadOptions {

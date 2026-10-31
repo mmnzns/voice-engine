@@ -486,6 +486,10 @@ brings `DirectML.dll`). Every line a bench prints has `backend`, `device` (the a
 `device` must be the discrete card. Each step is one block, run from a clone of the engine, with the clip and the models set
 as above (`$env:VOICE_ENGINE_TEST_CLIP = "$PWD\docs\data\clip-bench.wav"`).
 
+Set `VOICE_ENGINE_TEST_EXPECT_CARD=1` for the test steps (4 and 5). A card test whose model or helper variables are not set
+still skips. With the variable set, a test that finds the card did not run (the work ran on the processor, with
+`fell_back`, or the helper found no card) fails instead of printing SKIPPED and passing.
+
 1. Parakeet on DirectML and Whisper on Vulkan in this process (the `vulkan` feature builds the Vulkan backend into the
    example), next to the processor rows:
 
@@ -512,6 +516,7 @@ cargo run --release -p voice-engine-client --example bench_llm
 
 ```powershell
 $env:VOICE_ENGINE_TEST_CLIP = "$PWD\docs\data\clip-sentence.wav"
+$env:VOICE_ENGINE_TEST_EXPECT_CARD = "1"
 cargo test --release -p voice-engine-stt --features vulkan,directml -- --ignored --test-threads=1 --nocapture
 ```
 
@@ -530,6 +535,7 @@ $env:VOICE_ENGINE_TEST_STT_HELPER = "$PWD\target\release\voice-engine-stt.exe"
 $env:VOICE_ENGINE_TEST_GPU_HELPER = "$env:TEMP\llm-vulkan.exe"
 $env:VOICE_ENGINE_TEST_HELPER = "$PWD\target\release\voice-engine-llm.exe"
 $env:VOICE_ENGINE_TEST_LLM = "C:\path\to\model.gguf"      # any chat model, a .gguf file
+$env:VOICE_ENGINE_TEST_EXPECT_CARD = "1"
 cargo test --release -p voice-engine-client --test real_fallback -- --ignored --nocapture --test-threads=1
 ```
 

@@ -19,7 +19,7 @@ use std::sync::{Mutex, MutexGuard};
 use voice_engine_stt::Transcript;
 
 #[allow(unused_imports)]
-pub use support::SENTENCE;
+pub use support::{EXPECT_CARD_ENV, SENTENCE, expect_card};
 
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 

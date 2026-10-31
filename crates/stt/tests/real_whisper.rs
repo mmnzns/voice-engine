@@ -12,7 +12,8 @@
 mod common;
 
 use common::{
-    SENTENCE, check_shape, guard, lower_letters, model_dir, ms, say, text_of, use_gpu, words_of,
+    EXPECT_CARD_ENV, SENTENCE, check_shape, expect_card, guard, lower_letters, model_dir, ms, say,
+    text_of, use_gpu, words_of,
 };
 use std::path::PathBuf;
 use std::time::Instant;
@@ -468,6 +469,10 @@ fn fillers_option_is_accepted() {
 #[ignore]
 fn backend_names_the_card_with_it_and_cpu_without() {
     let _g = guard();
+    assert!(
+        use_gpu() || !expect_card(),
+        "{EXPECT_CARD_ENV} is set, but this build does not ask for the card (build with --features vulkan)"
+    );
     // The card is asked for on the Mac (Metal) and in a `vulkan` build; elsewhere there is no card to ask for.
     if use_gpu() {
         let e = engine(true);
@@ -485,6 +490,10 @@ fn backend_names_the_card_with_it_and_cpu_without() {
             "cpu" => {
                 assert_eq!(b.device, None);
                 assert!(b.fell_back, "{b:?}");
+                assert!(
+                    !expect_card(),
+                    "{EXPECT_CARD_ENV} is set, but the card did not run: {b:?}"
+                );
             }
             other => panic!("unexpected backend {other}: {b:?}"),
         }

@@ -10,6 +10,8 @@
   `Undefined symbols: ___isPlatformVersionAtLeast` (#22).
 - docs: `DirectML.dll` is a load-time import that `ort-sys` adds to every Windows build, so a missing export stops the
   program instead of falling back to the processor; check imports with `dumpbin /dependents` (#18).
+- tests: with `VOICE_ENGINE_TEST_EXPECT_CARD=1` the card tests (`real_fallback`, `real_whisper`, `real_parakeet`) fail when
+  the card did not run, instead of skipping or accepting the processor; the README's Windows card check sets it (#16).
 ## v0.2.2 (2026-10-30)
 
 The Windows card check no longer counts a VM's or a driverless PC's display adapter as a card, and it answers within 10 s.
