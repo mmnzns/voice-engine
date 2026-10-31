@@ -25,7 +25,7 @@ pub const JSON_OBJECT_SCHEMA: &str = r#"{"type":"object"}"#;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
-    /// Answers with `Event::Ready`. Used to check the helper started.
+    /// Answers with `Event::Ready`. Used to check the helper started, and to ask which model it holds.
     Ping,
     /// Sets how long the helper waits without a request before exiting. Answers with `Event::Configured`.
     Configure(Configure),
@@ -140,16 +140,47 @@ impl Backend {
     }
 }
 
+/// Why work the app asked to run on the graphics card (`gpu: true`) ran on the processor. The client works it out
+/// (a helper says where a request ran, not why it did not run on the card), so no message carries it and older helpers
+/// need no change; it lives here because the AI and speech clients share it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum Fallback {
+    /// The model has no card runtime on this system (a helper on a card-capable system answered with the processor
+    /// without a failure).
+    NoCardPath,
+    /// This time the card helper could not start, died, or reported a card failure, and the processor did the work.
+    /// Also the answer of a card helper that started but ran on the processor. This is the one an app tells the
+    /// person about, once.
+    CardFailed,
+    /// This time the card helper died of lack of memory (its stderr said so, or the system ended it), and the
+    /// processor did the work.
+    CardOutOfMemory,
+    /// The card was not tried: it failed in an earlier call, in an earlier run (the `gpu_failures` file) or since the
+    /// app started, and has not been given a new try (`retry_gpu`). The person was told when it happened.
+    RememberedFailure,
+    /// The app asked for the card but there is no card helper: this build ships the processor helper only.
+    NoCardHelper,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
+    /// The answer to `ping`: what the helper runs on, its protocol version and the model it holds now.
     Ready {
         #[serde(flatten)]
         backend: Backend,
         #[serde(default)]
         protocol: u32,
+        /// The `model_path` of the model loaded now (the text the app sent in `load`, `complete` or `embed`), or None
+        /// when no model is loaded: nothing was loaded yet, `unload` freed it, or the helper started again after it
+        /// was stopped. An older helper never sends it, which reads as None.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        loaded_model: Option<String>,
     },
-    /// Reading the prompt (`done` of `total` tokens), then writing (`done` tokens written, `total` 0).
+    /// Reading the prompt (`done` of `total` tokens; the first one, with `done` 0, says the model is loaded and the
+    /// prompt is ready), then writing (`done` tokens written, `total` 0). `Loading` comes first when the request
+    /// has to load the model.
     Progress {
         phase: Phase,
         done: u32,
@@ -205,6 +236,8 @@ pub enum Phase {
 /// What a GGUF file says about itself.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Inspection {
+    /// The file has a chat template. When it does not, `complete` still works: the helper uses a plain format and says
+    /// so in the reply (`Reply::plain_format`).
     pub has_chat_template: bool,
     /// Its chat template has a thinking step (`<think>`).
     pub thinks: bool,
@@ -229,6 +262,8 @@ pub enum ErrorKind {
     BadSchema {
         detail: String,
     },
+    /// No longer sent: a file without a chat template gets the plain format (`Reply::plain_format`). A helper from
+    /// before v0.3.0 sends it.
     NoChatTemplate,
     Cancelled,
     /// The graphics card failed. `fell_back`: the work was done on the processor instead (the app can say so once
@@ -263,6 +298,12 @@ pub struct Reply {
     /// `backend`), and the app uses what `ready` said.
     #[serde(flatten, default)]
     pub backend: Backend,
+    /// True when the model file has no chat template and the helper used the plain format instead (the system text,
+    /// a blank line, the user text, a blank line): replies can be worse than from a model with its template, so an
+    /// app can warn, for example when the person imports the file (`Inspection::has_chat_template` says it up front).
+    /// An older helper never sends it (false), and it is left out of the message when false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plain_format: bool,
 }
 
 /// One message as one line (no newline inside: JSON escapes the ones in the text).
@@ -351,6 +392,7 @@ mod tests {
                 vram_mb: 16303,
             },
             protocol: PROTOCOL_VERSION,
+            loaded_model: None,
         };
         let line = encode(&gpu);
         assert_eq!(
@@ -359,8 +401,9 @@ mod tests {
         );
         assert_eq!(serde_json::from_str::<Event>(&line).unwrap(), gpu);
         // The fake helpers in tests (and a 1.0.x helper) answer with just this.
-        let Event::Ready { backend, protocol } =
-            serde_json::from_str::<Event>(r#"{"event":"ready"}"#).unwrap()
+        let Event::Ready {
+            backend, protocol, ..
+        } = serde_json::from_str::<Event>(r#"{"event":"ready"}"#).unwrap()
         else {
             panic!()
         };
@@ -378,7 +421,8 @@ mod tests {
         assert_eq!(
             encode(&Event::Ready {
                 backend: Backend::cpu(),
-                protocol: PROTOCOL_VERSION
+                protocol: PROTOCOL_VERSION,
+                loaded_model: None
             }),
             r#"{"event":"ready","backend":"cpu","vram_mb":0,"protocol":2}"#
         );
@@ -417,10 +461,35 @@ mod tests {
     }
 
     #[test]
+    fn ready_says_which_model_is_loaded_and_an_old_ready_says_none() {
+        let line = encode(&Event::Ready {
+            backend: Backend::cpu(),
+            protocol: PROTOCOL_VERSION,
+            loaded_model: Some("/models/m.gguf".into()),
+        });
+        assert_eq!(
+            line,
+            r#"{"event":"ready","backend":"cpu","vram_mb":0,"protocol":2,"loaded_model":"/models/m.gguf"}"#
+        );
+        let Event::Ready { loaded_model, .. } = decode_event(&line).unwrap() else {
+            panic!()
+        };
+        assert_eq!(loaded_model.as_deref(), Some("/models/m.gguf"));
+        // A helper from before v0.3.0 sends none, and None is left out of the message.
+        let Event::Ready { loaded_model, .. } =
+            decode_event(r#"{"event":"ready","backend":"cpu","vram_mb":0,"protocol":2}"#).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(loaded_model, None);
+    }
+
+    #[test]
     fn ready_carries_the_protocol_version() {
         let line = encode(&Event::Ready {
             backend: Backend::cpu(),
             protocol: PROTOCOL_VERSION,
+            loaded_model: None,
         });
         assert!(line.contains(r#""protocol":2"#), "{line}");
     }
@@ -432,6 +501,21 @@ mod tests {
             panic!("not ready: {ev:?}")
         };
         assert_eq!(protocol, 0);
+    }
+
+    #[test]
+    fn a_fallback_reason_is_a_snake_case_word() {
+        for (fallback, word) in [
+            (Fallback::NoCardPath, "no_card_path"),
+            (Fallback::CardFailed, "card_failed"),
+            (Fallback::CardOutOfMemory, "card_out_of_memory"),
+            (Fallback::RememberedFailure, "remembered_failure"),
+            (Fallback::NoCardHelper, "no_card_helper"),
+        ] {
+            let json = format!("\"{word}\"");
+            assert_eq!(serde_json::to_string(&fallback).unwrap(), json);
+            assert_eq!(serde_json::from_str::<Fallback>(&json).unwrap(), fallback);
+        }
     }
 
     #[test]
@@ -479,6 +563,7 @@ mod tests {
                     ..Default::default()
                 },
                 protocol: PROTOCOL_VERSION,
+                loaded_model: Some("/m.gguf".into()),
             },
             Event::Progress {
                 phase: Phase::Reading,
@@ -500,6 +585,7 @@ mod tests {
                 load_seconds: 0.0,
                 thinking_text: None,
                 backend: Backend::cpu(),
+                plain_format: false,
             }),
             Event::Error {
                 message: "the AI model failed".into(),
@@ -516,8 +602,9 @@ mod tests {
     #[test]
     fn ensayo_a_ready_from_an_app_with_only_a_backend_name_still_reads() {
         // Ensayo's helper before the engine said just the backend name; it must keep working.
-        let Event::Ready { backend, protocol } =
-            decode_event(r#"{"event":"ready","backend":"cpu"}"#).unwrap()
+        let Event::Ready {
+            backend, protocol, ..
+        } = decode_event(r#"{"event":"ready","backend":"cpu"}"#).unwrap()
         else {
             panic!()
         };
@@ -656,6 +743,7 @@ mod tests {
                 load_seconds: 0.0,
                 thinking_text: Some("hmm".into()),
                 backend: Backend::cpu(),
+                plain_format: false,
             }),
         ];
         for ev in events {
@@ -707,6 +795,24 @@ mod tests {
             panic!()
         };
         assert_eq!(error, ErrorKind::Internal);
+    }
+
+    #[test]
+    fn a_reply_says_when_the_plain_format_was_used_and_an_old_reply_says_it_was_not() {
+        let line = r#"{"event":"done","text":"x","prompt_tokens":1,"output_tokens":1,"seconds":0.1,"truncated":false}"#;
+        let Event::Done(old) = decode_event(line).unwrap() else {
+            panic!()
+        };
+        assert!(!old.plain_format);
+        // False is left out of the message, so a reply from a model with a template reads as it did before.
+        assert!(!encode(&Event::Done(old.clone())).contains("plain_format"));
+        let plain = Reply {
+            plain_format: true,
+            ..old
+        };
+        let line = encode(&Event::Done(plain.clone()));
+        assert!(line.contains(r#""plain_format":true"#), "{line}");
+        assert_eq!(decode_event(&line).unwrap(), Event::Done(plain));
     }
 
     #[test]

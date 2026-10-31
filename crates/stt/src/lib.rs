@@ -24,7 +24,7 @@
 //! * Parakeet (the TDT models): DirectML through ONNX Runtime, on Windows, with this crate's `directml` feature.
 //!   If the provider does not start the model loads on the processor.
 //! * Everywhere else `gpu: true` runs the model on the processor. That is reported the same way as a card that
-//!   failed: `backend()` says `cpu` with `fell_back: true`. This is the case for every ONNX model on the Mac (nothing
+//!   failed: `backend()` says `cpu` with `fallback: Some(NoCardPath)`. This is the case for every ONNX model on the Mac (nothing
 //!   here uses CoreML: parakeet-rs measures it slower than the processor for these graphs), for a Windows build
 //!   without the `directml` feature, and for the models the catalog gives no DirectML path (Parakeet Unified,
 //!   Nemotron). There is no card path to fall back from, but the app asked for one, so it is told, once, and can
@@ -51,6 +51,8 @@ pub use api::{
     Transcript, Word, load,
 };
 pub use helper::run_helper;
+pub use voice_engine_protocol::Fallback;
+pub use words::join_segments;
 
 use std::ffi::CStr;
 use voice_engine_protocol::gpu::{Device, DeviceKind, bytes_to_mb};

@@ -17,9 +17,14 @@
 //! - `gpu_ok` reports a Vulkan card and works; `gpu_die` reports a card and dies on `transcribe`; `gpu_die_once`
 //!   does that for the first `transcribe` (over all starts) and works after; `gpu_error` reports a
 //!   card and answers `transcribe` with the graphics card failed; `cpu_fallback` runs the model on the processor
-//!   though the card was asked for (`fell_back` in `loaded` and `transcribed`).
+//!   though the card was asked for (`fallback` in `loaded` and `transcribed`).
+//! - `gpu_oom` reports a card and dies of memory on `transcribe`; `metal_refused` is a Mac helper whose card did not
+//!   take the model: `ready` says `metal`, and `loaded` and `transcribed` say `cpu` with a `fallback`.
 //! - `too_long` answers `transcribe` with too long (max 40 s); `missing` answers `load` with model missing;
 //!   `slow_load` takes 4 s to load, far past the tests' 600 ms stall limit (the client stops it at the limit).
+//!
+//! - `die_noisy` writes what `FAKE_STDERR` (lines separated by `~`) and `FAKE_STDERR_LONG` (one line of that many
+//!   letters) say to stderr and exits with `FAKE_EXIT` on `transcribe`; `sigkill` ends itself with SIGKILL there.
 //!
 //! `devices` answers with the list `FAKE_DEVICES` describes (fake_support/devices.rs); mode `no_devices` never answers it.
 //!
@@ -27,6 +32,8 @@
 //! gpu=<flag>`, so a test can see what each helper (the card one and the processor one run in different modes) was
 //! asked.
 
+#[path = "fake_support/crash.rs"]
+mod fake_crash;
 #[path = "fake_support/devices.rs"]
 mod fake_devices;
 
@@ -37,7 +44,7 @@ use voice_engine_protocol::stt::{
     ChunkOptions, Segment, SpeechBackend, SttErrorKind, SttEvent, SttLoad, SttRequest, Timing,
     Transcript, Word, decode_request, decode_samples,
 };
-use voice_engine_protocol::{Backend, PROTOCOL_VERSION, encode};
+use voice_engine_protocol::{Backend, Fallback, PROTOCOL_VERSION, encode};
 
 fn send(ev: &SttEvent) {
     let mut out = std::io::stdout().lock();
@@ -93,6 +100,12 @@ fn main() {
             device: Some("Fake GPU".into()),
             vram_mb: 8000,
         }
+    } else if mode == "metal_refused" {
+        Backend {
+            backend: "metal".into(),
+            device: None,
+            vram_mb: 0,
+        }
     } else {
         Backend::cpu()
     };
@@ -100,13 +113,14 @@ fn main() {
         SpeechBackend {
             backend: "vulkan".into(),
             device: Some("Fake GPU".into()),
-            fell_back: false,
+            fallback: None,
         }
     } else {
         SpeechBackend {
             backend: "cpu".into(),
             device: None,
-            fell_back: mode == "cpu_fallback",
+            fallback: matches!(mode.as_str(), "cpu_fallback" | "metal_refused")
+                .then_some(Fallback::CardFailed),
         }
     };
     let protocol = if mode == "wrong_protocol" {
@@ -186,10 +200,12 @@ fn main() {
                         }
                         send(&answer(model, &audio_b64, &options, &ran_on));
                     }
-                    "oom" => {
+                    "oom" | "gpu_oom" => {
                         eprintln!("GGML_ASSERT: out of memory");
                         std::process::exit(137);
                     }
+                    "die_noisy" => fake_crash::die_noisy(),
+                    "sigkill" => fake_crash::sigkill(),
                     "stall_once" => {
                         if bump(&state) == 0 {
                             loop {
@@ -253,6 +269,7 @@ fn answer(
                 start_ms: 0,
                 end_ms: 900,
                 text: text.clone(),
+                starts_word: true,
                 words: text
                     .split(' ')
                     .zip([0u64, 300, 600])

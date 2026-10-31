@@ -50,6 +50,8 @@ fn it_answers_a_ping_and_exits_when_stdin_closes() {
     let mut line = String::new();
     out.read_line(&mut line).unwrap();
     assert!(line.contains(r#""event":"ready""#), "{line}");
+    // Nothing is loaded yet, and None is left out of the message.
+    assert!(!line.contains("loaded_model"), "{line}");
     drop(stdin);
     let status = wait_exit(&mut child, Duration::from_secs(20));
     assert!(

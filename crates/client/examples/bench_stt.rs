@@ -14,8 +14,8 @@
 //! folder; see `crates/stt/support/mod.rs`), only ever read. First the helper's device list is printed (`devices()`:
 //! how many devices it sees and the one it chose). Then, for the card (`gpu: true`) and for `gpu: false`: a load, one
 //! warm-up transcription, then 3 timed ones (median and range, `Timing::Segments`, language auto). Each line says
-//! `backend`, `device` (the card's name, `-` on the processor) and `fell_back` (the card was asked for and the processor
-//! ran: no card, a failed card, or a helper built without `vulkan`). Each client is stopped before the next starts.
+//! `backend`, `device` (the card's name, `-` on the processor) and `fallback` (why the card was not used when it was asked for
+//! and the processor ran: `NoCardHelper`, `CardFailed`, and so on; `None` when it ran on the card). Each client is stopped before the next starts.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -145,22 +145,22 @@ fn main() {
 
         let mut times = vec![];
         let mut last = warm.backend.clone();
-        let mut fell_back = warm.fell_back;
+        let mut fallback = warm.fallback;
         for _ in 0..RUNS {
             let started = Instant::now();
             let out = c.transcribe(&audio, &opts).expect("transcription");
             times.push(started.elapsed().as_secs_f64());
             last = out.backend.clone();
-            fell_back |= out.fell_back;
+            fallback = fallback.or(out.fallback);
         }
         let (median, lo, hi) = median_and_range(&times);
         println!(
-            "{id:<14} gpu={gpu:<5} load backend={} device={:?} fell_back={} reported={:.2}s wall={load_wall:.2}s | \
-             transcribe backend={} device={:?} fell_back={fell_back} warm-up={warm_s:.2}s median={median:.2}s \
+            "{id:<14} gpu={gpu:<5} load backend={} device={:?} fallback={:?} reported={:.2}s wall={load_wall:.2}s | \
+             transcribe backend={} device={:?} fallback={fallback:?} warm-up={warm_s:.2}s median={median:.2}s \
              range={lo:.2}-{hi:.2}s rtf={:.1}x segments={segments} words={words}",
             loaded.backend.backend,
             device(&loaded.backend),
-            loaded.fell_back,
+            loaded.fallback,
             loaded.value.seconds,
             last.backend,
             device(&last),

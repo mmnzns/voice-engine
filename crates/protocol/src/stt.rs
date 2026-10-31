@@ -16,7 +16,7 @@
 //! The v0.1.0 speech messages (`load { model_path }`, `transcribe { samples, language }`, `transcribed { pieces }`)
 //! are replaced and no longer read: nobody had adopted them (CHANGELOG, breaking for anyone who had).
 
-use super::Backend;
+use super::{Backend, Fallback};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
@@ -38,7 +38,7 @@ pub struct SttLoad {
     /// The model's folder (the shared store's `<model id>/`).
     pub model_dir: String,
     pub kind: SttModelKind,
-    /// Metal or Vulkan, if the helper has one; the processor otherwise (the answer says which, and `fell_back`).
+    /// Metal or Vulkan, if the helper has one; the processor otherwise (the answer says which, and `fallback`).
     #[serde(default = "super::yes")]
     pub gpu: bool,
     /// None: the engine's thread rule. Some: the app's own setting.
@@ -125,8 +125,21 @@ pub struct Transcript {
 pub struct Segment {
     pub start_ms: u64,
     pub end_ms: u64,
+    /// The segment's text, trimmed (no space at either end).
     pub text: String,
+    /// Whether this segment starts a new word, so a space goes between the segment before it and this one when the
+    /// text is joined. Whisper: the raw segment text began with whitespace (whisper.cpp puts none before a segment
+    /// in Chinese, Japanese or Korean, where words are not spaced). Parakeet, Parakeet Unified and Nemotron: always
+    /// `true` (their words are spaced, and punctuation is already glued to the word before). The first segment's
+    /// value does not matter: nothing goes before it. A helper from before this field reads as `true`.
+    /// `voice_engine_stt::join_segments` joins segments by it.
+    #[serde(default = "starts_word_default")]
+    pub starts_word: bool,
     pub words: Vec<Word>,
+}
+
+fn starts_word_default() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -136,17 +149,59 @@ pub struct Word {
     pub end_ms: u64,
 }
 
-/// Where a model runs.
+/// Where a model runs. On the wire it also carries `fell_back` (a bool) next to `fallback`: a v0.2.x helper sends only
+/// `fell_back` (read as `CardFailed` when true), and a v0.2.x client reads the `fell_back` a v0.3.0 helper writes.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(from = "SpeechBackendWire", into = "SpeechBackendWire")]
 pub struct SpeechBackend {
     /// `metal`, `vulkan`, `directml` or `cpu`.
     pub backend: String,
     /// The GPU's name when known; `None` on the processor.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device: Option<String>,
-    /// The app asked for the GPU (`gpu: true`) and the model runs on the processor instead.
+    /// Why a model the app asked to run on the GPU (`gpu: true`) runs on the processor; `None` when it runs where it
+    /// was asked to, or the app did not ask for the GPU.
+    pub fallback: Option<Fallback>,
+}
+
+impl SpeechBackend {
+    /// The app asked for the GPU and the model runs on the processor instead (`fallback.is_some()`).
+    pub fn fell_back(&self) -> bool {
+        self.fallback.is_some()
+    }
+}
+
+/// The JSON shape of [`SpeechBackend`]: `fallback` is the reason, `fell_back` the v0.2.x bool kept for older readers.
+#[derive(Serialize, Deserialize)]
+struct SpeechBackendWire {
+    backend: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    fallback: Option<Fallback>,
     #[serde(default)]
-    pub fell_back: bool,
+    fell_back: bool,
+}
+
+impl From<SpeechBackendWire> for SpeechBackend {
+    fn from(w: SpeechBackendWire) -> Self {
+        SpeechBackend {
+            backend: w.backend,
+            device: w.device,
+            // A v0.2.x helper only says that it fell back: the most common reason.
+            fallback: w.fallback.or(w.fell_back.then_some(Fallback::CardFailed)),
+        }
+    }
+}
+
+impl From<SpeechBackend> for SpeechBackendWire {
+    fn from(b: SpeechBackend) -> Self {
+        SpeechBackendWire {
+            fell_back: b.fell_back(),
+            backend: b.backend,
+            device: b.device,
+            fallback: b.fallback,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -246,7 +301,7 @@ pub fn decode_samples(text: &str) -> Result<Vec<f32>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Backend, encode};
+    use crate::{Backend, Fallback, encode};
 
     fn options() -> ChunkOptions {
         ChunkOptions {
@@ -263,6 +318,7 @@ mod tests {
                 start_ms: 0,
                 end_ms: 1200,
                 text: "Bonjour, tout le monde.".into(),
+                starts_word: true,
                 words: vec![
                     Word {
                         text: "Bonjour,".into(),
@@ -285,7 +341,7 @@ mod tests {
         SpeechBackend {
             backend: "metal".into(),
             device: Some("Apple M3 Pro".into()),
-            fell_back: false,
+            fallback: None,
         }
     }
 
@@ -353,7 +409,7 @@ mod tests {
                 backend: SpeechBackend {
                     backend: "cpu".into(),
                     device: None,
-                    fell_back: true,
+                    fallback: Some(Fallback::NoCardPath),
                 },
             },
             SttEvent::Transcribed {
@@ -508,6 +564,40 @@ mod tests {
             panic!()
         };
         assert_eq!((t.language, t.stopped_early_at_ms), (None, None));
+    }
+
+    #[test]
+    fn a_speech_backend_reads_and_writes_the_v0_2_bool_beside_the_reason() {
+        let read = |json: &str| serde_json::from_str::<SpeechBackend>(json).unwrap();
+        // A v0.2.x helper: only the bool.
+        assert_eq!(
+            read(r#"{"backend":"cpu","fell_back":true}"#).fallback,
+            Some(Fallback::CardFailed)
+        );
+        assert_eq!(
+            read(r#"{"backend":"cpu","fell_back":false}"#).fallback,
+            None
+        );
+        assert_eq!(read(r#"{"backend":"cpu"}"#).fallback, None);
+        // The reason wins over the bool.
+        assert_eq!(
+            read(r#"{"backend":"cpu","fallback":"no_card_path","fell_back":true}"#).fallback,
+            Some(Fallback::NoCardPath)
+        );
+        // A v0.3.0 helper: the reason and the derived bool a v0.2.x client reads.
+        let mut b = metal();
+        assert_eq!(
+            serde_json::to_string(&b).unwrap(),
+            r#"{"backend":"metal","device":"Apple M3 Pro","fell_back":false}"#
+        );
+        b.fallback = Some(Fallback::CardOutOfMemory);
+        let json = serde_json::to_string(&b).unwrap();
+        assert!(
+            json.contains(r#""fallback":"card_out_of_memory","fell_back":true"#),
+            "{json}"
+        );
+        assert_eq!(read(&json), b);
+        assert!(b.fell_back());
     }
 
     #[test]

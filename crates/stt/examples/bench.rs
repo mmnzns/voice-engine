@@ -18,8 +18,8 @@
 //!   same way. Without either the bench says what to set.
 //! * The graphics card rows: Whisper on Metal on a Mac, and on Vulkan in this process when built with `--features vulkan`
 //!   (needs the Vulkan SDK to build; Windows); Parakeet on DirectML when built with `--features directml` (Windows).
-//!   Each row prints `backend`, `device` (the adapter's name, `-` on the processor) and `fell_back` (the card was
-//!   asked for and the processor ran), so a row that quietly ran on the processor says so. On a PC with two adapters
+//!   Each row prints `backend`, `device` (the adapter's name, `-` on the processor) and `fallback` (why the card was
+//!   not used when it was asked for: `None`, or `NoCardPath`, `CardFailed`, `CardOutOfMemory`), so a row that quietly ran on the processor says so. On a PC with two adapters
 //!   (an RTX card and the Ryzen's Radeon) `device` is how to see which one ran. One model is loaded at a time. Each line is one load, one warm-up decode, then 3
 //!   timed decodes (median and range); `Timing::Segments`, language auto.
 
@@ -65,7 +65,7 @@ struct Row {
     label: String,
     backend: String,
     device: String,
-    fell_back: bool,
+    fallback: Option<voice_engine_stt::Fallback>,
     threads: usize,
     load_s: f64,
     first_s: f64,
@@ -108,7 +108,7 @@ fn measure(
         label: label.to_string(),
         backend: backend.backend.clone(),
         device: backend.device.clone().unwrap_or_else(|| "-".into()),
-        fell_back: backend.fell_back,
+        fallback: backend.fallback,
         threads,
         load_s,
         first_s,
@@ -141,12 +141,12 @@ fn parakeet(label: &str, id: &str, dir: &Path, audio: &[f32], opts: LoadOptions)
 
 fn print(row: &Row, audio_secs: f64, bar: &str) {
     println!(
-        "{:<34} backend={:<8} device={:?} fell_back={:<5} threads={:<2} load={:>5.2}s first={:>5.2}s decode median={:>5.2}s range={:.2}-{:.2}s \
+        "{:<34} backend={:<8} device={:?} fallback={:<16} threads={:<2} load={:>5.2}s first={:>5.2}s decode median={:>5.2}s range={:.2}-{:.2}s \
          rtf={:>5.1}x words={}  | {bar}",
         row.label,
         row.backend,
         row.device,
-        row.fell_back,
+        format!("{:?}", row.fallback),
         row.threads,
         row.load_s,
         row.first_s,

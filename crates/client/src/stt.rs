@@ -35,7 +35,7 @@ use std::time::{Duration, Instant};
 use voice_engine_protocol::stt::{
     ChunkOptions, SpeechBackend, SttEvent, SttLoad, SttRequest, Transcript, encode_samples,
 };
-use voice_engine_protocol::{Backend, Device, DeviceList, PROTOCOL_VERSION, encode};
+use voice_engine_protocol::{Backend, Device, DeviceList, Fallback, PROTOCOL_VERSION, encode};
 
 #[derive(Debug, Clone)]
 pub struct SttConfig {
@@ -77,6 +77,10 @@ struct Running {
     /// still says `gpu: true`, so every `load` sent to it says `gpu: false`. The model the client remembers keeps
     /// what the app asked for.
     processor_fallback: bool,
+    /// This helper came from the card helper's path (`gpu_helper`), whatever it then said it runs on.
+    card_helper: bool,
+    /// The card helper just failed to start for this helper: the first call to use it reports that.
+    fresh_failure: Option<Fallback>,
 }
 
 impl Running {
@@ -300,7 +304,8 @@ impl SttClient {
     ) -> Result<Outcome<T>, EngineError> {
         self.stop_asked.store(false, Ordering::SeqCst);
         let began = Instant::now();
-        let mut fell_back = false;
+        // Why the card was given up on during this call, when it was.
+        let mut failed_now: Option<Fallback> = None;
         let mut retried = false;
         loop {
             if needs_model && lock(&self.model).is_none() {
@@ -310,6 +315,9 @@ impl SttClient {
                 *running = Some(self.start()?);
             }
             let r = running.as_mut().expect("started above");
+            if let Some(why) = r.fresh_failure.take() {
+                failed_now = failed_now.or(Some(why));
+            }
             if let SttRequest::Load(_) = request {
                 // The helper drops its model when it starts a load, so whatever happens next, none is loaded.
                 r.loaded = false;
@@ -343,16 +351,17 @@ impl SttClient {
                         },
                         None => r.ready.clone(),
                     };
+                    let said = spoken.and_then(|s| s.fallback);
+                    let fallback = self.fallback_reason(request, &backend, failed_now, said, r);
                     return Ok(Outcome {
                         value,
                         backend,
-                        fell_back: fell_back || spoken.is_some_and(|s| s.fell_back),
+                        fallback,
                     });
                 }
                 Err(Attempt::Died { delivered }) => {
                     let mut dead = running.take().expect("running above");
-                    let out_of_memory = dead.process.died_of_memory();
-                    dead.process.kill();
+                    let death = dead.process.reap();
                     if !delivered {
                         // It was already gone before it got the request (it was killed, or crashed, while nobody was
                         // waiting): a fresh helper answers it, once.
@@ -360,26 +369,26 @@ impl SttClient {
                             retried = true;
                             continue;
                         }
-                        return Err(EngineError::Crashed);
+                        return Err(EngineError::died(death));
                     }
                     if dead.on_gpu {
                         // The graphics card helper died while working: remember it and do the work on the processor.
                         self.gpu_failed();
-                        fell_back = true;
+                        failed_now = Some(if death.out_of_memory() {
+                            Fallback::CardOutOfMemory
+                        } else {
+                            Fallback::CardFailed
+                        });
                         continue;
                     }
-                    return Err(if out_of_memory {
-                        EngineError::OutOfMemory
-                    } else {
-                        EngineError::Crashed
-                    });
+                    return Err(EngineError::died(death));
                 }
                 Err(Attempt::Failed { error, kill }) => {
                     if matches!(error, EngineError::GpuFailed { .. }) && r.on_gpu {
                         let mut dead = running.take().expect("running above");
                         dead.process.kill();
                         self.gpu_failed();
-                        fell_back = true;
+                        failed_now = Some(Fallback::CardFailed);
                         continue;
                     }
                     if kill && let Some(mut dead) = running.take() {
@@ -488,6 +497,7 @@ impl SttClient {
     /// Starts a helper: the graphics card one first when there is one and it hasn't failed, else the processor one.
     fn start(&self) -> Result<Running, EngineError> {
         let cfg = lock(&self.config).clone();
+        let mut fresh_failure = None;
         if let Some(gpu_path) = &cfg.gpu_helper
             && !self.gpu_disabled.load(Ordering::Relaxed)
             && !gpu_memory::failed(cfg.gpu_failures.as_deref(), &cfg.gpu_key)
@@ -502,11 +512,16 @@ impl SttClient {
                         on_gpu,
                         loaded: false,
                         processor_fallback: false,
+                        card_helper: true,
+                        fresh_failure: None,
                     });
                 }
                 // A version mismatch is the app's problem, not the card's.
                 Err(e @ EngineError::VersionMismatch { .. }) => return Err(e),
-                Err(_) => self.gpu_failed(),
+                Err(_) => {
+                    self.gpu_failed();
+                    fresh_failure = Some(Fallback::CardFailed);
+                }
             }
         }
         let (process, ready) = start_with_retries(&cfg.cpu_helper, &cfg.env, &cfg)?;
@@ -518,6 +533,47 @@ impl SttClient {
             // Without a card helper configured the one helper is the app's only choice (on the Mac it is the Metal
             // one): the app's `gpu` goes through as it is.
             processor_fallback: cfg.gpu_helper.is_some(),
+            card_helper: false,
+            fresh_failure,
+        })
+    }
+
+    /// Why `request`, which ran on `ran`, was not on the card (see [`Outcome::fallback`]). The app asked for the
+    /// card in a `load` that says `gpu: true`, and in a `transcribe` with a model loaded that way. `failed_now`: the
+    /// card failed during this call. `said`: the reason the helper gave for running on the processor, when it gave one.
+    fn fallback_reason(
+        &self,
+        request: &SttRequest,
+        ran: &Backend,
+        failed_now: Option<Fallback>,
+        said: Option<Fallback>,
+        r: &Running,
+    ) -> Option<Fallback> {
+        let asked = match request {
+            SttRequest::Load(spec) => spec.gpu,
+            SttRequest::Transcribe { .. } => lock(&self.model).as_ref().is_some_and(|m| m.gpu),
+            _ => false,
+        };
+        if !asked || ran.on_gpu() {
+            return None;
+        }
+        Some(if let Some(why) = failed_now {
+            why
+        } else if r.processor_fallback {
+            // The processor helper took over after the card failed, now or earlier: its load said `gpu: false`.
+            Fallback::RememberedFailure
+        } else if !r.card_helper && !r.ready.on_gpu() {
+            // Only the processor helper is here: it cannot tell the app that no card helper exists.
+            Fallback::NoCardHelper
+        } else if let Some(why) = said {
+            // The helper that can use the card says why the model is not on it (a v0.2.x helper only says that it is
+            // not, which reads as `CardFailed`).
+            why
+        } else if r.card_helper {
+            // The helper that can use the card ran on the processor without saying why.
+            Fallback::CardFailed
+        } else {
+            Fallback::NoCardPath
         })
     }
 

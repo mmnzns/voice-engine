@@ -28,6 +28,15 @@ Reply schemas: llama.cpp enforces structure (objects, required keys, `additional
 array sizes). It can't enforce every keyword (a `pattern` using `\d` is accepted as any string), so apps keep
 checking replies themselves.
 
+**Models without a chat template.** A GGUF file with no `tokenizer.chat_template` (an imported base model, a fine-tune
+that lost it) no longer fails with `no_chat_template`: `complete` writes a plain prompt instead (the system text, a blank
+line, the user text, a blank line; just the user text and a blank line when the system text is blank), tokenizes it as
+ordinary text with the model's start-of-text token, and the model continues from there. The reply says so with
+`plain_format: true` (`Reply::plain_format`, left out of the message when false), so an app can warn that answers may be
+worse. `inspect` tells the app before any load: `Inspection::has_chat_template` is false (and `thinks` too; a model
+with no template never thinks). `ErrorKind::NoChatTemplate` stays in the protocol for a v0.2 helper but the helper
+no longer sends it.
+
 `gpu` in `load`, `complete` and `embed` is honoured on every system: `gpu: true` (the default) uses the card (Metal on the
 Mac, the chosen Vulkan device on Windows, as many layers as fit), `gpu: false` puts nothing on any card and runs on the
 processor. The place is part of what a loaded model is kept for: a request for the other place loads the model again
@@ -41,8 +50,24 @@ helper that dies at startup.
 
 `voice-engine-client` is what an app uses to talk to its AI helper: build an `LlmClient` with the helper paths and
 call `load`, `complete`, `embed`, `inspect`, `devices`, `unload`, `set_idle` and `cancel` from any thread. Match failures on
-`EngineError`, never on text. Each result says which backend ran it and whether the graphics card failed during the
-call (`fell_back`): show "Graphics card failed, used processor" once, then keep passing the same config.
+`EngineError`, never on text. Each result (`Outcome`) says which backend ran it and, when the app asked for the card
+and the processor did the work, why (`fallback`, below): show "Graphics card failed, used processor" once, when it is
+`CardFailed` or `CardOutOfMemory`, then keep passing the same config.
+
+`Outcome::fallback` is `Option<Fallback>`. It is `None` when the request ran on the card, and when it did not ask for the
+card (`gpu: false`). When the app asked for the card (`gpu: true`) and the processor ran, it is one of:
+
+| `Fallback` | Why | What the app does |
+| --- | --- | --- |
+| `CardFailed` | the card helper could not start, died, or said the card failed, during this call (or the card helper that started ran on the processor) | say so once |
+| `CardOutOfMemory` | the card helper died of lack of memory during this call | say so once (the model may not fit the card) |
+| `RememberedFailure` | the card was not tried: it failed earlier (this run, or the `gpu_failures` file) and `retry_gpu` has not cleared it | nothing; the person was told |
+| `NoCardHelper` | `gpu_helper` is not set and the one helper is a processor build | nothing; this build has no card helper |
+| `NoCardPath` | the one helper is a card helper (the Mac's Metal helper) and still answered with the processor | nothing; the model has no card runtime |
+
+`Outcome::fell_back()` is `fallback.is_some()`. The client works the reason out; a speech helper also says its own
+(`SpeechBackend::fallback`, below), which the client uses when the card helper ran the model, and a helper from v0.2.x
+(it sends the bool `fell_back` only, read as `CardFailed`) works as before.
 
 When `gpu_helper` is set and the card helper fails (it dies, says the card failed, or failed in an earlier run), the
 processor helper gets the same request with `gpu: false` (`load`, `complete`, `embed` in `LlmClient`; the `load` in
@@ -58,6 +83,54 @@ client's memory, and stops the processor helper if that is the one running, so t
 `clear_gpu_failure(path)` only removes the file, which is enough for a client built afterwards but not for one already
 running. The engine compares `gpu_key` only, so an app should fold the graphics driver version into it: a driver update
 then tries the card again.
+
+**Which model is loaded.** `ready`, the answer to `ping`, carries `loaded_model`: the `model_path` of the model the helper
+holds, left out when none is loaded (nothing yet, `unload`, or a helper started again). `LlmClient::loaded_model()` gives
+`Result<Option<String>, EngineError>`: with no helper running it is `Ok(None)` and starts none, which is what a cancel that
+killed the helper, a crash, a stall, `shutdown` and an idle exit all leave; otherwise it pings the running helper, with
+the same 10 s limit as `devices()` (`TimedOut`, and the helper is stopped). It waits for a request in progress to end.
+An app asks before a request, to show "loading" only when the model really has to load: compare the answer with the
+path it is about to use. A helper from before v0.3.0 sends no `loaded_model`, which reads as `None`.
+
+**A limit on one reply.** `Limits` are set once and cover every call, the model load included. For a reply that must
+be quick (a cleanup of dictated text) while the model may take a minute to load, call
+`complete_within(limit: Duration, completion, progress)` instead of `complete`. `limit` runs from the moment the model is
+loaded, or from the send when it already is (the helper says it is loading with a `loading` progress, and sends a
+`reading` progress with `done: 0` as soon as the model and the prompt are ready). The load keeps the config's `start`,
+`stall` and `total` limits. When the reply is not done in time the call ends with `EngineError::TimedOut` and the helper is
+stopped, as for a stall: the model is gone, and the next call loads it again. `cancel` still works.
+
+**Crashes and memory.** A helper that dies while working on a request ends it with `EngineError::OutOfMemory` when it
+ran out of memory, and with `EngineError::Crashed { exit_code, signal, detail }` otherwise. It counts as out of memory
+when its stderr says so (`out of memory`, `failed to allocate`, `memory allocation of`, `std::bad_alloc`,
+`cannot allocate`, `unable to allocate`, `insufficient memory`, `ErrorOutOfDeviceMemory`, in any case), when it exits
+with Windows' `STATUS_NO_MEMORY` (0xC0000017), or when a Unix signal 9 (SIGKILL, the system's out-of-memory killer)
+ends it. `exit_code` is what it exited with (none after a signal), `signal` is the Unix signal, `detail` is the last 5
+lines of its stderr, each cut to 200 characters, with control characters turned into spaces. `detail` holds no user
+text: neither helper writes a prompt, a reply or a transcript to stderr (llama.cpp's and whisper.cpp's logs are
+switched off; what is left is the helper's own `GPU=fail` note and the abort and assert lines of ggml, which name a file,
+a line and a check). It is meant for the app's log and bug report; `Display` prints it on one line. A helper that did
+not exit within a second of closing its output is stopped by the client and reports no code and no signal.
+
+### Moving from v0.2.x to v0.3.0
+
+Nothing to change for the additions: `complete_within`, `loaded_model()` and `Reply::plain_format` (a new field on a
+struct an app only reads; an app that builds a `Reply` itself, in a test, adds `plain_format: false`; one that matches
+`Event::Ready { backend, protocol }` adds `..`).
+
+- `EngineError::Crashed` is a struct variant now: match `EngineError::Crashed { .. }`, or read `exit_code`, `signal` and
+  `detail` for the log.
+- `Outcome::fell_back` (a field) is `Outcome::fallback: Option<Fallback>` now, with `fell_back()` as a method. It is `Some`
+  whenever the app asked for the card and the processor ran, not only on the call where the card failed: to say "graphics
+  card failed" once, match `Some(Fallback::CardFailed | Fallback::CardOutOfMemory)`; `RememberedFailure`, `NoCardHelper`
+  and `NoCardPath` need no message. `Fallback` is exported from `voice_engine_client` and `voice_engine_protocol`.
+- The same for speech: `SpeechBackend::fell_back` (a field, what `Transcriber::backend()` returns in process and what the
+  speech helper's `loaded` and `transcribed` carry) is `SpeechBackend::fallback: Option<Fallback>`, with `fell_back()` as a
+  method. In process it is `NoCardPath` (the model has no card runtime here: the ONNX models on the Mac, a build without
+  `directml`, Parakeet Unified and Nemotron, or no usable card), `CardFailed` (the card did not start or load the model)
+  or `CardOutOfMemory`, and only when `gpu: true` was asked. On the wire a v0.3.0 helper writes both `fallback` and
+  `fell_back` (the derived bool), so a v0.2.x client still reads it; a v0.2.x helper's `fell_back: true` reads as
+  `CardFailed`. `Fallback` is exported from `voice_engine_stt` too.
 
 ## Local AI servers
 
@@ -90,7 +163,7 @@ for segment in &transcript.segments {
     for word in &segment.words { /* word.text, word.start_ms, word.end_ms */ }
 }
 let ran = engine.backend();                             // ran.backend: "metal", "vulkan", "directml" or "cpu"
-if ran.fell_back { /* show "Graphics card failed, used processor" once, then pass gpu: false */ }
+if let Some(Fallback::CardFailed | Fallback::CardOutOfMemory) = ran.fallback { /* show "Graphics card failed, used processor" once, then pass gpu: false */ }
 ```
 
 `load` takes the catalog entry and the model's folder in the shared store. A `Box<dyn Transcriber>` is `Send`: keep it
@@ -106,6 +179,12 @@ words, so an app that needs sentences and an app that needs word times make the 
 - `Timing::Words` is Ensayo's (the default): token timestamps with one word per segment, run through `words::clean`
   (noise dropped, punctuation glued to the word before, times kept in order).
 
+`Segment::text` is trimmed. `Segment::starts_word` says whether a space goes before it when segments are joined. Whisper:
+the raw segment text began with whitespace (it does not in Chinese, Japanese or Korean, where words are not spaced).
+Parakeet, Parakeet Unified and Nemotron: always `true`. The first segment's value does not matter. A helper from before
+the field reads as `true`. `join_segments(&segments)` joins by it: a single space before each segment that starts a
+word, none before one that does not.
+
 Clips under 1 s are padded with silence and times are clamped to the real audio. When a decode stops with 2 s or more of
 audio after its last word, the engine decodes the rest again from there (up to 8 passes) and
 `Transcript::stopped_early_at_ms` says where the first stop was, so an app can see how often a model gives up early.
@@ -115,8 +194,10 @@ used by the helper) for Whisper, DirectML on Windows (the `directml` feature) fo
 card only, the one with the most memory, never the integrated graphics (DirectML is given that card's adapter number, not
 Windows' adapter 0, and `backend().device` names it). With only integrated graphics DirectML is not tried and the model
 runs on the processor. When the card cannot be used, or this build has no way to use it for this model, the model loads on the processor, nothing fails, and
-`backend()` says `cpu` with `fell_back: true`. That is also what an ONNX model on the Mac reports for `gpu: true`: there
-is no card path to fall back from, but the app asked for one, so it is told once and can pass `gpu: false` from then on.
+`backend()` says `cpu` with `fallback` set (`CardFailed`, `CardOutOfMemory` when the card ran out of memory, or
+`NoCardPath` when there is no card path for this model). `NoCardPath` is also what an ONNX model on the Mac reports for
+`gpu: true`: there is no card path to fall back from, but the app asked for one, so it is told and can pass `gpu: false`
+from then on.
 Nothing uses CoreML (parakeet-rs measures it slower than the processor for these graphs).
 
 **Threads.** The engine's rule, on every system: on the processor three quarters of the logical cores, at least 2 and at
@@ -145,7 +226,11 @@ file name they chose.
 **Voice detection.** `vad::detect(model_dir, &audio)` returns the speech spans `(start_ms, end_ms)` of a track, in order,
 on the audio's clock (whisper.cpp's Silero detector with Talaan's settings, from the catalog's `vad` model, under 1 MB).
 Only speech needs to go to a speech model: silence costs time and makes models invent text. No speech is an empty list,
-not an error. It always runs on the processor.
+not an error. It always runs on the processor. `vad::detect_with(model_dir, &audio, &VadSettings { .. })` takes the app's
+own settings: `threshold` (0.5), `min_speech_ms` (250), `min_silence_ms` (300) and `padding_ms` (0). `VadSettings::default()`
+is those numbers, which is what `detect` uses. Padding is added after detection: each span grows on both sides, stops at
+the ends of the audio, and spans that overlap or touch after growing are merged. A dictation app can use a smaller
+minimum silence with a little padding (Parlato used 100 ms and 30 ms) to get more, tighter spans.
 
 **Speaker separation.** `diarize::load(model_dir, threads)` returns a `Diarizer`; `run(&track)` gives one `SpeakerFrame`
 per 10 ms, with a probability from 0 to 1 for each of up to 8 speakers (NVIDIA's Nemotron 3 Diarization through
@@ -164,7 +249,8 @@ protocol 2 in `voice_engine_protocol::stt`; the Vulkan build is never linked int
 a `SttClient` with the paths of its helpers (a Vulkan one and a processor one) and calls `load`, `transcribe`, `devices`,
 `unload`, `cancel` and `shutdown` from any thread; failures are `EngineError` (`BadModel`, `TooLong`, `Unsupported`, `Crashed`,
 `OutOfMemory`, `Cancelled`, and the others). It works like `LlmClient`: it starts the helper, restarts it when it dies,
-tries the Vulkan helper first and falls back to the processor helper with the failure remembered (`fell_back`). The client
+tries the Vulkan helper first and falls back to the processor helper with the failure remembered (`Outcome::fallback`, as
+for `LlmClient`; a `Transcribe` says why the model runs on the processor when the loaded model asked for the card). The client
 remembers the model the app loaded and loads it into every helper it has to start again, so a crash costs the app one
 `Crashed` and nothing else. The helper serves Whisper only; the ONNX models run in the app's own process through `load`.
 `cancel` ends the call with `Cancelled`, but a Whisper decode cannot be interrupted, so unless the helper answers sooner,
@@ -217,7 +303,7 @@ is no fall back to the processor. Check what a built file imports with `dumpbin 
 | Speaker separation (`diarize`) | the processor | the processor |
 | Voice detection (`vad::detect`) | the processor | the processor |
 
-Nothing uses CoreML. On the Mac, `gpu: true` for an ONNX model runs on the processor and reports `fell_back: true`.
+Nothing uses CoreML. On the Mac, `gpu: true` for an ONNX model runs on the processor and reports `fallback: Some(NoCardPath)`.
 
 ### What was verified, and where
 
@@ -301,7 +387,9 @@ let everything = store.list();                    // every catalog model with it
 - Delete in an app's settings is `release(id)`: it removes this app's marker, and only the last user to let go
   erases the files (`Released::Erased`; `Kept { users }` when other apps still use it, with an empty list when
   another app has it loaded right now and `collect` will erase it later; `NotUsing`). Delete all data is
-  `release_all()`. Never remove a model folder yourself.
+  `release_all()`. Never remove a model folder yourself, with one exception: the old copy `move_in` left (see "The
+  one-time move"). `release` does not touch it, and its bytes stay on disk, so an app removes its own old file when the
+  person deletes a model.
 - Test and dev builds use `SharedStore::open_at(app, dir)` with a folder of their own. It never moves anything in
   and never looks at another app's folders (`move_in` returns `already_done`). Tests must never use the real folder.
 - `SharedStore::read_only(app, dir)` looks without creating anything (not even the folder): for "what is on this
@@ -320,6 +408,8 @@ is false for `Cancelled` and `Stalled`: nothing went wrong, the partial file is 
 - Your own old models are moved (renamed, so no copy and no extra disk space) into `<model id>/`, and a hard link is
   left at the old path, so an older version of the app still finds them. If the model is already in the shared folder
   the old copy is deleted and replaced by a link.
+  That link is a second name for the same bytes, not a copy. After `release` erases the shared folder, the bytes stay
+  on disk as long as the link exists, so the app deletes its own old path when the person deletes the model.
 - Models that another app has in its old folder and the shared folder does not are hard-linked in, never moved or
   changed, and that app is recorded as a user. A link that cannot be made (a different disk) is skipped.
 - A model counts only when every file is there with the catalog's exact size. Parlato's Parakeet-family files were
@@ -387,6 +477,10 @@ silently does not apply. Commit the file; the local patch in the next section go
 variables in its release workflow, or builds the helpers with the reusable workflow described in
 `docs/building-helpers.md`, which builds in the engine's own checkout and so carries them. The rustflags line is for
 Windows x64 only.
+
+**Windows ARM64 needs a toolchain for an in-process build.** An app that links `voice-engine-stt` in its own process
+also needs clang-cl and Ninja for its own build, as the helpers do (MSVC's `cl` stops ggml at configure time). See
+`.github/actions/windows-arm64-toolchain` and `docs/building-helpers.md`.
 
 **Keep `lto = false` (the default) in the app's release profile.** With `lto = true` or `"thin"`, linking on macOS fails
 with `Undefined symbols: ___isPlatformVersionAtLeast`, referenced from ggml's Metal objects. We reproduced it at v0.2.2
@@ -480,7 +574,7 @@ $env:VOICE_ENGINE_TEST_CLIP = "$PWD\docs\data\clip-bench.wav"           # or any
 cargo run --release -p voice-engine-stt --example bench                    # Whisper Turbo and Parakeet Ultra on the processor
 $env:VOICE_ENGINE_TEST_CLIP = "$PWD\docs\data\clip-sentence.wav"
 cargo test --release -p voice-engine-stt -- --ignored --test-threads=1     # the real-model tests (Whisper, Parakeet, voice detection)
-cargo test --release -p voice-engine-stt --features directml -- --ignored --test-threads=1   # also: gpu: true gives directml, or cpu with fell_back
+cargo test --release -p voice-engine-stt --features directml -- --ignored --test-threads=1   # also: gpu: true gives directml, or cpu with a fallback
 ```
 
 The real tests expect the clip to say that sentence. A test that needs the `say` command's own wording or several
@@ -494,13 +588,13 @@ vulkan` (Whisper) or `--features directml` (Parakeet), see "Check the graphics c
 
 For a PC with a discrete card (the Vulkan SDK installed and `VULKAN_SDK` set to build `vulkan`; DirectML needs nothing, Windows
 brings `DirectML.dll`). Every line a bench prints has `backend`, `device` (the adapter's name, `-` on the processor) and
-`fell_back` (the card was asked for and the processor ran): on a PC with two adapters (an RTX card and the Ryzen's Radeon)
+`fallback` (why the card was not used when it was asked for): on a PC with two adapters (an RTX card and the Ryzen's Radeon)
 `device` must be the discrete card. Each step is one block, run from a clone of the engine, with the clip and the models set
 as above (`$env:VOICE_ENGINE_TEST_CLIP = "$PWD\docs\data\clip-bench.wav"`).
 
 Set `VOICE_ENGINE_TEST_EXPECT_CARD=1` for the test steps (4 and 5). A card test whose model or helper variables are not
 set still skips. With the variable set, a test that finds the card did not run (the work ran on the processor, with
-`fell_back`, or the helper found no card) fails instead of printing SKIPPED and passing.
+a `fallback`, or the helper found no card) fails instead of printing SKIPPED and passing.
 
 1. Parakeet on DirectML and Whisper on Vulkan in this process (the `vulkan` feature builds the Vulkan backend into the
    example), next to the processor rows:
@@ -533,7 +627,7 @@ cargo test --release -p voice-engine-stt --features vulkan,directml -- --ignored
 ```
 
 5. The forced fallback against the real helpers: `VOICE_ENGINE_GPU=fail` makes the Vulkan helper abort on its first real request,
-   and the client must answer the same call from the processor helper with `fell_back` true (a test whose variables are not set
+   and the client must answer the same call from the processor helper with `fallback` set (`CardFailed`) (a test whose variables are not set
    says which and passes). The Vulkan build is copied aside because the processor build overwrites it:
 
 ```powershell

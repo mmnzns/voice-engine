@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use voice_engine_client::{EngineError, Limits, LlmClient, LlmConfig};
+use voice_engine_client::{EngineError, Fallback, Limits, LlmClient, LlmConfig};
 use voice_engine_protocol::Completion;
 
 /// Helpers that start at the same moment can crash on a Mac (see CHANGELOG), so the tests take turns.
@@ -71,7 +71,21 @@ fn a_reply_comes_back_with_progress_and_the_backend() {
     assert_eq!(out.value.text, "hi");
     assert!(progress >= 1);
     assert_eq!(out.backend.backend, "cpu");
-    assert!(!out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::NoCardHelper));
+}
+
+#[test]
+fn a_reply_says_when_the_helper_used_the_plain_format() {
+    let _t = turn();
+    let (_d, st) = state();
+    let out = LlmClient::new(config("plain", &st))
+        .complete(completion(), &mut |_| {})
+        .unwrap();
+    assert!(out.value.plain_format);
+    let out = LlmClient::new(config("", &st))
+        .complete(completion(), &mut |_| {})
+        .unwrap();
+    assert!(!out.value.plain_format);
 }
 
 #[test]
@@ -114,7 +128,14 @@ fn a_helper_that_dies_mid_request_is_a_crash_and_the_next_call_starts_a_new_one(
     let (_d, st) = state();
     let client = LlmClient::new(config("die_on_complete", &st));
     let e = client.complete(completion(), &mut |_| {}).unwrap_err();
-    assert_eq!(e, EngineError::Crashed);
+    assert_eq!(
+        e,
+        EngineError::Crashed {
+            exit_code: Some(139),
+            signal: None,
+            detail: String::new()
+        }
+    );
     // load isn't scripted to die, so this proves a fresh helper was started.
     assert!(client.load("/m.gguf", 512, true, &mut |_| {}).is_ok());
 }
@@ -142,6 +163,181 @@ fn an_out_of_memory_death_is_reported_as_out_of_memory() {
     let client = LlmClient::new(config("oom", &st));
     let e = client.complete(completion(), &mut |_| {}).unwrap_err();
     assert_eq!(e, EngineError::OutOfMemory);
+}
+
+/// A client whose helper dies on `complete` the `die_noisy` way: `stderr` (lines separated by `~`) written, then exit.
+fn noisy(stderr: &str, exit: &str, long: Option<usize>, state: &std::path::Path) -> LlmClient {
+    let mut cfg = config("die_noisy", state);
+    cfg.env.push(("FAKE_STDERR".into(), stderr.into()));
+    cfg.env.push(("FAKE_EXIT".into(), exit.into()));
+    if let Some(n) = long {
+        cfg.env.push(("FAKE_STDERR_LONG".into(), n.to_string()));
+    }
+    LlmClient::new(cfg)
+}
+
+#[test]
+fn a_crash_carries_the_exit_code_and_a_short_stderr_tail() {
+    let _t = turn();
+    let (_d, st) = state();
+    // Seven lines, the last one 300 characters long, and an escape code in the second.
+    let lines: Vec<String> = (1..=7).map(|n| format!("line {n}")).collect();
+    let mut text = lines.join("~");
+    text.push_str("~\u{1b}[31mred\u{1b}[0m");
+    let client = noisy(&text, "3", Some(300), &st);
+    let e = client.complete(completion(), &mut |_| {}).unwrap_err();
+    let EngineError::Crashed {
+        exit_code,
+        signal,
+        detail,
+    } = e
+    else {
+        panic!("{e:?}")
+    };
+    assert_eq!((exit_code, signal), (Some(3), None));
+    let lines: Vec<&str> = detail.lines().collect();
+    assert_eq!(lines.len(), 5, "{detail}");
+    // The last five lines: line 5, 6, 7, the colored one (control characters turned into spaces), the long one.
+    assert_eq!(&lines[..3], ["line 5", "line 6", "line 7"]);
+    assert_eq!(lines[3], "[31mred [0m");
+    assert_eq!(lines[4].chars().count(), 200);
+}
+
+#[test]
+fn a_crash_that_wrote_nothing_has_an_empty_detail_and_shows_its_code_in_the_log_line() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = noisy("", "42", None, &st);
+    let e = client.complete(completion(), &mut |_| {}).unwrap_err();
+    assert_eq!(
+        e,
+        EngineError::Crashed {
+            exit_code: Some(42),
+            signal: None,
+            detail: String::new()
+        }
+    );
+    assert_eq!(e.to_string(), "the helper crashed (exit code 42)");
+}
+
+#[test]
+fn every_out_of_memory_message_is_reported_as_out_of_memory() {
+    let _t = turn();
+    let (_d, st) = state();
+    for message in [
+        "terminate called after throwing an instance of 'std::bad_alloc'",
+        "memory allocation of 8589934592 bytes failed",
+        "Cannot allocate memory",
+        "unable to allocate CUDA0 buffer",
+        "ggml: insufficient memory",
+        "vk::Device::allocateMemory: ErrorOutOfDeviceMemory",
+        "ggml_backend_cpu_buffer_type_alloc_buffer: failed to allocate buffer",
+        "GGML_ASSERT: Out Of Memory",
+    ] {
+        let client = noisy(message, "1", None, &st);
+        let e = client.complete(completion(), &mut |_| {}).unwrap_err();
+        assert_eq!(e, EngineError::OutOfMemory, "{message}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_helper_ended_by_sigkill_is_reported_as_out_of_memory() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = LlmClient::new(config("sigkill", &st));
+    let e = client.complete(completion(), &mut |_| {}).unwrap_err();
+    assert_eq!(e, EngineError::OutOfMemory);
+}
+
+/// A client for the `slow_reply` fake: a load of `load_ms` and a reply of `reply_ms`, with limits far above both.
+fn slow(load_ms: u64, reply_ms: u64, state: &std::path::Path) -> LlmClient {
+    let mut cfg = config("slow_reply", state);
+    cfg.env.push(("FAKE_LOAD_MS".into(), load_ms.to_string()));
+    cfg.env.push(("FAKE_REPLY_MS".into(), reply_ms.to_string()));
+    // The load is silent for `load_ms`, so the stall limit must be above it.
+    cfg.limits.stall = Duration::from_secs(20);
+    LlmClient::new(cfg)
+}
+
+#[test]
+fn the_reply_limit_does_not_count_the_load() {
+    let _t = turn();
+    let (_d, st) = state();
+    // A load of 1.5 s and a reply of 0.4 s: 1.9 s in all, against a limit of 1 s for the reply.
+    let client = slow(1500, 400, &st);
+    let began = Instant::now();
+    let out = client
+        .complete_within(Duration::from_secs(1), completion(), &mut |_| {})
+        .unwrap();
+    assert_eq!(out.value.text, "hi");
+    assert!(began.elapsed() > Duration::from_millis(1800));
+}
+
+#[test]
+fn a_reply_that_runs_past_its_limit_after_the_load_is_a_timeout_and_the_helper_is_stopped() {
+    let _t = turn();
+    let (_d, st) = state();
+    // Loads for 1.5 s, then would reply for 6 s; the limit is 1 s from the end of the load.
+    let client = slow(1500, 6000, &st);
+    let began = Instant::now();
+    let e = client
+        .complete_within(Duration::from_secs(1), completion(), &mut |_| {})
+        .unwrap_err();
+    assert_eq!(e, EngineError::TimedOut);
+    let took = began.elapsed();
+    assert!(took > Duration::from_millis(2300), "{took:?}");
+    assert!(took < Duration::from_millis(5000), "{took:?}");
+    // The helper was stopped like for a stall: the next call starts a new one, which loads again (1.5 s).
+    let began = Instant::now();
+    let out = client
+        .complete_within(Duration::from_secs(1), completion(), &mut |_| {})
+        .unwrap_err();
+    assert_eq!(out, EngineError::TimedOut);
+    assert!(began.elapsed() > Duration::from_millis(2300));
+}
+
+#[test]
+fn with_the_model_already_loaded_the_reply_limit_runs_from_the_send() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = slow(1500, 6000, &st);
+    client.load("/m.gguf", 512, true, &mut |_| {}).unwrap();
+    let began = Instant::now();
+    let e = client
+        .complete_within(Duration::from_millis(700), completion(), &mut |_| {})
+        .unwrap_err();
+    assert_eq!(e, EngineError::TimedOut);
+    let took = began.elapsed();
+    assert!(took > Duration::from_millis(600), "{took:?}");
+    assert!(took < Duration::from_millis(3000), "{took:?}");
+}
+
+#[test]
+fn the_config_limits_still_hold_a_load_the_reply_limit_does_not_cover() {
+    let _t = turn();
+    let (_d, st) = state();
+    let mut cfg = config("slow_reply", &st);
+    cfg.env.push(("FAKE_LOAD_MS".into(), "5000".into()));
+    // The config's stall limit (600 ms) is for the load, and it still applies.
+    let client = LlmClient::new(cfg);
+    let e = client
+        .complete_within(Duration::from_secs(30), completion(), &mut |_| {})
+        .unwrap_err();
+    assert_eq!(e, EngineError::TimedOut);
+}
+
+#[test]
+fn a_reply_limit_that_is_not_reached_leaves_the_reply_as_it_is() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = LlmClient::new(config("", &st));
+    let mut progress = 0;
+    let out = client
+        .complete_within(Duration::from_secs(5), completion(), &mut |_| progress += 1)
+        .unwrap();
+    assert_eq!(out.value.text, "hi");
+    assert!(progress >= 1);
 }
 
 #[test]
@@ -207,7 +403,7 @@ fn the_graphics_card_helper_is_used_when_it_works() {
     ));
     let out = client.complete(completion(), &mut |_| {}).unwrap();
     assert_eq!(out.backend.backend, "vulkan");
-    assert!(!out.fell_back);
+    assert_eq!(out.fallback, None);
 }
 
 #[test]
@@ -219,7 +415,7 @@ fn a_graphics_card_helper_that_dies_hands_the_request_to_the_processor_and_is_re
     let out = client.complete(completion(), &mut |_| {}).unwrap();
     assert_eq!(out.value.text, "hi");
     assert_eq!(out.backend.backend, "cpu");
-    assert!(out.fell_back, "the app is told the card failed, once");
+    assert_eq!(out.fallback, Some(Fallback::CardFailed));
     assert_eq!(
         std::fs::read_to_string(&failures).unwrap().trim(),
         "test-build"
@@ -229,7 +425,7 @@ fn a_graphics_card_helper_that_dies_hands_the_request_to_the_processor_and_is_re
     let again = LlmClient::new(with_gpu(config("", &st), "gpu_die", &failures));
     let out = again.complete(completion(), &mut |_| {}).unwrap();
     assert_eq!(out.backend.backend, "cpu");
-    assert!(!out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::RememberedFailure));
 
     // A new build (or driver) gets a fresh try.
     let mut newer = with_gpu(config("", &st), "gpu_die", &failures);
@@ -237,8 +433,9 @@ fn a_graphics_card_helper_that_dies_hands_the_request_to_the_processor_and_is_re
     let out = LlmClient::new(newer)
         .complete(completion(), &mut |_| {})
         .unwrap();
-    assert!(
-        out.fell_back,
+    assert_eq!(
+        out.fallback,
+        Some(Fallback::CardFailed),
         "the new key tried the card again and it failed again"
     );
 
@@ -257,7 +454,7 @@ fn a_graphics_card_error_from_the_helper_also_falls_back() {
         &d.path().join("gpu.txt"),
     ));
     let out = client.complete(completion(), &mut |_| {}).unwrap();
-    assert!(out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::CardFailed));
     assert_eq!(out.backend.backend, "cpu");
 }
 
@@ -295,7 +492,7 @@ fn the_fallback_to_the_processor_helper_says_gpu_false_and_the_next_calls_go_str
     // The app asks for the card (gpu: true); the card helper dies on it; the processor helper gets the same request
     // but with gpu: false, so a helper that is also the Mac's Metal helper really runs on the processor.
     let out = client.complete(completion(), &mut |_| {}).unwrap();
-    assert!(out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::CardFailed));
     assert_eq!(
         asked(&log),
         ["[gpu_die] complete gpu=true", "[] complete gpu=false"]
@@ -303,7 +500,7 @@ fn the_fallback_to_the_processor_helper_says_gpu_false_and_the_next_calls_go_str
     // The next calls go straight to the processor helper (no more lines from the card helper), say nothing about a
     // fallback, and every kind of request carries gpu: false although the app still says true.
     let next = client.complete(completion(), &mut |_| {}).unwrap();
-    assert!(!next.fell_back);
+    assert_eq!(next.fallback, Some(Fallback::RememberedFailure));
     client.load("/m.gguf", 512, true, &mut |_| {}).unwrap();
     client.embed(embedding(true)).unwrap();
     assert_eq!(
@@ -327,7 +524,7 @@ fn an_error_from_the_card_helper_also_resends_with_gpu_false() {
         &d.path().join("gpu.txt"),
     ));
     let out = client.complete(completion(), &mut |_| {}).unwrap();
-    assert!(out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::CardFailed));
     assert_eq!(
         asked(&log),
         ["[gpu_error] complete gpu=true", "[] complete gpu=false"]
@@ -343,7 +540,7 @@ fn a_remembered_failure_sends_gpu_false_to_the_processor_helper_from_the_first_r
     std::fs::write(&failures, "test-build").unwrap();
     let client = LlmClient::new(with_gpu(logged("", &st, &log), "gpu_die", &failures));
     let out = client.complete(completion(), &mut |_| {}).unwrap();
-    assert!(!out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::RememberedFailure));
     assert_eq!(asked(&log), ["[] complete gpu=false"]);
 }
 
@@ -379,7 +576,7 @@ fn a_metal_helper_that_dies_is_a_card_failure_too() {
     let out = client.complete(completion(), &mut |_| {}).unwrap();
     assert_eq!(out.value.text, "hi");
     assert_eq!(out.backend.backend, "cpu");
-    assert!(out.fell_back, "not a plain crash");
+    assert_eq!(out.fallback, Some(Fallback::CardFailed));
     assert_eq!(
         std::fs::read_to_string(&failures).unwrap().trim(),
         "test-build"
@@ -389,18 +586,225 @@ fn a_metal_helper_that_dies_is_a_card_failure_too() {
         ["[metal_die] complete gpu=true", "[] complete gpu=false"]
     );
     // Remembered: the next call, and a new client, go straight to the processor helper.
-    assert!(
-        !client
-            .complete(completion(), &mut |_| {})
-            .unwrap()
-            .fell_back
+    assert_eq!(
+        client.complete(completion(), &mut |_| {}).unwrap().fallback,
+        Some(Fallback::RememberedFailure)
     );
     let again = LlmClient::new(with_gpu(logged("", &st, &log), "metal_die", &failures));
-    assert!(!again.complete(completion(), &mut |_| {}).unwrap().fell_back);
+    assert_eq!(
+        again.complete(completion(), &mut |_| {}).unwrap().fallback,
+        Some(Fallback::RememberedFailure)
+    );
     assert_eq!(
         asked(&log)[2..],
         ["[] complete gpu=false", "[] complete gpu=false"]
     );
+}
+
+/// What `complete` with `gpu: true` and `gpu: false` say about the card, one client each time.
+fn reasons(cfg: LlmConfig) -> (Option<Fallback>, Option<Fallback>) {
+    let client = LlmClient::new(cfg);
+    let wanted = client.complete(completion(), &mut |_| {}).unwrap();
+    let mut off = completion();
+    off.gpu = false;
+    let refused = client.complete(off, &mut |_| {}).unwrap();
+    (wanted.fallback, refused.fallback)
+}
+
+#[test]
+fn without_a_card_helper_a_processor_answer_to_a_card_request_says_there_is_no_card_helper() {
+    let _t = turn();
+    let (_d, st) = state();
+    // The processor helper alone: "never tried" is told apart from "worked", and a request that did not ask for the
+    // card has no reason.
+    let (wanted, off) = reasons(config("", &st));
+    assert_eq!(wanted, Some(Fallback::NoCardHelper));
+    assert_eq!(off, None);
+    let out = LlmClient::new(config("", &st))
+        .complete(completion(), &mut |_| {})
+        .unwrap();
+    assert!(out.fell_back());
+}
+
+#[test]
+fn the_mac_helper_answers_per_request_and_a_cpu_answer_to_a_card_request_there_is_no_card_path() {
+    let _t = turn();
+    let (_d, st) = state();
+    // The Mac with no gpu_helper: `metal` for gpu: true, `cpu` for gpu: false; neither needs a reason.
+    assert_eq!(reasons(config("per_request", &st)), (None, None));
+    // The Mac helper that has no card runtime for the model: it started on `metal` and still answers `cpu`.
+    let (wanted, off) = reasons(config("no_card_path", &st));
+    assert_eq!(wanted, Some(Fallback::NoCardPath));
+    assert_eq!(off, None);
+    // Load and embed say it too.
+    let client = LlmClient::new(config("no_card_path", &st));
+    let loaded = client.load("/m.gguf", 512, true, &mut |_| {}).unwrap();
+    assert_eq!(loaded.fallback, Some(Fallback::NoCardPath));
+    assert_eq!(
+        client.embed(embedding(true)).unwrap().fallback,
+        Some(Fallback::NoCardPath)
+    );
+    assert_eq!(client.embed(embedding(false)).unwrap().fallback, None);
+}
+
+#[test]
+fn a_card_helper_that_works_has_no_reason_and_one_that_runs_on_the_processor_says_the_card_failed()
+{
+    let _t = turn();
+    let (d, st) = state();
+    let failures = d.path().join("gpu.txt");
+    assert_eq!(
+        reasons(with_gpu(config("", &st), "gpu_ok", &failures)),
+        (None, None)
+    );
+    // The card helper started but answers with the processor (a Vulkan build on a PC with no usable card).
+    let (wanted, off) = reasons(with_gpu(config("", &st), "", &failures));
+    assert_eq!(wanted, Some(Fallback::CardFailed));
+    assert_eq!(off, None);
+}
+
+#[test]
+fn a_card_helper_that_cannot_start_is_a_card_failure_this_time_and_remembered_after() {
+    let _t = turn();
+    let (d, st) = state();
+    let failures = d.path().join("gpu.txt");
+    let client = LlmClient::new(with_gpu(config("", &st), "die_at_start", &failures));
+    let first = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(first.fallback, Some(Fallback::CardFailed));
+    let next = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(next.fallback, Some(Fallback::RememberedFailure));
+    // A request that did not ask for the card is not about the card.
+    let mut off = completion();
+    off.gpu = false;
+    assert_eq!(client.complete(off, &mut |_| {}).unwrap().fallback, None);
+}
+
+#[test]
+fn a_card_helper_that_dies_of_memory_says_out_of_memory_and_the_next_call_says_remembered() {
+    let _t = turn();
+    let (d, st) = state();
+    let failures = d.path().join("gpu.txt");
+    let client = LlmClient::new(with_gpu(config("", &st), "gpu_oom", &failures));
+    let out = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(out.backend.backend, "cpu");
+    assert_eq!(out.fallback, Some(Fallback::CardOutOfMemory));
+    assert!(out.fell_back());
+    let next = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(next.fallback, Some(Fallback::RememberedFailure));
+}
+
+#[test]
+fn load_and_embed_report_the_reason_too_and_a_retry_clears_it() {
+    let _t = turn();
+    let (d, st) = state();
+    let failures = d.path().join("gpu.txt");
+    std::fs::write(&failures, "test-build").unwrap();
+    let client = LlmClient::new(with_gpu(config("", &st), "gpu_ok", &failures));
+    let loaded = client.load("/m.gguf", 512, true, &mut |_| {}).unwrap();
+    assert_eq!(loaded.fallback, Some(Fallback::RememberedFailure));
+    assert_eq!(
+        client.embed(embedding(true)).unwrap().fallback,
+        Some(Fallback::RememberedFailure)
+    );
+    assert_eq!(client.embed(embedding(false)).unwrap().fallback, None);
+    client.retry_gpu();
+    let loaded = client.load("/m.gguf", 512, true, &mut |_| {}).unwrap();
+    assert_eq!(loaded.fallback, None);
+    assert_eq!(loaded.backend.backend, "vulkan");
+}
+
+#[test]
+fn loaded_model_with_no_helper_running_is_none_and_starts_nothing() {
+    let _t = turn();
+    let (_d, st) = state();
+    // A helper that cannot start would make any call that starts one an error.
+    let client = LlmClient::new(config("die_at_start", &st));
+    assert_eq!(client.loaded_model().unwrap(), None);
+}
+
+#[test]
+fn loaded_model_follows_load_complete_and_unload() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = LlmClient::new(config("", &st));
+    assert_eq!(client.loaded_model().unwrap(), None);
+    client.load("/a.gguf", 512, true, &mut |_| {}).unwrap();
+    assert_eq!(client.loaded_model().unwrap().as_deref(), Some("/a.gguf"));
+    // A request for another model replaces it.
+    let mut c = completion();
+    c.model_path = "/b.gguf".into();
+    client.complete(c, &mut |_| {}).unwrap();
+    assert_eq!(client.loaded_model().unwrap().as_deref(), Some("/b.gguf"));
+    client.unload().unwrap();
+    assert_eq!(client.loaded_model().unwrap(), None);
+    client.load("/a.gguf", 512, true, &mut |_| {}).unwrap();
+    // Stopping the helper frees the model, and asking afterwards starts no helper.
+    client.shutdown();
+    assert_eq!(client.loaded_model().unwrap(), None);
+}
+
+#[test]
+fn a_helper_stopped_by_a_cancel_or_a_crash_holds_no_model() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = LlmClient::new(config("ignore_cancel", &st));
+    client.load("/a.gguf", 512, true, &mut |_| {}).unwrap();
+    assert!(client.loaded_model().unwrap().is_some());
+    // The helper ignores the cancel and is killed after the grace period: its model is gone.
+    let result = std::thread::scope(|s| {
+        let worker = s.spawn(|| client.complete(completion(), &mut |_| {}));
+        std::thread::sleep(Duration::from_millis(300));
+        client.cancel();
+        worker.join().unwrap()
+    });
+    assert_eq!(result.unwrap_err(), EngineError::Cancelled);
+    assert_eq!(client.loaded_model().unwrap(), None);
+
+    let client = LlmClient::new(config("die_on_complete", &st));
+    client.load("/a.gguf", 512, true, &mut |_| {}).unwrap();
+    client.complete(completion(), &mut |_| {}).unwrap_err();
+    assert_eq!(client.loaded_model().unwrap(), None);
+}
+
+#[test]
+fn a_helper_that_exited_while_idle_holds_no_model_and_loaded_model_starts_no_other() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = LlmClient::new(config("exit_after_load", &st));
+    client.load("/a.gguf", 512, true, &mut |_| {}).unwrap();
+    std::thread::sleep(Duration::from_millis(700));
+    assert_eq!(client.loaded_model().unwrap(), None);
+    // One start, for the load; asking did not start another helper.
+    assert_eq!(std::fs::read_to_string(&st).unwrap().trim(), "1");
+}
+
+#[test]
+fn an_older_helper_that_does_not_say_reads_as_none() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = LlmClient::new(config("old_ready", &st));
+    client.load("/a.gguf", 512, true, &mut |_| {}).unwrap();
+    assert_eq!(client.loaded_model().unwrap(), None);
+}
+
+#[test]
+fn a_helper_that_does_not_answer_is_given_up_on_after_the_short_limit() {
+    let _t = turn();
+    let (_d, st) = state();
+    let mut cfg = config("deaf_ping", &st);
+    cfg.limits.stall = Duration::from_secs(120);
+    cfg.limits.total = Duration::from_secs(30 * 60);
+    let client = LlmClient::new(cfg);
+    client.load("/a.gguf", 512, true, &mut |_| {}).unwrap();
+    let began = Instant::now();
+    assert_eq!(client.loaded_model().unwrap_err(), EngineError::TimedOut);
+    assert!(
+        began.elapsed() < Duration::from_secs(15),
+        "{:?}",
+        began.elapsed()
+    );
+    // The helper was stopped, so nothing is loaded and nothing is started.
+    assert_eq!(client.loaded_model().unwrap(), None);
 }
 
 #[test]
@@ -589,7 +993,7 @@ fn retry_gpu_puts_a_running_client_back_on_the_card_and_forgets_the_failure() {
     let client = LlmClient::new(with_gpu(config("", &st), "gpu_die_once", &failures));
     let out = client.complete(completion(), &mut |_| {}).unwrap();
     assert_eq!(out.backend.backend, "cpu");
-    assert!(out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::CardFailed));
     assert!(failures.exists());
     // Still on the processor, whatever the app does to the file alone.
     voice_engine_client::clear_gpu_failure(&failures);
@@ -603,7 +1007,7 @@ fn retry_gpu_puts_a_running_client_back_on_the_card_and_forgets_the_failure() {
     assert!(!failures.exists());
     let out = client.complete(completion(), &mut |_| {}).unwrap();
     assert_eq!(out.backend.backend, "vulkan");
-    assert!(!out.fell_back);
+    assert_eq!(out.fallback, None);
     assert!(!failures.exists());
     // With the card helper running, retry_gpu leaves it alone.
     client.retry_gpu();
@@ -621,7 +1025,7 @@ fn retry_gpu_on_a_client_that_started_on_a_remembered_failure_tries_the_card() {
     let client = LlmClient::new(with_gpu(config("", &st), "gpu_ok", &failures));
     let out = client.complete(completion(), &mut |_| {}).unwrap();
     assert_eq!(out.backend.backend, "cpu");
-    assert!(!out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::RememberedFailure));
     client.retry_gpu();
     assert!(!failures.exists());
     let out = client.complete(completion(), &mut |_| {}).unwrap();

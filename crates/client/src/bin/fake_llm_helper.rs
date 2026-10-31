@@ -13,12 +13,29 @@
 //! before replies said where they ran (no backend), so the client uses `ready`'s. `metal_die` is the Mac helper asked
 //! for as the card helper: `ready` says `metal` with no device, and it dies on `complete` like `gpu_die`.
 //!
+//! `die_noisy` writes what `FAKE_STDERR` (lines separated by `~`) and `FAKE_STDERR_LONG` (one line of that many
+//! letters) say to stderr and exits with `FAKE_EXIT` on `complete`; `sigkill` ends itself with SIGKILL on `complete`.
+//! `no_card_path` is a Mac helper that has no card runtime for the model: `ready` says `metal`, and every reply says
+//! `cpu`. `gpu_oom` reports a Vulkan GPU and dies of memory on `complete` (an out-of-memory line on stderr).
+//!
+//! Every mode but `old_ready` says in `ready` which model it holds (the path of the last `load`, `complete` or `embed`
+//! until `unload`); `old_ready` says none, like a helper from before.
+//! `exit_after_load` exits 200 ms after answering a `load` (an idle exit) and counts its starts in `FAKE_STATE`.
+//! `deaf_ping` answers the startup ping and no other.
+//! `plain` answers `complete` like a model with no chat template: the reply says `plain_format`.
+//! `slow_reply` loads for `FAKE_LOAD_MS` and replies for `FAKE_REPLY_MS` (both default 0), like the real helper: a model
+//! it does not hold yet is announced with a `loading` progress, loaded in silence, and the prompt is ready with a
+//! `reading` progress; then it writes progress every 50 ms until the reply is done. `load` and `complete` both load, and
+//! the model stays loaded for the helper's life, so a later `complete` does not load again.
+//!
 //! `devices` answers with the list `FAKE_DEVICES` describes (fake_support/devices.rs); mode `no_devices` never answers it.
 //!
 //! When `FAKE_LOG` names a file, every `load`, `complete` and `embed` the helper receives is appended to it as one
 //! line, `[<mode>] <op> gpu=<flag>`, so a test can see what each helper (the card one and the processor one run in
 //! different modes) was asked.
 
+#[path = "fake_support/crash.rs"]
+mod fake_crash;
 #[path = "fake_support/devices.rs"]
 mod fake_devices;
 
@@ -66,6 +83,10 @@ fn main() {
     if mode == "die_at_start" || (mode == "die_at_start_twice" && bump(&state) < 2) {
         std::process::exit(138);
     }
+    if mode == "exit_after_load" {
+        // Counts the starts, so a test can tell whether a helper was started.
+        bump(&state);
+    }
     let metal = Backend {
         backend: "metal".into(),
         device: None,
@@ -74,10 +95,10 @@ fn main() {
     // What a reply says for a request: the Mac helper's answer, or nothing (an older helper).
     let says = |gpu: bool| match mode.as_str() {
         "per_request" if gpu => metal.clone(),
-        "per_request" => Backend::cpu(),
+        "per_request" | "no_card_path" => Backend::cpu(),
         _ => Backend::default(),
     };
-    let backend = if mode == "per_request" || mode == "metal_die" {
+    let backend = if matches!(mode.as_str(), "per_request" | "metal_die" | "no_card_path") {
         metal.clone()
     } else if mode.starts_with("gpu") {
         Backend {
@@ -104,31 +125,68 @@ fn main() {
         }
     });
 
+    let millis = |name: &str| {
+        Duration::from_millis(
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
+        )
+    };
+    let mut loaded = false;
+    let mut pings = 0;
+    // The model path of the last `load`, `complete` or `embed`, until `unload`: what `ping` says is loaded.
+    let mut model: Option<String> = None;
     while let Ok(line) = rx.recv() {
         let Ok(request) = decode_request(&line) else {
             continue;
         };
         match request {
-            Request::Ping => send(&Event::Ready {
-                backend: backend.clone(),
-                protocol,
-            }),
+            // `deaf_ping` answers the startup ping only.
+            Request::Ping if mode == "deaf_ping" && pings > 0 => {}
+            Request::Ping => {
+                pings += 1;
+                send(&Event::Ready {
+                    backend: backend.clone(),
+                    protocol,
+                    loaded_model: if mode == "old_ready" {
+                        None
+                    } else {
+                        model.clone()
+                    },
+                });
+            }
             Request::Configure(c) => send(&Event::Configured {
                 idle_secs: c.idle_secs,
             }),
             Request::Load(l) => {
                 log(&mode, "load", l.gpu);
+                model = Some(l.model_path.clone());
+                if mode == "slow_reply" && !loaded {
+                    slow_load(millis("FAKE_LOAD_MS"));
+                    loaded = true;
+                }
+                if mode == "exit_after_load" {
+                    // An idle exit, a moment after the model is loaded and the helper is quiet.
+                    std::thread::spawn(|| {
+                        std::thread::sleep(Duration::from_millis(200));
+                        std::process::exit(0);
+                    });
+                }
                 send(&Event::Loaded {
                     seconds: 0.5,
                     n_ctx_train: 4096,
-                    backend: if mode == "per_request" {
+                    backend: if matches!(mode.as_str(), "per_request" | "no_card_path") {
                         says(l.gpu)
                     } else {
                         backend.clone()
                     },
                 });
             }
-            Request::Unload => send(&Event::Unloaded),
+            Request::Unload => {
+                model = None;
+                send(&Event::Unloaded);
+            }
             Request::Inspect(_) => send(&Event::Inspected(Inspection {
                 has_chat_template: true,
                 thinks: false,
@@ -137,6 +195,7 @@ fn main() {
             })),
             Request::Embed(e) => {
                 log(&mode, "embed", e.gpu);
+                model = Some(e.model_path.clone());
                 send(&Event::Embedded {
                     vectors: vec![vec![1.0]],
                     backend: says(e.gpu),
@@ -153,6 +212,7 @@ fn main() {
             }
             Request::Complete(c) => {
                 log(&mode, "complete", c.gpu);
+                model = Some(c.model_path.clone());
                 match mode.as_str() {
                     "die_on_complete" | "gpu_die" | "metal_die" => {
                         send(&Event::Progress {
@@ -171,18 +231,42 @@ fn main() {
                             });
                             std::process::exit(139);
                         }
-                        answer(says(c.gpu));
+                        answer(says(c.gpu), false);
                     }
                     "die_on_first_complete" => {
                         if bump(&state) == 0 {
                             std::process::exit(139);
                         }
-                        answer(says(c.gpu));
+                        answer(says(c.gpu), false);
                     }
-                    "oom" => {
+                    "oom" | "gpu_oom" => {
                         eprintln!("GGML_ASSERT: out of memory");
                         std::process::exit(137);
                     }
+                    "slow_reply" => {
+                        if !loaded {
+                            slow_load(millis("FAKE_LOAD_MS"));
+                            loaded = true;
+                        }
+                        send(&Event::Progress {
+                            phase: Phase::Reading,
+                            done: 0,
+                            total: 3,
+                        });
+                        let until = std::time::Instant::now() + millis("FAKE_REPLY_MS");
+                        while std::time::Instant::now() < until {
+                            send(&Event::Progress {
+                                phase: Phase::Writing,
+                                done: 1,
+                                total: 0,
+                            });
+                            std::thread::sleep(Duration::from_millis(50));
+                        }
+                        answer(says(c.gpu), false);
+                    }
+                    "plain" => answer(says(c.gpu), true),
+                    "die_noisy" => fake_crash::die_noisy(),
+                    "sigkill" => fake_crash::sigkill(),
                     "stall" => loop {
                         std::thread::sleep(Duration::from_secs(60));
                     },
@@ -215,14 +299,24 @@ fn main() {
                         message: "the graphics card failed".into(),
                         error: ErrorKind::GpuFailed { fell_back: false },
                     }),
-                    _ => answer(says(c.gpu)),
+                    _ => answer(says(c.gpu), false),
                 }
             }
         }
     }
 }
 
-fn answer(backend: Backend) {
+/// What the real helper does to load a model it does not hold: say so, then say nothing until it is loaded.
+fn slow_load(took: Duration) {
+    send(&Event::Progress {
+        phase: Phase::Loading,
+        done: 0,
+        total: 0,
+    });
+    std::thread::sleep(took);
+}
+
+fn answer(backend: Backend, plain_format: bool) {
     send(&Event::Progress {
         phase: Phase::Writing,
         done: 1,
@@ -238,5 +332,6 @@ fn answer(backend: Backend) {
         load_seconds: 0.0,
         thinking_text: None,
         backend,
+        plain_format,
     }));
 }

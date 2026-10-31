@@ -15,7 +15,7 @@ use voice_engine_stt::parakeet_engine::{
 use voice_engine_stt::threads::{ThreadKind, default_threads};
 use voice_engine_stt::whisper_engine::MAX_PASSES;
 use voice_engine_stt::{
-    ChunkOptions, LoadOptions, Segment, SpeechBackend, SpeechError, Timing, Word, load,
+    ChunkOptions, Fallback, LoadOptions, Segment, SpeechBackend, SpeechError, Timing, Word, load,
 };
 
 fn w(text: &str, a: u64, b: u64) -> Word {
@@ -169,12 +169,14 @@ fn segments_mode_gives_the_sentences_with_their_words() {
                 start_ms: 0,
                 end_ms: 850,
                 text: "Hello world.".into(),
+                starts_word: true,
                 words: vec![w("Hello", 0, 400), w("world.", 400, 850)],
             },
             Segment {
                 start_ms: 1_000,
                 end_ms: 1_650,
                 text: "How are you?".into(),
+                starts_word: true,
                 words: vec![
                     w("How", 1_000, 1_200),
                     w("are", 1_200, 1_400),
@@ -659,27 +661,31 @@ fn load_with(
     (got, tried)
 }
 
-fn cpu(fell_back: bool) -> SpeechBackend {
+fn cpu(fallback: Option<Fallback>) -> SpeechBackend {
     SpeechBackend {
         backend: "cpu".into(),
         device: None,
-        fell_back,
+        fallback,
     }
 }
 
 #[test]
 fn without_the_gpu_option_it_runs_on_the_processor_and_did_not_fall_back() {
     let (got, tried) = load_with(false, true, true, None, true);
-    assert_eq!(got, Ok((Provider::Processor, cpu(false), 12)));
+    assert_eq!(got, Ok((Provider::Processor, cpu(None), 12)));
     assert_eq!(tried, vec![(Provider::Processor, 12)]);
 }
 
 #[test]
-fn the_gpu_option_without_a_discrete_card_to_run_directml_on_gives_the_processor_with_fell_back() {
+fn the_gpu_option_without_a_discrete_card_to_run_directml_on_gives_the_processor_with_no_card_path()
+{
     // the Mac, a Windows build without the `directml` feature, or a PC with integrated graphics only: no card to run
     // on and nothing to fall back from, but the app asked
     let (got, tried) = load_with(true, false, true, None, true);
-    assert_eq!(got, Ok((Provider::Processor, cpu(true), 12)));
+    assert_eq!(
+        got,
+        Ok((Provider::Processor, cpu(Some(Fallback::NoCardPath)), 12))
+    );
     assert_eq!(
         tried,
         vec![(Provider::Processor, 12)],
@@ -688,9 +694,12 @@ fn the_gpu_option_without_a_discrete_card_to_run_directml_on_gives_the_processor
 }
 
 #[test]
-fn a_model_the_catalog_says_has_no_directml_path_runs_on_the_processor_with_fell_back() {
+fn a_model_the_catalog_says_has_no_directml_path_runs_on_the_processor_with_no_card_path() {
     let (got, tried) = load_with(true, true, false, None, true);
-    assert_eq!(got, Ok((Provider::Processor, cpu(true), 12)));
+    assert_eq!(
+        got,
+        Ok((Provider::Processor, cpu(Some(Fallback::NoCardPath)), 12))
+    );
     assert_eq!(tried, vec![(Provider::Processor, 12)]);
 }
 
@@ -705,7 +714,7 @@ fn directml_that_starts_is_reported_and_takes_the_gpu_thread_rule() {
         SpeechBackend {
             backend: "directml".into(),
             device: Some("NVIDIA GeForce RTX 5070 Ti".into()),
-            fell_back: false
+            fallback: None
         }
     );
     assert_eq!(threads, default_threads(ThreadKind::Gpu, 16));
@@ -716,12 +725,26 @@ fn directml_that_starts_is_reported_and_takes_the_gpu_thread_rule() {
 #[test]
 fn directml_that_fails_to_start_loads_on_the_processor_and_says_so() {
     let (got, tried) = load_with(true, true, true, None, false);
-    assert_eq!(got, Ok((Provider::Processor, cpu(true), 12)));
+    assert_eq!(
+        got,
+        Ok((Provider::Processor, cpu(Some(Fallback::CardFailed)), 12))
+    );
     // the processor's own thread rule after the fallback, not the card's
     assert_eq!(
         tried,
         vec![(Provider::DirectMl(1), 8), (Provider::Processor, 12)]
     );
+}
+
+#[test]
+fn directml_that_runs_out_of_memory_says_so() {
+    let got = load_on_best_provider(true, Some(&rtx()), true, None, 16, |p, _| match p {
+        Provider::DirectMl(_) => Err(SpeechError::OutOfMemory),
+        Provider::Processor => Ok(()),
+    })
+    .unwrap();
+    assert_eq!(got.backend, cpu(Some(Fallback::CardOutOfMemory)));
+    assert!(got.backend.fell_back());
 }
 
 #[test]
@@ -800,4 +823,22 @@ fn the_non_speech_kinds_are_still_not_loadable_as_speech() {
         load(vad, dir.path(), LoadOptions::default()).err().unwrap(),
         SpeechError::Unsupported(_)
     ));
+}
+
+#[test]
+fn every_parakeet_segment_starts_a_word_in_both_modes() {
+    for timing in [Timing::Segments, Timing::Words] {
+        let got = segments_from_words(two_sentences(), timing);
+        assert!(!got.is_empty());
+        assert!(got.iter().all(|s| s.starts_word), "{timing:?}");
+    }
+    // So joining gives the segments with single spaces.
+    let got = segments_from_words(two_sentences(), Timing::Segments);
+    assert_eq!(
+        voice_engine_stt::join_segments(&got),
+        got.iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
 }

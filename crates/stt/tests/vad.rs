@@ -5,7 +5,8 @@
 use voice_engine_models::catalog::find;
 use voice_engine_stt::SpeechError;
 use voice_engine_stt::vad::{
-    FRAME_SAMPLES, centis_to_ms, detect, is_shorter_than_a_frame, spans_from_centiseconds,
+    FRAME_SAMPLES, VadSettings, centis_to_ms, detect, detect_with, is_shorter_than_a_frame,
+    pad_spans, spans_from_centiseconds,
 };
 
 /// The file name the catalog gives the voice detection model.
@@ -89,6 +90,80 @@ fn spans_are_sorted_and_overlapping_or_touching_ones_are_merged() {
 fn a_span_inside_another_is_absorbed() {
     let raw = [(100.0, 500.0), (200.0, 300.0)];
     assert_eq!(spans_from_centiseconds(&raw, 10_000), vec![(1_000, 5_000)]);
+}
+
+// ---- settings and padding ----
+
+#[test]
+fn the_default_settings_are_the_ones_detect_has_always_used() {
+    let d = VadSettings::default();
+    assert_eq!(d.threshold, 0.5);
+    assert_eq!(d.min_speech_ms, 250);
+    assert_eq!(d.min_silence_ms, 300);
+    assert_eq!(d.padding_ms, 0);
+}
+
+#[test]
+fn no_padding_leaves_the_spans_as_they_are() {
+    let spans = [(1_000, 2_000), (5_000, 6_000)];
+    assert_eq!(pad_spans(&spans, 0, 10_000), spans.to_vec());
+}
+
+#[test]
+fn padding_widens_each_span_on_both_sides() {
+    let spans = [(1_000, 2_000), (5_000, 6_000)];
+    assert_eq!(
+        pad_spans(&spans, 30, 10_000),
+        vec![(970, 2_030), (4_970, 6_030)]
+    );
+}
+
+#[test]
+fn padding_stops_at_the_ends_of_the_audio() {
+    assert_eq!(pad_spans(&[(10, 9_990)], 30, 10_000), vec![(0, 10_000)]);
+    assert_eq!(pad_spans(&[(0, 100)], 500, 400), vec![(0, 400)]);
+}
+
+#[test]
+fn spans_that_meet_after_padding_become_one() {
+    // 100 ms apart: 30 ms each side leaves 40 ms (kept apart), 50 ms each side touches (merged), 60 overlaps.
+    let spans = [(1_000, 2_000), (2_100, 3_000), (8_000, 9_000)];
+    assert_eq!(
+        pad_spans(&spans, 30, 10_000),
+        vec![(970, 2_030), (2_070, 3_030), (7_970, 9_030)]
+    );
+    assert_eq!(
+        pad_spans(&spans, 50, 10_000),
+        vec![(950, 3_050), (7_950, 9_050)]
+    );
+    assert_eq!(
+        pad_spans(&spans, 60, 10_000),
+        vec![(940, 3_060), (7_940, 9_060)]
+    );
+    // A big pad swallows the lot.
+    assert_eq!(pad_spans(&spans, 5_000, 10_000), vec![(0, 10_000)]);
+}
+
+#[test]
+fn no_spans_stay_no_spans_when_padded() {
+    assert!(pad_spans(&[], 100, 10_000).is_empty());
+}
+
+#[test]
+fn custom_settings_keep_the_edge_cases_that_never_reach_the_detector() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(vad_file_name()), b"not a model").unwrap();
+    let wide = VadSettings {
+        min_silence_ms: 100,
+        padding_ms: 30,
+        ..VadSettings::default()
+    };
+    assert_eq!(detect_with(dir.path(), &[], &wide), Ok(vec![]));
+    assert_eq!(detect_with(dir.path(), &[0.9; 100], &wide), Ok(vec![]));
+    assert_eq!(
+        detect_with(&dir.path().join("nowhere"), &[0.0; 16_000], &wide),
+        Err(SpeechError::ModelMissing)
+    );
 }
 
 // ---- edge cases that never reach the detector ----

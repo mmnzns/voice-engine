@@ -72,6 +72,10 @@ pub mod licences {
         spdx: "CC-BY-4.0",
         url: "https://creativecommons.org/licenses/by/4.0/",
     };
+    pub const NVIDIA_OPEN_MODEL: Licence = Licence {
+        spdx: "NVIDIA-Open-Model-License",
+        url: "https://www.nvidia.com/en-us/agreements/enterprise-software/nvidia-open-model-license/",
+    };
     pub const OPENMDW_1_1: Licence = Licence {
         spdx: "OpenMDW-1.1",
         url: "https://openmdw.ai/license/1-1/",
@@ -854,7 +858,7 @@ pub static CATALOG: &[ModelInfo] = &[
         english_only: true,
         speed: 3,
         accuracy: 2,
-        licence: licences::CC_BY_4,
+        licence: licences::NVIDIA_OPEN_MODEL,
         files: &[
             ModelFile {
                 name: "encoder.int8.onnx",
@@ -908,7 +912,7 @@ pub static CATALOG: &[ModelInfo] = &[
         english_only: true,
         speed: 3,
         accuracy: 2,
-        licence: licences::CC_BY_4,
+        licence: licences::NVIDIA_OPEN_MODEL,
         files: &[
             ModelFile {
                 name: "encoder.onnx",
@@ -1254,6 +1258,21 @@ mod tests {
         assert_eq!(find("whisper-turbo-full").unwrap().size(), 1_624_555_275);
         assert_eq!(find("parakeet-v3-full").unwrap().files.len(), 6);
         assert_eq!(find("parakeet-unified-en-full").unwrap().files.len(), 4);
+    }
+
+    /// The licence is the one on the model's own card (NVIDIA's), checked against Hugging Face on 2026-10-31: the
+    /// community ONNX repository we download from says CC-BY-4.0, but `nvidia/parakeet-unified-en-0.6b` says the NVIDIA
+    /// Open Model License.
+    #[test]
+    fn parakeet_unified_is_under_the_nvidia_open_model_license() {
+        for id in ["parakeet-unified-en", "parakeet-unified-en-full"] {
+            assert_eq!(
+                find(id).unwrap().licence.spdx,
+                "NVIDIA-Open-Model-License",
+                "{id}"
+            );
+        }
+        assert_eq!(find("parakeet-v3").unwrap().licence.spdx, "CC-BY-4.0");
     }
 
     #[test]

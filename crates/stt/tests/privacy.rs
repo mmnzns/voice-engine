@@ -221,10 +221,11 @@ fn the_helper_logs_one_fixed_line_and_builds_its_messages_from_fixed_words() {
 }
 
 #[test]
-fn the_client_prints_nothing_and_never_returns_the_helpers_stderr() {
+fn the_client_prints_nothing_and_returns_only_a_short_tail_of_the_helpers_stderr() {
     // The client sees the person's audio and transcript on their way through. It has no log line at all (the app
-    // decides what to log from the error kinds), and the helper's stderr tail it keeps to recognise an out-of-memory
-    // death is read in one place and never copied out.
+    // decides what to log from the error kinds). The one thing it copies out of the helper's stderr is the short tail
+    // `EngineError::Crashed` carries: at most 5 lines of 200 characters, built in one place. That is safe because the
+    // helpers write no user text to stderr (see the helpers' own privacy tests).
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../client/src");
     let mut files = vec![];
     rust_files(&src, &mut files);
@@ -246,15 +247,23 @@ fn the_client_prints_nothing_and_never_returns_the_helpers_stderr() {
                 n + 1,
                 line.trim()
             );
+            // Only process.rs touches the stderr tail.
+            assert!(
+                !line.contains("stderr_tail") || path.ends_with("process.rs"),
+                "{}:{}: the stderr tail is read outside process.rs: {}",
+                path.display(),
+                n + 1,
+                line.trim()
+            );
         }
     }
     assert!(seen >= 5, "the scan found {seen} client source files");
     let process = std::fs::read_to_string(src.join("process.rs")).unwrap();
-    let at = process
-        .find("pub fn died_of_memory(&self) -> bool")
-        .expect("died_of_memory moved");
-    let body = &process[at..];
-    let body = &body[..body.find("\n    }\n").unwrap()];
-    assert_eq!(process.matches("self.stderr_tail").count(), 1);
-    assert!(body.contains("self.stderr_tail"), "{body}");
+    let production = process.split("#[cfg(test)]").next().unwrap();
+    // The bound on what leaves, and the one place it is applied.
+    assert!(production.contains("pub const DETAIL_LINES: usize = 5;"));
+    assert!(production.contains("pub const DETAIL_LINE_CHARS: usize = 200;"));
+    assert_eq!(production.matches("tail_detail(&text, cut)").count(), 1);
+    // Outside the tail itself, the stderr text is only read to judge it and to build that detail.
+    assert_eq!(production.matches("self.stderr_text()").count(), 2);
 }

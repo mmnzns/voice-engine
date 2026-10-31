@@ -1,5 +1,48 @@
 # Changelog
 
+## v0.3.0 (unreleased)
+
+Breaking: `EngineError::Crashed` is `Crashed { exit_code, signal, detail }`; match `Crashed { .. }`. `Outcome::fell_back`
+is `Outcome::fallback: Option<Fallback>` (the field is gone, `fell_back()` is a method); it is `Some` whenever the card was
+asked for and the processor ran, so match `CardFailed | CardOutOfMemory` to say "card failed" once. The same for speech: `SpeechBackend::fell_back` is
+`SpeechBackend::fallback: Option<Fallback>` (`fell_back()` is a method; `Transcriber::backend()` sets `NoCardPath`,
+`CardFailed` or `CardOutOfMemory` only when `gpu: true` was asked). On the wire a v0.3.0 speech helper writes `fallback`
+and the derived `fell_back` bool, and a v0.2.x helper's `fell_back: true` reads as `CardFailed`. `Segment` has a new field, `starts_word`.
+
+- feat: out-of-memory deaths are recognised from more messages, Windows' `STATUS_NO_MEMORY` and a Unix SIGKILL, and
+  `EngineError::Crashed` carries the exit code, the signal and a short stderr tail with no user text (#26). A helper
+  that exits by itself is waited for up to 1 s so its exit status can be read.
+- feat: `Outcome::fallback: Option<Fallback>` says why the card was not used (`NoCardPath`, `CardFailed`,
+  `CardOutOfMemory`, `RememberedFailure`, `NoCardHelper`) when the app asked for it and the processor ran (#27). The client
+  works it out, so helpers need no change. A processor helper answering a `gpu: true` request with no `gpu_helper` is now
+  `NoCardHelper`, not "no fallback"; the Mac's Metal helper that answers `cpu` is `NoCardPath`.
+- feat: `LlmClient::complete_within(limit, completion, progress)` holds one reply to its own limit, which starts after the
+  model is loaded (from the send when it already is) and ends with `TimedOut` and a stopped helper; the load keeps the
+  config's limits (#28). The helper sends a `reading` progress with `done: 0` once the model and prompt are ready.
+- feat: a GGUF without a chat template no longer fails with `NoChatTemplate`: the helper writes a plain prompt (system
+  text, blank line, user text, blank line) and the reply carries `plain_format: true`, so an app can warn on import;
+  `inspect` already said `has_chat_template: false` (#29). Verified with a real model whose template key was renamed.
+- feat: the `ready` answer to `ping` carries `loaded_model` (the path of the model the helper holds, left out when none),
+  and `LlmClient::loaded_model()` returns it without starting a helper when none runs; it answers within 10 s (#30). A
+  v0.2.x helper sends none, which reads as `None`.
+- feat: `Segment::starts_word` (#32). Segment text stays trimmed; the new field says whether a space goes before it
+  when segments are joined (Whisper: the raw text began with whitespace, so CJK joins with none; Parakeet and the other
+  ONNX models: always `true`). `voice_engine_stt::join_segments` joins by it. Reads as `true` from a helper that does
+  not send it. Breaking: `Segment` has a new public field, so code that builds a `Segment` with a struct literal must
+  set `starts_word`.
+- docs: Parakeet's 0.5 s of silence on each side stays (#33). Measured on Parakeet Ultra: 0.25 s, 0.1 s and no padding
+  changed the transcript on some 15 s windows, and none was reliably faster (the audio saved is about 3%).
+- feat: voice detection settings (#31). `vad::VadSettings` (`threshold`, `min_speech_ms`, `min_silence_ms`, `padding_ms`;
+  `Default` is the old fixed values) and `vad::detect_with(model_dir, &audio, &settings)`. `detect` is unchanged.
+  Padding grows each span, stops at the ends of the audio and merges spans that meet.
+- feat: `build-helpers.yml` has a `targets` input, a list of target triples (default: all three), so an app can skip
+  one such as Windows ARM64 (#34). An unknown triple or an empty list fails the run with a clear message.
+- fix: the catalog lists Parakeet Unified (`parakeet-unified-en`, `parakeet-unified-en-full`) under the NVIDIA Open Model
+  License, as NVIDIA's model card says, not CC-BY-4.0 (#35). The other entries were checked and match.
+- docs: Parlato confirmed that a helper signed with a self-signed identity and the hardened runtime works inside its
+  .app; an app that links `voice-engine-stt` in process on Windows ARM64 needs clang-cl and Ninja; the hard links
+  `move_in` leaves keep the bytes on disk after `release`, so an app removes its own old copy (#35).
+
 ## v0.2.3 (2026-10-31)
 
 Fixes from Talaan's move: apps can retry the card without a restart, no example or test writes into the real shared
