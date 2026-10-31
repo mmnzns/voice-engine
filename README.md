@@ -362,8 +362,10 @@ rustflags = ["-C", "target-feature=+avx2,+fma,+f16c,+bmi2"]   # llama-cpp-sys-2 
 **Cargo reads `.cargo/config.toml` only for the workspace it builds.** An app that depends on the engine as a git
 dependency does not get these lines, and nothing warns it: it builds the libraries for its own build machine. So an app
 that links `voice-engine-llm` or `voice-engine-stt` (the helper programs, or the speech crate in process) copies the block
-above into its own `.cargo/config.toml` (for a Tauri app, next to `Cargo.toml` in `src-tauri/`; commit it, unlike the
-patch file in the next section), or sets the same variables in its release workflow, or builds the helpers with the
+above into a committed `.cargo/config.toml` in the folder cargo runs from, usually the repo root. Cargo reads
+`.cargo/config.toml` from the working directory and its parents, not from the manifest's folder: with
+`cargo test --manifest-path src-tauri/Cargo.toml` run from the root, a `src-tauri/.cargo/config.toml` is never read and
+the baseline silently does not apply. Commit the file; the local patch in the next section goes elsewhere. Or it sets the same variables in its release workflow, or builds the helpers with the
 reusable workflow described in `docs/building-helpers.md`, which builds in the engine's own checkout and so carries
 them. The rustflags line is for Windows x64 only.
 
@@ -406,7 +408,8 @@ its handshake.
 
 ## Try an engine change in an app before tagging
 
-Put this in the app's `src-tauri/.cargo/config.toml` (git-ignored, never committed):
+Put this in `~/.cargo/config.toml` (or pass it with `cargo --config`), never in the app's committed `.cargo/config.toml`,
+so the build block and the local patch never share a file:
 
 ```toml
 [patch."https://github.com/mmnzns/voice-engine"]

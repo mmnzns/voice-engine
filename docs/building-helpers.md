@@ -56,7 +56,10 @@ dot-product or i8mm kernels, whatever the build machine's CPU is.
 
 An app that links `voice-engine-stt` **in its own process** (the speech models run there, not in a helper) is not covered
 by this workflow: its own build needs the same settings. The README section "Build settings an app must copy" lists
-them.
+them. They go in a committed `.cargo/config.toml` in the folder cargo runs from (usually the repo root), not next to the
+manifest: cargo reads that file from the working directory and its parents, so `src-tauri/.cargo/config.toml` is never
+read by `cargo test --manifest-path src-tauri/Cargo.toml` run from the root. A local `[patch]` to try engine changes
+belongs in `~/.cargo/config.toml` or `--config`, never in that committed file.
 
 ## Calling it
 

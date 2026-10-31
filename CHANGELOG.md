@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.2.3 (unreleased)
+
+- docs: the build settings go in a committed `.cargo/config.toml` in the folder cargo runs from, usually the repo root,
+  not in `src-tauri/.cargo`; the local `[patch]` goes in `~/.cargo/config.toml` or `--config` (#20).
 ## v0.2.2 (2026-10-30)
 
 The Windows card check no longer counts a VM's or a driverless PC's display adapter as a card, and it answers within 10 s.
