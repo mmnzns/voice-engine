@@ -579,3 +579,66 @@ fn devices_gives_up_after_its_own_short_limit_and_does_not_blame_the_card() {
     // A timeout is not the card failing: nothing is remembered.
     assert!(!failures.exists());
 }
+
+#[test]
+fn retry_gpu_puts_a_running_client_back_on_the_card_and_forgets_the_failure() {
+    let _t = turn();
+    let (d, st) = state();
+    let failures = d.path().join("gpu.txt");
+    // The card helper dies on its first request and works after that.
+    let client = LlmClient::new(with_gpu(config("", &st), "gpu_die_once", &failures));
+    let out = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(out.backend.backend, "cpu");
+    assert!(out.fell_back);
+    assert!(failures.exists());
+    // Still on the processor, whatever the app does to the file alone.
+    voice_engine_client::clear_gpu_failure(&failures);
+    let out = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(
+        out.backend.backend, "cpu",
+        "clear_gpu_failure alone does not reach the client"
+    );
+    // The app's "Try again".
+    client.retry_gpu();
+    assert!(!failures.exists());
+    let out = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(out.backend.backend, "vulkan");
+    assert!(!out.fell_back);
+    assert!(!failures.exists());
+    // With the card helper running, retry_gpu leaves it alone.
+    client.retry_gpu();
+    let out = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(out.backend.backend, "vulkan");
+    client.shutdown();
+}
+
+#[test]
+fn retry_gpu_on_a_client_that_started_on_a_remembered_failure_tries_the_card() {
+    let _t = turn();
+    let (d, st) = state();
+    let failures = d.path().join("gpu.txt");
+    std::fs::write(&failures, "test-build").unwrap();
+    let client = LlmClient::new(with_gpu(config("", &st), "gpu_ok", &failures));
+    let out = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(out.backend.backend, "cpu");
+    assert!(!out.fell_back);
+    client.retry_gpu();
+    assert!(!failures.exists());
+    let out = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(out.backend.backend, "vulkan");
+    client.shutdown();
+}
+
+#[test]
+fn retry_gpu_without_a_card_helper_or_a_file_does_nothing_harmful() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = LlmClient::new(config("", &st));
+    client.retry_gpu();
+    let out = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(out.backend.backend, "cpu");
+    client.retry_gpu();
+    let out = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(out.backend.backend, "cpu");
+    client.shutdown();
+}

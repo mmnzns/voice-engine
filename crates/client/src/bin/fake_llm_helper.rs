@@ -6,7 +6,8 @@
 //! progress event; `die_on_first_complete` exits before answering the first `complete` (an idle exit just as the
 //! request arrives); `oom` writes an out-of-memory message and dies on `complete`; `stall` never answers `complete`;
 //! `slow` writes progress until it gets `cancel`, then answers `cancelled`; `ignore_cancel` writes progress forever;
-//! `gpu_ok` reports a Vulkan GPU and works; `gpu_die` reports a GPU and dies on `complete`; `gpu_error` reports a GPU
+//! `gpu_ok` reports a Vulkan GPU and works; `gpu_die` reports a GPU and dies on `complete`; `gpu_die_once` does that for the first `complete` (over all starts) and
+//! works after; `gpu_error` reports a GPU
 //! and answers `complete` with the graphics card failed; `per_request` is the Mac helper: `ready` says `metal`, and
 //! `loaded`, `done` and `embedded` say `metal` for a request with `gpu: true` and `cpu` for `gpu: false`. Every other
 //! mode answers like a helper from before replies said where they ran (no backend), so the client uses `ready`'s.
@@ -161,6 +162,17 @@ fn main() {
                             total: 0,
                         });
                         std::process::exit(139);
+                    }
+                    "gpu_die_once" => {
+                        if bump(&state) == 0 {
+                            send(&Event::Progress {
+                                phase: Phase::Loading,
+                                done: 0,
+                                total: 0,
+                            });
+                            std::process::exit(139);
+                        }
+                        answer(says(c.gpu));
                     }
                     "die_on_first_complete" => {
                         if bump(&state) == 0 {

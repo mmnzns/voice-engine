@@ -6,6 +6,11 @@
   unless `VOICE_ENGINE_MODELS_DIR` is set or `--real` is passed, and prints the folder first; the "not the real folder"
   test helpers moved to `crates/models/tests/support`, and a guard test fails if a test or example calls
   `SharedStore::open(` without setting `VOICE_ENGINE_MODELS_DIR` first.
+- fix: `LlmClient::retry_gpu()` and `SttClient::retry_gpu()` re-enable the card in a running client (#24). They wait for a
+  request in progress, clear the `gpu_failures` file and the client's own failure memory, and stop the processor helper
+  that took over, so the next request starts on the card (the speech client loads its remembered model there); a running
+  card helper is left alone. `clear_gpu_failure` alone does not reach a live client (docs say so); README tells apps to
+  fold the graphics driver version into `gpu_key`.
 
 ## v0.2.2 (2026-10-30)
 

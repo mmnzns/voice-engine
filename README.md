@@ -50,6 +50,14 @@ processor helper gets the same request with `gpu: false` (`load`, `complete`, `e
 really runs on the processor. With no `gpu_helper` the one helper gets `gpu` as the app wrote it (on the Mac that is the
 Metal helper). A Metal helper that dies counts as a card failure like a Vulkan one.
 
+A card failure is remembered in the `gpu_failures` file (when the config names one) under the app's `gpu_key` (a build
+string such as `"1.2.0 | driver 560.94"`), and in the client itself until the app restarts. The app's "Try again" calls
+`retry_gpu()` on each live `LlmClient` and `SttClient`: it waits for a request in progress, clears the file and the
+client's memory, and stops the processor helper if that is the one running, so the next request starts on the card (the
+`SttClient` loads its remembered model into the new helper); a running card helper is left alone. `clear_gpu_failure(path)`
+only removes the file, which is enough for a client built afterwards but not for one already running. The engine compares
+`gpu_key` only, so an app should fold the graphics driver version into it: a driver update then tries the card again.
+
 ## Local AI servers
 
 `voice_engine_client::servers::detect()` says which local AI servers are running on this computer: Ollama (port 11434)

@@ -19,7 +19,9 @@ pub(crate) fn record(path: Option<&Path>, key: &str) {
     let _ = std::fs::write(path, key);
 }
 
-/// Forgets a remembered failure: the app's "try the graphics card again".
+/// Forgets a remembered failure in the file only. A client that is already running keeps its own memory of the
+/// failure and stays on the processor: the app's "Try again" must call `retry_gpu()` on each live `LlmClient` and
+/// `SttClient` (it clears this file too). Use this function for a client that has not been built yet.
 pub fn clear_gpu_failure(path: &Path) {
     let _ = std::fs::remove_file(path);
 }
