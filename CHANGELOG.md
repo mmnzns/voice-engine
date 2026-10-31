@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.3.1 (unreleased)
+
+Drop-in over v0.3.0: nothing that existed changes. One small exception: `directml::Adapter` has a new public field,
+`driver_version`, so code that builds an `Adapter` literal adds it.
+
+- feat: `vad::VadDetector` loads the voice detection model once and detects many times (`load`, `detect`,
+  `detect_with`), for apps that detect on every dictation; `detect` and `detect_with` still load per call and give the
+  same spans (#38). whisper.cpp clears the detector's state at the start of every detection, so nothing carries from one
+  call into the next. It is `Send`; share it behind a `Mutex`. The logging hooks are installed once per process.
+- feat: `voice_engine_stt::driver_version(&card)` gives the card's driver version as Windows shows it ("32.0.15.6614"),
+  for the app's `gpu_key`, so a driver update tries a card that failed before again (#39). None without DirectML or when
+  Windows doesn't say.
+- docs: a local Vulkan helper build on VS 2026 BuildTools can fail in `vulkan-shaders-gen`; build with `-j 1` (#40).
+  `collect()` in an `open_at` folder erases a model a test put there by hand without a user marker; mark it with
+  `use_model(id)`.
+
 ## v0.3.0 (2026-10-31)
 
 The Parlato and Ensayo requests from their moves. Apps change a few lines (see the README, "Moving from v0.2.x to
