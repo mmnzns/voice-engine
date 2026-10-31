@@ -192,7 +192,11 @@ app can ask at startup without hanging. An app should treat an `Err` from `discr
 off by default. A timeout does not mark the card as failed.
 
 `DirectML.dll` comes from Windows (`C:\Windows\System32`, Windows 10 1903 and later): nothing ships with the app and the
-engine adds no file to the helpers' output. The helpers are built without DirectML and do not import it.
+engine adds no file to the helpers' output. It is imported when the program starts, not when Parakeet loads: `ort-sys`
+adds the DirectML link line to every Windows build and `voice-engine-stt` always depends on `ort`, so the helpers, and an
+app that links the speech crate, may import `DirectML.dll` even without the `directml` feature. If an export ONNX Runtime
+needs is missing (for example `DMLCreateDevice1` on a very old Windows 10), the program does not start and there is no
+fall back to the processor. Check what a built file imports with `dumpbin /dependents <file>.exe`.
 
 ### What runs where
 

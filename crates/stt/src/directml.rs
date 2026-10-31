@@ -46,7 +46,8 @@ pub fn discrete(adapters: &[Adapter]) -> Option<&Adapter> {
 }
 
 /// The adapters as protocol devices (backend "DirectML", `index` the DXGI number), software and Microsoft ones left
-/// out, for the speech helper's `devices` answer.
+/// out. Behind `directml_devices()` and `discrete_card()`, for an app that runs Parakeet in its own process; the speech
+/// helper answers its `devices` request from ggml's devices, not from this.
 pub fn devices(adapters: &[Adapter]) -> Vec<Device> {
     adapters
         .iter()
