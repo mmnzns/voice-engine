@@ -13,6 +13,9 @@ asked for and the processor ran, so match `CardFailed | CardOutOfMemory` to say 
   `CardOutOfMemory`, `RememberedFailure`, `NoCardHelper`) when the app asked for it and the processor ran (#27). The client
   works it out, so helpers need no change. A processor helper answering a `gpu: true` request with no `gpu_helper` is now
   `NoCardHelper`, not "no fallback"; the Mac's Metal helper that answers `cpu` is `NoCardPath`.
+- feat: `LlmClient::complete_within(limit, completion, progress)` holds one reply to its own limit, which starts after the
+  model is loaded (from the send when it already is) and ends with `TimedOut` and a stopped helper; the load keeps the
+  config's limits (#28). The helper sends a `reading` progress with `done: 0` once the model and prompt are ready.
 
 ## v0.2.3 (2026-10-31)
 

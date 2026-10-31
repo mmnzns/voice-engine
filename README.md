@@ -74,6 +74,14 @@ client's memory, and stops the processor helper if that is the one running, so t
 running. The engine compares `gpu_key` only, so an app should fold the graphics driver version into it: a driver update
 then tries the card again.
 
+**A limit on one reply.** `Limits` are set once and cover every call, the model load included. For a reply that must
+be quick (a cleanup of dictated text) while the model may take a minute to load, call
+`complete_within(limit: Duration, completion, progress)` instead of `complete`. `limit` runs from the moment the model is
+loaded, or from the send when it already is (the helper says it is loading with a `loading` progress, and sends a
+`reading` progress with `done: 0` as soon as the model and the prompt are ready). The load keeps the config's `start`,
+`stall` and `total` limits. When the reply is not done in time the call ends with `EngineError::TimedOut` and the helper is
+stopped, as for a stall: the model is gone, and the next call loads it again. `cancel` still works.
+
 **Crashes and memory.** A helper that dies while working on a request ends it with `EngineError::OutOfMemory` when it
 ran out of memory, and with `EngineError::Crashed { exit_code, signal, detail }` otherwise. It counts as out of memory
 when its stderr says so (`out of memory`, `failed to allocate`, `memory allocation of`, `std::bad_alloc`,

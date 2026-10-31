@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use voice_engine_protocol::{
     Backend, Completion, Configure, Device, DeviceList, Embedding, Event, Fallback, Inspect,
-    Inspection, Load, PROTOCOL_VERSION, Reply, Request, encode,
+    Inspection, Load, PROTOCOL_VERSION, Phase, Reply, Request, encode,
 };
 
 /// How long a helper that was asked to stop may keep going before it is killed.
@@ -115,6 +115,31 @@ struct Running {
     fresh_failure: Option<Fallback>,
 }
 
+fn reply_of(ev: &Event) -> Option<Reply> {
+    match ev {
+        Event::Done(reply) => Some(reply.clone()),
+        _ => None,
+    }
+}
+
+/// What holds a request to a limit beyond the config's.
+#[derive(Clone, Copy, Default)]
+struct Limit {
+    /// The stall and total limits are capped at this, from the send (`devices`: an app asks at startup).
+    cap: Option<Duration>,
+    /// The reply must be done this long after the model is loaded (`complete_within`).
+    reply: Option<Duration>,
+}
+
+impl Limit {
+    fn capped(cap: Duration) -> Self {
+        Limit {
+            cap: Some(cap),
+            reply: None,
+        }
+    }
+}
+
 /// Why one attempt at a request ended without an answer.
 enum Attempt {
     /// The helper process is gone. `answered`: it had sent at least one event for this request.
@@ -177,10 +202,24 @@ impl LlmClient {
         completion: Completion,
         progress: &mut dyn FnMut(&Event),
     ) -> Result<Outcome<Reply>, EngineError> {
-        self.exchange(&Request::Complete(completion), progress, &|ev| match ev {
-            Event::Done(reply) => Some(reply.clone()),
-            _ => None,
-        })
+        self.exchange(&Request::Complete(completion), progress, &reply_of)
+    }
+
+    /// `complete` with its own limit on the reply: `limit` runs from the moment the model is loaded (from the send
+    /// when it already is), so a short limit for a short reply does not also cut a slow model load, which keeps the
+    /// config's limits. When the reply is not done within `limit` the call ends with `EngineError::TimedOut` and the
+    /// helper is stopped, as for a stall: the model is gone, and the next call loads it again.
+    pub fn complete_within(
+        &self,
+        limit: Duration,
+        completion: Completion,
+        progress: &mut dyn FnMut(&Event),
+    ) -> Result<Outcome<Reply>, EngineError> {
+        let limit = Limit {
+            cap: None,
+            reply: Some(limit),
+        };
+        self.exchange_with(limit, &Request::Complete(completion), progress, &reply_of)
     }
 
     pub fn embed(&self, embedding: Embedding) -> Result<Outcome<Vec<Vec<f32>>>, EngineError> {
@@ -206,8 +245,8 @@ impl LlmClient {
     /// hasn't failed (else of the processor helper, which lists the processor only). Starts the helper if none runs,
     /// so an app asks once at startup, before the first load.
     pub fn devices(&self) -> Result<DeviceList, EngineError> {
-        self.exchange_within(
-            Some(DEVICES_LIMIT),
+        self.exchange_with(
+            Limit::capped(DEVICES_LIMIT),
             &Request::Devices,
             &mut |_| {},
             &|ev| match ev {
@@ -309,13 +348,13 @@ impl LlmClient {
         progress: &mut dyn FnMut(&Event),
         pick: &dyn Fn(&Event) -> Option<T>,
     ) -> Result<Outcome<T>, EngineError> {
-        self.exchange_within(None, request, progress, pick)
+        self.exchange_with(Limit::default(), request, progress, pick)
     }
 
-    /// `exchange`, with the stall and total limits capped at `cap` when there is one.
-    fn exchange_within<T>(
+    /// `exchange`, with the extra limits in `limit`.
+    fn exchange_with<T>(
         &self,
-        cap: Option<Duration>,
+        limit: Limit,
         request: &Request,
         progress: &mut dyn FnMut(&Event),
         pick: &dyn Fn(&Event) -> Option<T>,
@@ -340,7 +379,7 @@ impl LlmClient {
             } else {
                 request.clone()
             };
-            let attempt = self.attempt(r, &sent, cap, progress, pick);
+            let attempt = self.attempt(r, &sent, limit, progress, pick);
             *self.live_stdin.lock().unwrap_or_else(|e| e.into_inner()) = None;
             match attempt {
                 Ok((value, ran)) => {
@@ -394,7 +433,7 @@ impl LlmClient {
         &self,
         r: &mut Running,
         request: &Request,
-        cap: Option<Duration>,
+        extra: Limit,
         progress: &mut dyn FnMut(&Event),
         pick: &dyn Fn(&Event) -> Option<T>,
     ) -> Result<(T, Option<Backend>), Attempt> {
@@ -407,13 +446,17 @@ impl LlmClient {
             .unwrap_or_else(|e| e.into_inner())
             .limits
             .clone();
-        if let Some(cap) = cap {
+        if let Some(cap) = extra.cap {
             limits.stall = limits.stall.min(cap);
             limits.total = limits.total.min(cap);
         }
         let began = Instant::now();
         let mut last_event = Instant::now();
         let mut answered = false;
+        // The reply limit runs from the send, unless the helper says it is loading the model: then it runs from the
+        // first event after that (the helper sends one as soon as the model is ready).
+        let mut reply_by = extra.reply.map(|limit| began + limit);
+        let mut loading = false;
         loop {
             // Checked on every pass, not only when the helper is quiet: a helper that keeps streaming progress while
             // ignoring `cancel` (or running past the total limit) must still be stopped.
@@ -425,7 +468,10 @@ impl LlmClient {
                     kill: true,
                 });
             }
-            if last_event.elapsed() > limits.stall || began.elapsed() > limits.total {
+            if last_event.elapsed() > limits.stall
+                || began.elapsed() > limits.total
+                || reply_by.is_some_and(|by| Instant::now() > by)
+            {
                 return Err(Attempt::Failed {
                     error: EngineError::TimedOut,
                     kill: true,
@@ -441,6 +487,21 @@ impl LlmClient {
                 Recv::Event(ev) => {
                     answered = true;
                     last_event = Instant::now();
+                    if let Some(limit) = extra.reply {
+                        if matches!(
+                            ev,
+                            Event::Progress {
+                                phase: Phase::Loading,
+                                ..
+                            }
+                        ) {
+                            loading = true;
+                            reply_by = None;
+                        } else if loading {
+                            loading = false;
+                            reply_by = Some(Instant::now() + limit);
+                        }
+                    }
                     match pick(&ev) {
                         Some(value) => return Ok((value, ran_on(&ev))),
                         None => progress(&ev),

@@ -142,6 +142,13 @@ pub(crate) fn complete(
         .new_context(llama, ctx_params)
         .map_err(|e| Failure::out_of_memory(format!("not enough memory for the AI model: {e}")))?;
 
+    // The model is loaded and the prompt is ready: say so before reading it, so a client can start a limit on the reply
+    // here (`LlmClient::complete_within`), whether or not this request had to load the model.
+    send(&Event::Progress {
+        phase: Phase::Reading,
+        done: 0,
+        total: n_prompt,
+    });
     // Read the prompt in batches; only the last token needs logits.
     let mut batch = LlamaBatch::new(BATCH, 1);
     for (start, chunk) in tokens

@@ -236,6 +236,96 @@ fn a_helper_ended_by_sigkill_is_reported_as_out_of_memory() {
     assert_eq!(e, EngineError::OutOfMemory);
 }
 
+/// A client for the `slow_reply` fake: a load of `load_ms` and a reply of `reply_ms`, with limits far above both.
+fn slow(load_ms: u64, reply_ms: u64, state: &std::path::Path) -> LlmClient {
+    let mut cfg = config("slow_reply", state);
+    cfg.env.push(("FAKE_LOAD_MS".into(), load_ms.to_string()));
+    cfg.env.push(("FAKE_REPLY_MS".into(), reply_ms.to_string()));
+    // The load is silent for `load_ms`, so the stall limit must be above it.
+    cfg.limits.stall = Duration::from_secs(20);
+    LlmClient::new(cfg)
+}
+
+#[test]
+fn the_reply_limit_does_not_count_the_load() {
+    let _t = turn();
+    let (_d, st) = state();
+    // A load of 1.5 s and a reply of 0.4 s: 1.9 s in all, against a limit of 1 s for the reply.
+    let client = slow(1500, 400, &st);
+    let began = Instant::now();
+    let out = client
+        .complete_within(Duration::from_secs(1), completion(), &mut |_| {})
+        .unwrap();
+    assert_eq!(out.value.text, "hi");
+    assert!(began.elapsed() > Duration::from_millis(1800));
+}
+
+#[test]
+fn a_reply_that_runs_past_its_limit_after_the_load_is_a_timeout_and_the_helper_is_stopped() {
+    let _t = turn();
+    let (_d, st) = state();
+    // Loads for 1.5 s, then would reply for 6 s; the limit is 1 s from the end of the load.
+    let client = slow(1500, 6000, &st);
+    let began = Instant::now();
+    let e = client
+        .complete_within(Duration::from_secs(1), completion(), &mut |_| {})
+        .unwrap_err();
+    assert_eq!(e, EngineError::TimedOut);
+    let took = began.elapsed();
+    assert!(took > Duration::from_millis(2300), "{took:?}");
+    assert!(took < Duration::from_millis(5000), "{took:?}");
+    // The helper was stopped like for a stall: the next call starts a new one, which loads again (1.5 s).
+    let began = Instant::now();
+    let out = client
+        .complete_within(Duration::from_secs(1), completion(), &mut |_| {})
+        .unwrap_err();
+    assert_eq!(out, EngineError::TimedOut);
+    assert!(began.elapsed() > Duration::from_millis(2300));
+}
+
+#[test]
+fn with_the_model_already_loaded_the_reply_limit_runs_from_the_send() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = slow(1500, 6000, &st);
+    client.load("/m.gguf", 512, true, &mut |_| {}).unwrap();
+    let began = Instant::now();
+    let e = client
+        .complete_within(Duration::from_millis(700), completion(), &mut |_| {})
+        .unwrap_err();
+    assert_eq!(e, EngineError::TimedOut);
+    let took = began.elapsed();
+    assert!(took > Duration::from_millis(600), "{took:?}");
+    assert!(took < Duration::from_millis(3000), "{took:?}");
+}
+
+#[test]
+fn the_config_limits_still_hold_a_load_the_reply_limit_does_not_cover() {
+    let _t = turn();
+    let (_d, st) = state();
+    let mut cfg = config("slow_reply", &st);
+    cfg.env.push(("FAKE_LOAD_MS".into(), "5000".into()));
+    // The config's stall limit (600 ms) is for the load, and it still applies.
+    let client = LlmClient::new(cfg);
+    let e = client
+        .complete_within(Duration::from_secs(30), completion(), &mut |_| {})
+        .unwrap_err();
+    assert_eq!(e, EngineError::TimedOut);
+}
+
+#[test]
+fn a_reply_limit_that_is_not_reached_leaves_the_reply_as_it_is() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = LlmClient::new(config("", &st));
+    let mut progress = 0;
+    let out = client
+        .complete_within(Duration::from_secs(5), completion(), &mut |_| progress += 1)
+        .unwrap();
+    assert_eq!(out.value.text, "hi");
+    assert!(progress >= 1);
+}
+
 #[test]
 fn no_answer_within_the_stall_limit_is_a_timeout() {
     let _t = turn();

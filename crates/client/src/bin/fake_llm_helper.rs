@@ -18,6 +18,11 @@
 //! `no_card_path` is a Mac helper that has no card runtime for the model: `ready` says `metal`, and every reply says
 //! `cpu`. `gpu_oom` reports a Vulkan GPU and dies of memory on `complete` (an out-of-memory line on stderr).
 //!
+//! `slow_reply` loads for `FAKE_LOAD_MS` and replies for `FAKE_REPLY_MS` (both default 0), like the real helper: a model
+//! it does not hold yet is announced with a `loading` progress, loaded in silence, and the prompt is ready with a
+//! `reading` progress; then it writes progress every 50 ms until the reply is done. `load` and `complete` both load, and
+//! the model stays loaded for the helper's life, so a later `complete` does not load again.
+//!
 //! `devices` answers with the list `FAKE_DEVICES` describes (fake_support/devices.rs); mode `no_devices` never answers it.
 //!
 //! When `FAKE_LOG` names a file, every `load`, `complete` and `embed` the helper receives is appended to it as one
@@ -111,6 +116,15 @@ fn main() {
         }
     });
 
+    let millis = |name: &str| {
+        Duration::from_millis(
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
+        )
+    };
+    let mut loaded = false;
     while let Ok(line) = rx.recv() {
         let Ok(request) = decode_request(&line) else {
             continue;
@@ -125,6 +139,10 @@ fn main() {
             }),
             Request::Load(l) => {
                 log(&mode, "load", l.gpu);
+                if mode == "slow_reply" && !loaded {
+                    slow_load(millis("FAKE_LOAD_MS"));
+                    loaded = true;
+                }
                 send(&Event::Loaded {
                     seconds: 0.5,
                     n_ctx_train: 4096,
@@ -190,6 +208,27 @@ fn main() {
                         eprintln!("GGML_ASSERT: out of memory");
                         std::process::exit(137);
                     }
+                    "slow_reply" => {
+                        if !loaded {
+                            slow_load(millis("FAKE_LOAD_MS"));
+                            loaded = true;
+                        }
+                        send(&Event::Progress {
+                            phase: Phase::Reading,
+                            done: 0,
+                            total: 3,
+                        });
+                        let until = std::time::Instant::now() + millis("FAKE_REPLY_MS");
+                        while std::time::Instant::now() < until {
+                            send(&Event::Progress {
+                                phase: Phase::Writing,
+                                done: 1,
+                                total: 0,
+                            });
+                            std::thread::sleep(Duration::from_millis(50));
+                        }
+                        answer(says(c.gpu));
+                    }
                     "die_noisy" => fake_crash::die_noisy(),
                     "sigkill" => fake_crash::sigkill(),
                     "stall" => loop {
@@ -229,6 +268,16 @@ fn main() {
             }
         }
     }
+}
+
+/// What the real helper does to load a model it does not hold: say so, then say nothing until it is loaded.
+fn slow_load(took: Duration) {
+    send(&Event::Progress {
+        phase: Phase::Loading,
+        done: 0,
+        total: 0,
+    });
+    std::thread::sleep(took);
 }
 
 fn answer(backend: Backend) {

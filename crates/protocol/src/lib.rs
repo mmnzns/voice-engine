@@ -172,7 +172,9 @@ pub enum Event {
         #[serde(default)]
         protocol: u32,
     },
-    /// Reading the prompt (`done` of `total` tokens), then writing (`done` tokens written, `total` 0).
+    /// Reading the prompt (`done` of `total` tokens; the first one, with `done` 0, says the model is loaded and the
+    /// prompt is ready), then writing (`done` tokens written, `total` 0). `Loading` comes first when the request
+    /// has to load the model.
     Progress {
         phase: Phase,
         done: u32,
