@@ -123,6 +123,8 @@ pub fn segments_from_words(words: Vec<Word>, timing: Timing) -> Vec<Segment> {
                 start_ms: w.start_ms,
                 end_ms: w.end_ms,
                 text: w.text.clone(),
+                // Parakeet's words are spaced.
+                starts_word: true,
                 words: vec![w],
             })
             .collect(),
@@ -167,6 +169,8 @@ pub fn segments_from_words(words: Vec<Word>, timing: Timing) -> Vec<Segment> {
                     start_ms: words[0].start_ms,
                     end_ms: words.last().map_or(0, |w| w.end_ms).max(sentence_end),
                     text: text.trim().to_string(),
+                    // Sentences are spaced.
+                    starts_word: true,
                     words,
                 });
             }

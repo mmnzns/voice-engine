@@ -51,6 +51,7 @@ pub use api::{
     Transcript, Word, load,
 };
 pub use helper::run_helper;
+pub use words::join_segments;
 
 use std::ffi::CStr;
 use voice_engine_protocol::gpu::{Device, DeviceKind, bytes_to_mb};

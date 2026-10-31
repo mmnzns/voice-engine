@@ -2,6 +2,11 @@
 
 ## v0.3.0 (unreleased)
 
+- feat: `Segment::starts_word` (#32). Segment text stays trimmed; the new field says whether a space goes before it
+  when segments are joined (Whisper: the raw text began with whitespace, so CJK joins with none; Parakeet and the other
+  ONNX models: always `true`). `voice_engine_stt::join_segments` joins by it. Reads as `true` from a helper that does
+  not send it. Breaking: `Segment` has a new public field, so code that builds a `Segment` with a struct literal must
+  set `starts_word`.
 - feat: voice detection settings (#31). `vad::VadSettings` (`threshold`, `min_speech_ms`, `min_silence_ms`, `padding_ms`;
   `Default` is the old fixed values) and `vad::detect_with(model_dir, &audio, &settings)`. `detect` is unchanged.
   Padding grows each span, stops at the ends of the audio and merges spans that meet.

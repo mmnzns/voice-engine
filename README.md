@@ -106,6 +106,12 @@ words, so an app that needs sentences and an app that needs word times make the 
 - `Timing::Words` is Ensayo's (the default): token timestamps with one word per segment, run through `words::clean`
   (noise dropped, punctuation glued to the word before, times kept in order).
 
+`Segment::text` is trimmed. `Segment::starts_word` says whether a space goes before it when segments are joined. Whisper:
+the raw segment text began with whitespace (it does not in Chinese, Japanese or Korean, where words are not spaced).
+Parakeet, Parakeet Unified and Nemotron: always `true`. The first segment's value does not matter. A helper from before
+the field reads as `true`. `join_segments(&segments)` joins by it: a single space before each segment that starts a
+word, none before one that does not.
+
 Clips under 1 s are padded with silence and times are clamped to the real audio. When a decode stops with 2 s or more of
 audio after its last word, the engine decodes the rest again from there (up to 8 passes) and
 `Transcript::stopped_early_at_ms` says where the first stop was, so an app can see how often a model gives up early.

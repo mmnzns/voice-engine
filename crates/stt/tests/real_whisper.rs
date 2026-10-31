@@ -166,6 +166,21 @@ fn segments_mode_is_what_talaans_settings_give() {
         );
         assert_eq!(got, want, "gpu {gpu}");
         check_shape(&ours, ms(&clip));
+        // English: whisper.cpp spaces every segment, so each one starts a word and the join has single spaces.
+        let starts: Vec<bool> = ours.segments.iter().map(|s| s.starts_word).collect();
+        eprintln!("gpu {gpu}: starts_word {starts:?}");
+        assert!(ours.segments.iter().all(|s| s.starts_word), "gpu {gpu}");
+        let joined = voice_engine_stt::join_segments(&ours.segments);
+        let spaced = ours
+            .segments
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            joined == spaced,
+            "gpu {gpu}: the join differs from single spaces"
+        );
     }
 }
 
