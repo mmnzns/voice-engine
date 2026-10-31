@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.3.2 (unreleased)
+## v0.3.2 (2026-10-31)
 
 Drop-in over v0.3.1: nothing that existed changes.
 

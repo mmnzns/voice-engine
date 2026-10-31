@@ -2230,7 +2230,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "voice-engine-client"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "dirs",
  "reqwest",
@@ -2242,7 +2242,7 @@ dependencies = [
 
 [[package]]
 name = "voice-engine-llm"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "llama-cpp-2",
  "serde_json",
@@ -2252,7 +2252,7 @@ dependencies = [
 
 [[package]]
 name = "voice-engine-models"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "dirs",
  "reqwest",
@@ -2262,7 +2262,7 @@ dependencies = [
 
 [[package]]
 name = "voice-engine-protocol"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "base64 0.22.1",
  "serde",
@@ -2271,7 +2271,7 @@ dependencies = [
 
 [[package]]
 name = "voice-engine-stt"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "dirs",
  "ort",

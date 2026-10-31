@@ -79,7 +79,7 @@ belongs in `~/.cargo/config.toml` or `--config`, never in that committed file.
 ## Calling it
 
 In the app's release workflow, one job calls the engine's workflow and the jobs that build the app download what it made.
-Use the same tag for `@v0.3.1` and for `engine-ref`, so the workflow, the scripts and the engine match.
+Use the same tag for `@v0.3.2` and for `engine-ref`, so the workflow, the scripts and the engine match.
 
 ```yaml
 name: Release
@@ -90,9 +90,9 @@ on:
 
 jobs:
   helpers:
-    uses: mmnzns/voice-engine/.github/workflows/build-helpers.yml@v0.3.1
+    uses: mmnzns/voice-engine/.github/workflows/build-helpers.yml@v0.3.2
     with:
-      engine-ref: v0.3.1
+      engine-ref: v0.3.2
       helpers: llm,stt                 # add llm-vulkan,stt-vulkan for the Windows x64 graphics card builds
       llm-name: ensayo-llm
       stt-name: ensayo-stt
@@ -140,9 +140,9 @@ Windows ARM64 job:
 
 ```yaml
   helpers:
-    uses: mmnzns/voice-engine/.github/workflows/build-helpers.yml@v0.3.1
+    uses: mmnzns/voice-engine/.github/workflows/build-helpers.yml@v0.3.2
     with:
-      engine-ref: v0.3.1
+      engine-ref: v0.3.2
       targets: x86_64-pc-windows-msvc,aarch64-apple-darwin
       llm-name: ensayo-llm
       stt-name: ensayo-stt
@@ -221,8 +221,8 @@ certificate. Signing changes the file, so `SHA256SUMS` describes the unsigned bu
 The same recipe the workflow runs, on a clone of the engine at the tag you want:
 
 ```
-scripts/build-helpers.sh aarch64-apple-darwin dist --engine-ref v0.3.1                     # on an Apple silicon Mac
-scripts/build-helpers.ps1 -Target x86_64-pc-windows-msvc -OutDir dist -EngineRef v0.3.1   # on Windows x64
+scripts/build-helpers.sh aarch64-apple-darwin dist --engine-ref v0.3.2                     # on an Apple silicon Mac
+scripts/build-helpers.ps1 -Target x86_64-pc-windows-msvc -OutDir dist -EngineRef v0.3.2   # on Windows x64
 ```
 
 Both take `--helpers` / `-Helpers`, `--llm-name` / `-LlmName` and `--stt-name` / `-SttName`, and refuse a target that is
