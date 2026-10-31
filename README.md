@@ -428,7 +428,7 @@ is false for `Cancelled` and `Stalled`: nothing went wrong, the partial file is 
 ## Use it in an app
 
 ```toml
-voice-engine-protocol = { git = "https://github.com/mmnzns/voice-engine", tag = "v0.2.3" }
+voice-engine-protocol = { git = "https://github.com/mmnzns/voice-engine", tag = "v0.3.0" }
 ```
 
 Every engine crate in one app uses the same tag. Each helper program stays in the app as a 3-line `main.rs`:
@@ -656,9 +656,9 @@ only when the assertion is about that text itself (a parity test that compares t
 
 | App | Engine tag |
 | --- | --- |
-| Talaan | moving to v0.2.3 |
-| Ensayo | moving to v0.2.3 |
-| Parlato | moving to v0.2.3 |
+| Talaan | moving to v0.3.0 |
+| Ensayo | moving to v0.3.0 |
+| Parlato | moving to v0.3.0 |
 
 ## Licence
 

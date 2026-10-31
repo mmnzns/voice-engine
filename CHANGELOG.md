@@ -1,6 +1,9 @@
 # Changelog
 
-## v0.3.0 (unreleased)
+## v0.3.0 (2026-10-31)
+
+The Parlato and Ensayo requests from their moves. Apps change a few lines (see the README, "Moving from v0.2.x to
+v0.3.0"); the helper protocol stays compatible both ways.
 
 Breaking: `EngineError::Crashed` is `Crashed { exit_code, signal, detail }`; match `Crashed { .. }`. `Outcome::fell_back`
 is `Outcome::fallback: Option<Fallback>` (the field is gone, `fell_back()` is a method); it is `Some` whenever the card was
