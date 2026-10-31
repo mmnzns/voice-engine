@@ -165,6 +165,16 @@ pub fn discrete_card() -> Option<Device> {
     voice_engine_protocol::gpu::discrete_card(&directml_devices()).cloned()
 }
 
+/// The graphics driver version of a card, as Windows shows it ("32.0.15.6614"), for the `Device` that `discrete_card()`
+/// (or `directml_devices()`) returned. A DirectML device is matched by its DXGI adapter number (`index`); any other
+/// device, such as one from a card helper's `devices()`, by its `description` (the first adapter with that name). None
+/// when Windows doesn't say, and in a build without the `directml` feature (or not Windows), which cannot see adapters.
+/// An app folds it into its `gpu_key` together with the card's name, so a driver update tries a card that failed
+/// before again. The Vulkan helper runs on the same card and driver, so one version covers both.
+pub fn driver_version(device: &Device) -> Option<String> {
+    directml::driver_version_of(&directml::adapters(), device)
+}
+
 /// Every device ggml registered (the CPU, and in the GPU build each Vulkan device).
 pub fn devices() -> Vec<Device> {
     let text = |p: *const std::os::raw::c_char| {

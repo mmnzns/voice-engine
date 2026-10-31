@@ -82,7 +82,7 @@ client's memory, and stops the processor helper if that is the one running, so t
 `SttClient` loads its remembered model into the new helper); a running card helper is left alone.
 `clear_gpu_failure(path)` only removes the file, which is enough for a client built afterwards but not for one already
 running. The engine compares `gpu_key` only, so an app should fold the graphics driver version into it: a driver update
-then tries the card again.
+then tries the card again. `voice_engine_stt::driver_version(&card)` gives it for the card `discrete_card()` returned.
 
 **Which model is loaded.** `ready`, the answer to `ping`, carries `loaded_model`: the `model_path` of the model the helper
 holds, left out when none is loaded (nothing yet, `unload`, or a helper started again). `LlmClient::loaded_model()` gives
@@ -277,6 +277,10 @@ answers no. It is also the card DirectML runs Parakeet on (not Windows' adapter 
 `backend().device` names it. Without the `directml` feature, or off Windows,
 `discrete_card()` cannot see adapters and returns None: an app built that way asks a card helper instead.
 
+The card's driver version is `voice_engine_stt::driver_version(&card)` (`Option<String>`, "32.0.15.6614", None when
+Windows doesn't say). Put it in the app's `gpu_key` with the card's name, so a driver update tries a card that failed
+before again. The Vulkan helper runs on the same card and driver, so one version covers both.
+
 For Whisper and the AI, the card helpers answer the same question: `SttClient::discrete_card()` and
 `LlmClient::discrete_card()` (`Result<Option<Device>, EngineError>`) are
 `voice_engine_protocol::gpu::discrete_card` over the helper's ggml devices (Vulkan), and `devices()` gives the whole
@@ -392,6 +396,8 @@ let everything = store.list();                    // every catalog model with it
   person deletes a model.
 - Test and dev builds use `SharedStore::open_at(app, dir)` with a folder of their own. It never moves anything in
   and never looks at another app's folders (`move_in` returns `already_done`). Tests must never use the real folder.
+  Because `open_at` never runs the move, `collect()` in that folder erases a model a test put there by hand without a
+  user marker. A test that copies a model in marks it with `use_model(id)`.
 - `SharedStore::read_only(app, dir)` looks without creating anything (not even the folder): for "what is on this
   computer" screens and `cargo run -p voice-engine-models --example where`. Anything that would write is refused.
 
