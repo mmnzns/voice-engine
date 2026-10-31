@@ -26,7 +26,8 @@ pub const MODELS_ENV: &str = "VOICE_ENGINE_TEST_MODELS";
 pub const SENTENCE: &str = "Hello there. This is a short test of the speech engine.";
 
 /// Set on a PC that has a card: the card tests must then run on it. A test that would skip, or accept the processor
-/// with `fell_back`, because the card did not run fails instead (see the README, "Check the graphics card on a Windows PC").
+/// with `fell_back`, because the card did not run fails instead (see the README, "Check the graphics card on a Windows
+/// PC").
 pub const EXPECT_CARD_ENV: &str = "VOICE_ENGINE_TEST_EXPECT_CARD";
 
 /// Whether `VOICE_ENGINE_TEST_EXPECT_CARD=1` is set.

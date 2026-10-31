@@ -54,9 +54,10 @@ A card failure is remembered in the `gpu_failures` file (when the config names o
 string such as `"1.2.0 | driver 560.94"`), and in the client itself until the app restarts. The app's "Try again" calls
 `retry_gpu()` on each live `LlmClient` and `SttClient`: it waits for a request in progress, clears the file and the
 client's memory, and stops the processor helper if that is the one running, so the next request starts on the card (the
-`SttClient` loads its remembered model into the new helper); a running card helper is left alone. `clear_gpu_failure(path)`
-only removes the file, which is enough for a client built afterwards but not for one already running. The engine compares
-`gpu_key` only, so an app should fold the graphics driver version into it: a driver update then tries the card again.
+`SttClient` loads its remembered model into the new helper); a running card helper is left alone.
+`clear_gpu_failure(path)` only removes the file, which is enough for a client built afterwards but not for one already
+running. The engine compares `gpu_key` only, so an app should fold the graphics driver version into it: a driver update
+then tries the card again.
 
 ## Local AI servers
 
@@ -461,7 +462,9 @@ model id) when that is set, else in the shared folder, then in Talaan's real fol
 file named by `$VOICE_ENGINE_TEST_CLIP` (16-bit PCM or 32-bit float; repeated and cut to 29 s), and the macOS `say` command
 only when that is not set and the computer is a Mac. `bench_llm` takes catalog ids (default `qwen3.5-4b` and
 `granite-4.2-3b`), reads them from `$VOICE_ENGINE_TEST_MODELS` or else the shared folder, and finds the helper at
-`$VOICE_ENGINE_TEST_HELPER` or `target/release/voice-engine-llm` (`.exe` on Windows). `download_proof` refuses to run unless `VOICE_ENGINE_MODELS_DIR` is set or `--real` is passed, and then writes into that folder (the real shared model folder for `--real`).
+`$VOICE_ENGINE_TEST_HELPER` or `target/release/voice-engine-llm` (`.exe` on Windows). `download_proof` refuses to run
+unless `VOICE_ENGINE_MODELS_DIR` is set or `--real` is passed, and then writes into that folder (the real shared model
+folder for `--real`).
 
 ### Run the speed check and the real-model tests on a Windows PC
 
