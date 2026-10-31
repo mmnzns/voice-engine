@@ -393,7 +393,11 @@ let everything = store.list();                    // every catalog model with it
   another app has it loaded right now and `collect` will erase it later; `NotUsing`). Delete all data is
   `release_all()`. Never remove a model folder yourself, with one exception: the old copy `move_in` left (see "The
   one-time move"). `release` does not touch it, and its bytes stay on disk, so an app removes its own old file when the
-  person deletes a model.
+  person deletes a model. `remove_everywhere` also removes those old copies.
+- "Remove from this computer" is `remove_everywhere(id)`: it erases the model for every app at once (folder, all
+  markers and the old copies `move_in` left), and the other apps then see it as `Missing`. Show `Status::Installed {
+  users, .. }` ("Also used by ...") in the confirmation. `Removed::InUse` when an app has it loaded or is downloading
+  it (unload yours first); `NotThere`; `Erased { old_copies_left }` counts old files that could not be deleted.
 - Test and dev builds use `SharedStore::open_at(app, dir)` with a folder of their own. It never moves anything in
   and never looks at another app's folders (`move_in` returns `already_done`). Tests must never use the real folder.
   Because `open_at` never runs the move, `collect()` in that folder erases a model a test put there by hand without a

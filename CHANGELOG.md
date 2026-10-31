@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.3.2 (unreleased)
+
+Drop-in over v0.3.1: nothing that existed changes.
+
+- feat: `SharedStore::remove_everywhere(id)` is the "Remove from this computer" button: it erases a model for every
+  app at once (folder, all markers and the old copies `move_in` left) and returns `Removed` (`Erased`, `InUse`,
+  `NotThere`) (#42).
+
 ## v0.3.1 (2026-10-31)
 
 Drop-in over v0.3.0: nothing that existed changes. One small exception: `directml::Adapter` has a new public field,
