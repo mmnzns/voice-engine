@@ -1,6 +1,9 @@
 # Changelog
 
-## v0.2.3 (unreleased)
+## v0.2.3 (2026-10-31)
+
+Fixes from Talaan's move: apps can retry the card without a restart, no example or test writes into the real shared
+folder by accident, and the docs say where the build settings go, which helper settings apply and to keep LTO off.
 
 - fix: `LlmClient::retry_gpu()` and `SttClient::retry_gpu()` re-enable the card in a running client (#24). They wait
   for a request in progress, clear the `gpu_failures` file and the client's own failure memory, and stop the processor
