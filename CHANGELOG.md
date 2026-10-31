@@ -32,6 +32,13 @@ asked for and the processor ran, so match `CardFailed | CardOutOfMemory` to say 
 - feat: voice detection settings (#31). `vad::VadSettings` (`threshold`, `min_speech_ms`, `min_silence_ms`, `padding_ms`;
   `Default` is the old fixed values) and `vad::detect_with(model_dir, &audio, &settings)`. `detect` is unchanged.
   Padding grows each span, stops at the ends of the audio and merges spans that meet.
+- feat: `build-helpers.yml` has a `targets` input, a list of target triples (default: all three), so an app can skip
+  one such as Windows ARM64 (#34). An unknown triple or an empty list fails the run with a clear message.
+- fix: the catalog lists Parakeet Unified (`parakeet-unified-en`, `parakeet-unified-en-full`) under the NVIDIA Open Model
+  License, as NVIDIA's model card says, not CC-BY-4.0 (#35). The other entries were checked and match.
+- docs: Parlato confirmed that a helper signed with a self-signed identity and the hardened runtime works inside its
+  .app; an app that links `voice-engine-stt` in process on Windows ARM64 needs clang-cl and Ninja; the hard links
+  `move_in` leaves keep the bytes on disk after `release`, so an app removes its own old copy (#35).
 
 ## v0.2.3 (2026-10-31)
 
