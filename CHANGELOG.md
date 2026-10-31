@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.2.3 (unreleased)
+
+- fix: the `download_proof` example no longer writes into the real shared model folder by accident (#23). It refuses to run
+  unless `VOICE_ENGINE_MODELS_DIR` is set or `--real` is passed, and prints the folder first; the "not the real folder"
+  test helpers moved to `crates/models/tests/support`, and a guard test fails if a test or example calls
+  `SharedStore::open(` without setting `VOICE_ENGINE_MODELS_DIR` first.
+
 ## v0.2.2 (2026-10-30)
 
 The Windows card check no longer counts a VM's or a driverless PC's display adapter as a card, and it answers within 10 s.

@@ -1,6 +1,12 @@
-//! The downloader against the real Hugging Face, into the real shared model folder (it adds `whisper-base` and
-//! `whisper-tiny`, and the folder's `.engine`; nothing already there is touched). Prints sizes, times, fractions and
-//! statuses only. Run once: `cargo run --release -p voice-engine-models --example download_proof`.
+//! The downloader against the real Hugging Face. It adds `whisper-base` and `whisper-tiny` (and the folder's
+//! `.engine`, with a `talaan` user marker for each) to the shared model folder, so it refuses to run unless you say
+//! which folder: set `VOICE_ENGINE_MODELS_DIR` to a folder of your own, or pass `--real` on purpose to write into the
+//! real shared model folder. It prints the folder before it writes. Prints sizes, times, fractions and statuses only.
+//!
+//! ```text
+//! VOICE_ENGINE_MODELS_DIR=/some/folder cargo run --release -p voice-engine-models --example download_proof
+//! cargo run --release -p voice-engine-models --example download_proof -- --real
+//! ```
 //!
 //! 1. `whisper-base` (the whole file, from nothing): progress every 10%, speed, then `status`.
 //! 2. `whisper-tiny`: cancelled at about half, `status` (`Partial` with `cancelled: true`), then downloaded again
@@ -78,8 +84,25 @@ fn run(store: &SharedStore, id: &str, cancel_at: Option<f32>) -> Result<(), Stor
 }
 
 fn main() {
+    let real = std::env::args().any(|a| a == "--real");
+    let from_env = std::env::var_os("VOICE_ENGINE_MODELS_DIR").is_some_and(|d| !d.is_empty());
+    if !real && !from_env {
+        eprintln!(
+            "refusing to run: this downloads whisper-base and whisper-tiny and adds a Talaan user marker for each.\n\
+             Set VOICE_ENGINE_MODELS_DIR to a folder of your own, or pass --real to write into the real shared folder."
+        );
+        std::process::exit(2);
+    }
     let store = SharedStore::open(App::Talaan).expect("open the shared folder");
-    println!("shared folder: {}", store.root().display());
+    println!(
+        "writing into {} ({}): whisper-base and whisper-tiny, with a Talaan user marker for each",
+        store.root().display(),
+        if from_env {
+            "VOICE_ENGINE_MODELS_DIR"
+        } else {
+            "the real shared folder, --real"
+        }
+    );
     for id in ["whisper-base", "whisper-tiny"] {
         let model = find(id).unwrap();
         println!(

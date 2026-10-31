@@ -426,7 +426,7 @@ own computer (they print times, sizes and counts, never text; always `--release`
 ```text
 cargo run --release -p voice-engine-stt --example bench                       # `-- sweep` adds other thread counts
 cargo run --release -p voice-engine-client --example bench_llm                # needs: cargo build --release -p voice-engine-llm
-cargo run --release -p voice-engine-models --example download_proof           # downloads whisper-base and whisper-tiny
+cargo run --release -p voice-engine-models --example download_proof -- --real # downloads whisper-base and whisper-tiny (or set VOICE_ENGINE_MODELS_DIR)
 ```
 
 `bench` and `bench_timing` look for each model on its own: in `$VOICE_ENGINE_TEST_MODELS` (a folder that holds a folder per
@@ -436,7 +436,7 @@ model id) when that is set, else in the shared folder, then in Talaan's real fol
 file named by `$VOICE_ENGINE_TEST_CLIP` (16-bit PCM or 32-bit float; repeated and cut to 29 s), and the macOS `say` command
 only when that is not set and the computer is a Mac. `bench_llm` takes catalog ids (default `qwen3.5-4b` and
 `granite-4.2-3b`), reads them from `$VOICE_ENGINE_TEST_MODELS` or else the shared folder, and finds the helper at
-`$VOICE_ENGINE_TEST_HELPER` or `target/release/voice-engine-llm` (`.exe` on Windows). `download_proof` writes into the real shared model folder.
+`$VOICE_ENGINE_TEST_HELPER` or `target/release/voice-engine-llm` (`.exe` on Windows). `download_proof` refuses to run unless `VOICE_ENGINE_MODELS_DIR` is set or `--real` is passed, and then writes into that folder (the real shared model folder for `--real`).
 
 ### Run the speed check and the real-model tests on a Windows PC
 
