@@ -21,7 +21,7 @@
 //! On a Mac there is no Vulkan build, so there is nothing to run.
 
 use std::path::PathBuf;
-use voice_engine_client::{Limits, LlmClient, LlmConfig, SttClient, SttConfig};
+use voice_engine_client::{Fallback, Limits, LlmClient, LlmConfig, SttClient, SttConfig};
 use voice_engine_protocol::Completion;
 use voice_engine_protocol::stt::{ChunkOptions, SttLoad, SttModelKind};
 
@@ -83,8 +83,8 @@ fn a_forced_card_failure_in_the_real_speech_helper_falls_back_to_the_processor_h
         })
         .unwrap();
     eprintln!(
-        "load: backend {}, device {:?}, fell_back {}",
-        loaded.backend.backend, loaded.backend.device, loaded.fell_back
+        "load: backend {}, device {:?}, fallback {:?}",
+        loaded.backend.backend, loaded.backend.device, loaded.fallback
     );
     if loaded.backend.backend == "cpu" {
         assert!(
@@ -98,17 +98,24 @@ fn a_forced_card_failure_in_the_real_speech_helper_falls_back_to_the_processor_h
     // The Vulkan helper aborts on this call; the processor helper loads the same model and answers it.
     let out = client.transcribe(&audio, &ChunkOptions::default()).unwrap();
     eprintln!(
-        "transcribe: backend {}, fell_back {}, {} segments",
+        "transcribe: backend {}, fallback {:?}, {} segments",
         out.backend.backend,
-        out.fell_back,
+        out.fallback,
         out.value.segments.len()
     );
     assert_eq!(out.backend.backend, "cpu");
-    assert!(out.fell_back, "the app is told the card failed");
-    // Later calls stay on the processor and say nothing more.
+    assert!(
+        matches!(
+            out.fallback,
+            Some(Fallback::CardFailed | Fallback::CardOutOfMemory)
+        ),
+        "the app is told the card failed: {:?}",
+        out.fallback
+    );
+    // Later calls stay on the processor and say the failure is remembered.
     let next = client.transcribe(&audio, &ChunkOptions::default()).unwrap();
     assert_eq!(next.backend.backend, "cpu");
-    assert!(!next.fell_back);
+    assert_eq!(next.fallback, Some(Fallback::RememberedFailure));
     client.shutdown();
 }
 
@@ -135,8 +142,8 @@ fn a_forced_card_failure_in_the_real_ai_helper_falls_back_to_the_processor_helpe
     });
     let loaded = client.load(&model, 4096, true, &mut |_| {}).unwrap();
     eprintln!(
-        "load: backend {}, device {:?}, fell_back {}",
-        loaded.backend.backend, loaded.backend.device, loaded.fell_back
+        "load: backend {}, device {:?}, fallback {:?}",
+        loaded.backend.backend, loaded.backend.device, loaded.fallback
     );
     if loaded.backend.backend == "cpu" {
         assert!(
@@ -162,13 +169,20 @@ fn a_forced_card_failure_in_the_real_ai_helper_falls_back_to_the_processor_helpe
     // The Vulkan helper aborts on this call; the processor helper loads the same model and answers it.
     let out = client.complete(completion(), &mut |_| {}).unwrap();
     eprintln!(
-        "complete: backend {}, fell_back {}, {} tokens out",
-        out.backend.backend, out.fell_back, out.value.output_tokens
+        "complete: backend {}, fallback {:?}, {} tokens out",
+        out.backend.backend, out.fallback, out.value.output_tokens
     );
     assert_eq!(out.backend.backend, "cpu");
-    assert!(out.fell_back, "the app is told the card failed");
+    assert!(
+        matches!(
+            out.fallback,
+            Some(Fallback::CardFailed | Fallback::CardOutOfMemory)
+        ),
+        "the app is told the card failed: {:?}",
+        out.fallback
+    );
     let next = client.complete(completion(), &mut |_| {}).unwrap();
     assert_eq!(next.backend.backend, "cpu");
-    assert!(!next.fell_back);
+    assert_eq!(next.fallback, Some(Fallback::RememberedFailure));
     client.shutdown();
 }

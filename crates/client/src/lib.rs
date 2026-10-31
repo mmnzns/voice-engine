@@ -18,6 +18,7 @@ pub use error::EngineError;
 pub use gpu_memory::clear_gpu_failure;
 pub use llm::{Limits, LlmClient, LlmConfig, LoadInfo, Outcome};
 pub use stt::{SttClient, SttConfig, SttLoadInfo};
+pub use voice_engine_protocol::Fallback;
 
 /// Only for this crate's own integration tests, which need the process type that apps never see.
 #[doc(hidden)]

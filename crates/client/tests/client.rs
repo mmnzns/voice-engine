@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use voice_engine_client::{EngineError, Limits, LlmClient, LlmConfig};
+use voice_engine_client::{EngineError, Fallback, Limits, LlmClient, LlmConfig};
 use voice_engine_protocol::Completion;
 
 /// Helpers that start at the same moment can crash on a Mac (see CHANGELOG), so the tests take turns.
@@ -71,7 +71,7 @@ fn a_reply_comes_back_with_progress_and_the_backend() {
     assert_eq!(out.value.text, "hi");
     assert!(progress >= 1);
     assert_eq!(out.backend.backend, "cpu");
-    assert!(!out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::NoCardHelper));
 }
 
 #[test]
@@ -299,7 +299,7 @@ fn the_graphics_card_helper_is_used_when_it_works() {
     ));
     let out = client.complete(completion(), &mut |_| {}).unwrap();
     assert_eq!(out.backend.backend, "vulkan");
-    assert!(!out.fell_back);
+    assert_eq!(out.fallback, None);
 }
 
 #[test]
@@ -311,7 +311,7 @@ fn a_graphics_card_helper_that_dies_hands_the_request_to_the_processor_and_is_re
     let out = client.complete(completion(), &mut |_| {}).unwrap();
     assert_eq!(out.value.text, "hi");
     assert_eq!(out.backend.backend, "cpu");
-    assert!(out.fell_back, "the app is told the card failed, once");
+    assert_eq!(out.fallback, Some(Fallback::CardFailed));
     assert_eq!(
         std::fs::read_to_string(&failures).unwrap().trim(),
         "test-build"
@@ -321,7 +321,7 @@ fn a_graphics_card_helper_that_dies_hands_the_request_to_the_processor_and_is_re
     let again = LlmClient::new(with_gpu(config("", &st), "gpu_die", &failures));
     let out = again.complete(completion(), &mut |_| {}).unwrap();
     assert_eq!(out.backend.backend, "cpu");
-    assert!(!out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::RememberedFailure));
 
     // A new build (or driver) gets a fresh try.
     let mut newer = with_gpu(config("", &st), "gpu_die", &failures);
@@ -329,8 +329,9 @@ fn a_graphics_card_helper_that_dies_hands_the_request_to_the_processor_and_is_re
     let out = LlmClient::new(newer)
         .complete(completion(), &mut |_| {})
         .unwrap();
-    assert!(
-        out.fell_back,
+    assert_eq!(
+        out.fallback,
+        Some(Fallback::CardFailed),
         "the new key tried the card again and it failed again"
     );
 
@@ -349,7 +350,7 @@ fn a_graphics_card_error_from_the_helper_also_falls_back() {
         &d.path().join("gpu.txt"),
     ));
     let out = client.complete(completion(), &mut |_| {}).unwrap();
-    assert!(out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::CardFailed));
     assert_eq!(out.backend.backend, "cpu");
 }
 
@@ -387,7 +388,7 @@ fn the_fallback_to_the_processor_helper_says_gpu_false_and_the_next_calls_go_str
     // The app asks for the card (gpu: true); the card helper dies on it; the processor helper gets the same request
     // but with gpu: false, so a helper that is also the Mac's Metal helper really runs on the processor.
     let out = client.complete(completion(), &mut |_| {}).unwrap();
-    assert!(out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::CardFailed));
     assert_eq!(
         asked(&log),
         ["[gpu_die] complete gpu=true", "[] complete gpu=false"]
@@ -395,7 +396,7 @@ fn the_fallback_to_the_processor_helper_says_gpu_false_and_the_next_calls_go_str
     // The next calls go straight to the processor helper (no more lines from the card helper), say nothing about a
     // fallback, and every kind of request carries gpu: false although the app still says true.
     let next = client.complete(completion(), &mut |_| {}).unwrap();
-    assert!(!next.fell_back);
+    assert_eq!(next.fallback, Some(Fallback::RememberedFailure));
     client.load("/m.gguf", 512, true, &mut |_| {}).unwrap();
     client.embed(embedding(true)).unwrap();
     assert_eq!(
@@ -419,7 +420,7 @@ fn an_error_from_the_card_helper_also_resends_with_gpu_false() {
         &d.path().join("gpu.txt"),
     ));
     let out = client.complete(completion(), &mut |_| {}).unwrap();
-    assert!(out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::CardFailed));
     assert_eq!(
         asked(&log),
         ["[gpu_error] complete gpu=true", "[] complete gpu=false"]
@@ -435,7 +436,7 @@ fn a_remembered_failure_sends_gpu_false_to_the_processor_helper_from_the_first_r
     std::fs::write(&failures, "test-build").unwrap();
     let client = LlmClient::new(with_gpu(logged("", &st, &log), "gpu_die", &failures));
     let out = client.complete(completion(), &mut |_| {}).unwrap();
-    assert!(!out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::RememberedFailure));
     assert_eq!(asked(&log), ["[] complete gpu=false"]);
 }
 
@@ -471,7 +472,7 @@ fn a_metal_helper_that_dies_is_a_card_failure_too() {
     let out = client.complete(completion(), &mut |_| {}).unwrap();
     assert_eq!(out.value.text, "hi");
     assert_eq!(out.backend.backend, "cpu");
-    assert!(out.fell_back, "not a plain crash");
+    assert_eq!(out.fallback, Some(Fallback::CardFailed));
     assert_eq!(
         std::fs::read_to_string(&failures).unwrap().trim(),
         "test-build"
@@ -481,18 +482,131 @@ fn a_metal_helper_that_dies_is_a_card_failure_too() {
         ["[metal_die] complete gpu=true", "[] complete gpu=false"]
     );
     // Remembered: the next call, and a new client, go straight to the processor helper.
-    assert!(
-        !client
-            .complete(completion(), &mut |_| {})
-            .unwrap()
-            .fell_back
+    assert_eq!(
+        client.complete(completion(), &mut |_| {}).unwrap().fallback,
+        Some(Fallback::RememberedFailure)
     );
     let again = LlmClient::new(with_gpu(logged("", &st, &log), "metal_die", &failures));
-    assert!(!again.complete(completion(), &mut |_| {}).unwrap().fell_back);
+    assert_eq!(
+        again.complete(completion(), &mut |_| {}).unwrap().fallback,
+        Some(Fallback::RememberedFailure)
+    );
     assert_eq!(
         asked(&log)[2..],
         ["[] complete gpu=false", "[] complete gpu=false"]
     );
+}
+
+/// What `complete` with `gpu: true` and `gpu: false` say about the card, one client each time.
+fn reasons(cfg: LlmConfig) -> (Option<Fallback>, Option<Fallback>) {
+    let client = LlmClient::new(cfg);
+    let wanted = client.complete(completion(), &mut |_| {}).unwrap();
+    let mut off = completion();
+    off.gpu = false;
+    let refused = client.complete(off, &mut |_| {}).unwrap();
+    (wanted.fallback, refused.fallback)
+}
+
+#[test]
+fn without_a_card_helper_a_processor_answer_to_a_card_request_says_there_is_no_card_helper() {
+    let _t = turn();
+    let (_d, st) = state();
+    // The processor helper alone: "never tried" is told apart from "worked", and a request that did not ask for the
+    // card has no reason.
+    let (wanted, off) = reasons(config("", &st));
+    assert_eq!(wanted, Some(Fallback::NoCardHelper));
+    assert_eq!(off, None);
+    let out = LlmClient::new(config("", &st))
+        .complete(completion(), &mut |_| {})
+        .unwrap();
+    assert!(out.fell_back());
+}
+
+#[test]
+fn the_mac_helper_answers_per_request_and_a_cpu_answer_to_a_card_request_there_is_no_card_path() {
+    let _t = turn();
+    let (_d, st) = state();
+    // The Mac with no gpu_helper: `metal` for gpu: true, `cpu` for gpu: false; neither needs a reason.
+    assert_eq!(reasons(config("per_request", &st)), (None, None));
+    // The Mac helper that has no card runtime for the model: it started on `metal` and still answers `cpu`.
+    let (wanted, off) = reasons(config("no_card_path", &st));
+    assert_eq!(wanted, Some(Fallback::NoCardPath));
+    assert_eq!(off, None);
+    // Load and embed say it too.
+    let client = LlmClient::new(config("no_card_path", &st));
+    let loaded = client.load("/m.gguf", 512, true, &mut |_| {}).unwrap();
+    assert_eq!(loaded.fallback, Some(Fallback::NoCardPath));
+    assert_eq!(
+        client.embed(embedding(true)).unwrap().fallback,
+        Some(Fallback::NoCardPath)
+    );
+    assert_eq!(client.embed(embedding(false)).unwrap().fallback, None);
+}
+
+#[test]
+fn a_card_helper_that_works_has_no_reason_and_one_that_runs_on_the_processor_says_the_card_failed()
+{
+    let _t = turn();
+    let (d, st) = state();
+    let failures = d.path().join("gpu.txt");
+    assert_eq!(
+        reasons(with_gpu(config("", &st), "gpu_ok", &failures)),
+        (None, None)
+    );
+    // The card helper started but answers with the processor (a Vulkan build on a PC with no usable card).
+    let (wanted, off) = reasons(with_gpu(config("", &st), "", &failures));
+    assert_eq!(wanted, Some(Fallback::CardFailed));
+    assert_eq!(off, None);
+}
+
+#[test]
+fn a_card_helper_that_cannot_start_is_a_card_failure_this_time_and_remembered_after() {
+    let _t = turn();
+    let (d, st) = state();
+    let failures = d.path().join("gpu.txt");
+    let client = LlmClient::new(with_gpu(config("", &st), "die_at_start", &failures));
+    let first = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(first.fallback, Some(Fallback::CardFailed));
+    let next = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(next.fallback, Some(Fallback::RememberedFailure));
+    // A request that did not ask for the card is not about the card.
+    let mut off = completion();
+    off.gpu = false;
+    assert_eq!(client.complete(off, &mut |_| {}).unwrap().fallback, None);
+}
+
+#[test]
+fn a_card_helper_that_dies_of_memory_says_out_of_memory_and_the_next_call_says_remembered() {
+    let _t = turn();
+    let (d, st) = state();
+    let failures = d.path().join("gpu.txt");
+    let client = LlmClient::new(with_gpu(config("", &st), "gpu_oom", &failures));
+    let out = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(out.backend.backend, "cpu");
+    assert_eq!(out.fallback, Some(Fallback::CardOutOfMemory));
+    assert!(out.fell_back());
+    let next = client.complete(completion(), &mut |_| {}).unwrap();
+    assert_eq!(next.fallback, Some(Fallback::RememberedFailure));
+}
+
+#[test]
+fn load_and_embed_report_the_reason_too_and_a_retry_clears_it() {
+    let _t = turn();
+    let (d, st) = state();
+    let failures = d.path().join("gpu.txt");
+    std::fs::write(&failures, "test-build").unwrap();
+    let client = LlmClient::new(with_gpu(config("", &st), "gpu_ok", &failures));
+    let loaded = client.load("/m.gguf", 512, true, &mut |_| {}).unwrap();
+    assert_eq!(loaded.fallback, Some(Fallback::RememberedFailure));
+    assert_eq!(
+        client.embed(embedding(true)).unwrap().fallback,
+        Some(Fallback::RememberedFailure)
+    );
+    assert_eq!(client.embed(embedding(false)).unwrap().fallback, None);
+    client.retry_gpu();
+    let loaded = client.load("/m.gguf", 512, true, &mut |_| {}).unwrap();
+    assert_eq!(loaded.fallback, None);
+    assert_eq!(loaded.backend.backend, "vulkan");
 }
 
 #[test]
@@ -681,7 +795,7 @@ fn retry_gpu_puts_a_running_client_back_on_the_card_and_forgets_the_failure() {
     let client = LlmClient::new(with_gpu(config("", &st), "gpu_die_once", &failures));
     let out = client.complete(completion(), &mut |_| {}).unwrap();
     assert_eq!(out.backend.backend, "cpu");
-    assert!(out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::CardFailed));
     assert!(failures.exists());
     // Still on the processor, whatever the app does to the file alone.
     voice_engine_client::clear_gpu_failure(&failures);
@@ -695,7 +809,7 @@ fn retry_gpu_puts_a_running_client_back_on_the_card_and_forgets_the_failure() {
     assert!(!failures.exists());
     let out = client.complete(completion(), &mut |_| {}).unwrap();
     assert_eq!(out.backend.backend, "vulkan");
-    assert!(!out.fell_back);
+    assert_eq!(out.fallback, None);
     assert!(!failures.exists());
     // With the card helper running, retry_gpu leaves it alone.
     client.retry_gpu();
@@ -713,7 +827,7 @@ fn retry_gpu_on_a_client_that_started_on_a_remembered_failure_tries_the_card() {
     let client = LlmClient::new(with_gpu(config("", &st), "gpu_ok", &failures));
     let out = client.complete(completion(), &mut |_| {}).unwrap();
     assert_eq!(out.backend.backend, "cpu");
-    assert!(!out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::RememberedFailure));
     client.retry_gpu();
     assert!(!failures.exists());
     let out = client.complete(completion(), &mut |_| {}).unwrap();

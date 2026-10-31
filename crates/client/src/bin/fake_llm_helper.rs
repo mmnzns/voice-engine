@@ -15,6 +15,8 @@
 //!
 //! `die_noisy` writes what `FAKE_STDERR` (lines separated by `~`) and `FAKE_STDERR_LONG` (one line of that many
 //! letters) say to stderr and exits with `FAKE_EXIT` on `complete`; `sigkill` ends itself with SIGKILL on `complete`.
+//! `no_card_path` is a Mac helper that has no card runtime for the model: `ready` says `metal`, and every reply says
+//! `cpu`. `gpu_oom` reports a Vulkan GPU and dies of memory on `complete` (an out-of-memory line on stderr).
 //!
 //! `devices` answers with the list `FAKE_DEVICES` describes (fake_support/devices.rs); mode `no_devices` never answers it.
 //!
@@ -79,10 +81,10 @@ fn main() {
     // What a reply says for a request: the Mac helper's answer, or nothing (an older helper).
     let says = |gpu: bool| match mode.as_str() {
         "per_request" if gpu => metal.clone(),
-        "per_request" => Backend::cpu(),
+        "per_request" | "no_card_path" => Backend::cpu(),
         _ => Backend::default(),
     };
-    let backend = if mode == "per_request" || mode == "metal_die" {
+    let backend = if matches!(mode.as_str(), "per_request" | "metal_die" | "no_card_path") {
         metal.clone()
     } else if mode.starts_with("gpu") {
         Backend {
@@ -126,7 +128,7 @@ fn main() {
                 send(&Event::Loaded {
                     seconds: 0.5,
                     n_ctx_train: 4096,
-                    backend: if mode == "per_request" {
+                    backend: if matches!(mode.as_str(), "per_request" | "no_card_path") {
                         says(l.gpu)
                     } else {
                         backend.clone()
@@ -184,7 +186,7 @@ fn main() {
                         }
                         answer(says(c.gpu));
                     }
-                    "oom" => {
+                    "oom" | "gpu_oom" => {
                         eprintln!("GGML_ASSERT: out of memory");
                         std::process::exit(137);
                     }

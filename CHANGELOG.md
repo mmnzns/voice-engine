@@ -2,11 +2,17 @@
 
 ## v0.3.0 (unreleased)
 
-Breaking: `EngineError::Crashed` is `Crashed { exit_code, signal, detail }`; match `Crashed { .. }`.
+Breaking: `EngineError::Crashed` is `Crashed { exit_code, signal, detail }`; match `Crashed { .. }`. `Outcome::fell_back`
+is `Outcome::fallback: Option<Fallback>` (the field is gone, `fell_back()` is a method); it is `Some` whenever the card was
+asked for and the processor ran, so match `CardFailed | CardOutOfMemory` to say "card failed" once.
 
 - feat: out-of-memory deaths are recognised from more messages, Windows' `STATUS_NO_MEMORY` and a Unix SIGKILL, and
   `EngineError::Crashed` carries the exit code, the signal and a short stderr tail with no user text (#26). A helper
   that exits by itself is waited for up to 1 s so its exit status can be read.
+- feat: `Outcome::fallback: Option<Fallback>` says why the card was not used (`NoCardPath`, `CardFailed`,
+  `CardOutOfMemory`, `RememberedFailure`, `NoCardHelper`) when the app asked for it and the processor ran (#27). The client
+  works it out, so helpers need no change. A processor helper answering a `gpu: true` request with no `gpu_helper` is now
+  `NoCardHelper`, not "no fallback"; the Mac's Metal helper that answers `cpu` is `NoCardPath`.
 
 ## v0.2.3 (2026-10-31)
 

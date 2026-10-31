@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use voice_engine_client::{EngineError, Limits, SttClient, SttConfig};
+use voice_engine_client::{EngineError, Fallback, Limits, SttClient, SttConfig};
 use voice_engine_protocol::stt::{ChunkOptions, SttLoad, SttModelKind, Timing};
 
 /// Helpers that start at the same moment can crash on a Mac (see CHANGELOG), so the tests take turns.
@@ -68,7 +68,7 @@ fn a_model_is_loaded_and_audio_comes_back_as_a_transcript_with_the_backend() {
     let loaded = client.load(model("whisper-turbo")).unwrap();
     assert_eq!(loaded.value.seconds, 0.5);
     assert_eq!(loaded.backend.backend, "cpu");
-    assert!(!loaded.fell_back);
+    assert_eq!(loaded.fallback, Some(Fallback::NoCardHelper));
 
     let options = ChunkOptions {
         language: Some("fr".into()),
@@ -84,7 +84,7 @@ fn a_model_is_loaded_and_audio_comes_back_as_a_transcript_with_the_backend() {
     assert_eq!(t.language.as_deref(), Some("whisper-turbo"));
     assert_eq!(t.stopped_early_at_ms, Some(16_000));
     assert_eq!(out.backend.backend, "cpu");
-    assert!(!out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::NoCardHelper));
     // It stays loaded between calls: a second call needs no load.
     let again = client.transcribe(&audio(), &opts()).unwrap();
     assert_eq!(again.value.segments[0].text, "words vocab=0 lang=none");
@@ -414,7 +414,7 @@ fn the_graphics_card_helper_is_used_when_it_works() {
     assert_eq!(out.backend.backend, "vulkan");
     assert_eq!(out.backend.device.as_deref(), Some("Fake GPU"));
     assert_eq!(out.backend.vram_mb, 8000);
-    assert!(!out.fell_back);
+    assert_eq!(out.fallback, None);
     client.shutdown();
 }
 
@@ -430,7 +430,7 @@ fn a_graphics_card_helper_that_dies_hands_the_call_to_the_processor_helper_and_i
     let out = client.transcribe(&audio(), &opts()).unwrap();
     assert_eq!(out.value.language.as_deref(), Some("whisper-turbo"));
     assert_eq!(out.backend.backend, "cpu");
-    assert!(out.fell_back, "the app is told the card failed, once");
+    assert_eq!(out.fallback, Some(Fallback::CardFailed));
     assert_eq!(
         std::fs::read_to_string(&failures).unwrap().trim(),
         "test-build"
@@ -438,13 +438,13 @@ fn a_graphics_card_helper_that_dies_hands_the_call_to_the_processor_helper_and_i
     // Later calls stay on the processor and say nothing more.
     let next = client.transcribe(&audio(), &opts()).unwrap();
     assert_eq!(next.backend.backend, "cpu");
-    assert!(!next.fell_back);
+    assert_eq!(next.fallback, Some(Fallback::RememberedFailure));
 
     // A new client (the app restarted) with the same build and driver doesn't try the card again.
     let again = SttClient::new(with_gpu(config("", &st), "gpu_die", &failures));
     let first = again.load(model("whisper-turbo")).unwrap();
     assert_eq!(first.backend.backend, "cpu");
-    assert!(!first.fell_back);
+    assert_eq!(first.fallback, Some(Fallback::RememberedFailure));
 
     // A new build (or driver) gets a fresh try.
     let mut newer = with_gpu(config("", &st), "gpu_die", &failures);
@@ -454,7 +454,10 @@ fn a_graphics_card_helper_that_dies_hands_the_call_to_the_processor_helper_and_i
         newer.load(model("whisper-turbo")).unwrap().backend.backend,
         "vulkan"
     );
-    assert!(newer.transcribe(&audio(), &opts()).unwrap().fell_back);
+    assert_eq!(
+        newer.transcribe(&audio(), &opts()).unwrap().fallback,
+        Some(Fallback::CardFailed)
+    );
 
     // The app's "try the graphics card again" button.
     voice_engine_client::clear_gpu_failure(&failures);
@@ -488,22 +491,25 @@ fn the_fallback_to_the_processor_helper_loads_the_model_with_gpu_false() {
     // The card helper dies on the audio; the processor helper loads the remembered model, saying gpu: false, and
     // answers; the app is told once.
     let out = client.transcribe(&audio(), &opts()).unwrap();
-    assert!(out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::CardFailed));
     assert_eq!(
         asked(&log),
         ["[gpu_die] load gpu=true", "[] load gpu=false"]
     );
     // Straight to the processor helper from now on: nothing is loaded again, and nothing more is said.
     let next = client.transcribe(&audio(), &opts()).unwrap();
-    assert!(!next.fell_back);
+    assert_eq!(next.fallback, Some(Fallback::RememberedFailure));
     assert_eq!(asked(&log).len(), 2);
     // The app loads a model again (gpu: true, as it always asks) and the processor helper is told gpu: false.
     let again = client.load(model("whisper-base")).unwrap();
-    assert!(!again.fell_back);
+    assert_eq!(again.fallback, Some(Fallback::RememberedFailure));
     assert_eq!(asked(&log)[2..], ["[] load gpu=false"]);
     // A new helper after `shutdown` is the processor one and gets the remembered model with gpu: false.
     client.shutdown();
-    assert!(!client.transcribe(&audio(), &opts()).unwrap().fell_back);
+    assert_eq!(
+        client.transcribe(&audio(), &opts()).unwrap().fallback,
+        Some(Fallback::RememberedFailure)
+    );
     assert_eq!(asked(&log)[3..], ["[] load gpu=false"]);
 }
 
@@ -519,7 +525,7 @@ fn an_error_from_the_card_helper_also_loads_with_gpu_false_on_the_processor_help
     ));
     client.load(model("whisper-turbo")).unwrap();
     let out = client.transcribe(&audio(), &opts()).unwrap();
-    assert!(out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::CardFailed));
     assert_eq!(
         asked(&log),
         ["[gpu_error] load gpu=true", "[] load gpu=false"]
@@ -535,7 +541,7 @@ fn a_remembered_failure_loads_with_gpu_false_from_the_first_request() {
     std::fs::write(&failures, "test-build").unwrap();
     let client = SttClient::new(with_gpu(logged("", &st, &log), "gpu_die", &failures));
     let loaded = client.load(model("whisper-turbo")).unwrap();
-    assert!(!loaded.fell_back);
+    assert_eq!(loaded.fallback, Some(Fallback::RememberedFailure));
     client.transcribe(&audio(), &opts()).unwrap();
     assert_eq!(asked(&log), ["[] load gpu=false"]);
 }
@@ -573,23 +579,73 @@ fn a_graphics_card_error_from_the_helper_also_falls_back() {
     ));
     client.load(model("whisper-turbo")).unwrap();
     let out = client.transcribe(&audio(), &opts()).unwrap();
-    assert!(out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::CardFailed));
     assert_eq!(out.backend.backend, "cpu");
 }
 
 #[test]
-fn a_model_that_runs_on_the_processor_though_the_card_was_asked_for_says_it_fell_back() {
+fn a_model_that_runs_on_the_processor_though_the_card_was_asked_for_has_a_reason() {
     let _t = turn();
     let (_d, st) = state();
-    // The helper itself reports `fell_back` (the engine could not start the card): the app hears it from `fell_back`
-    // without any process having died.
+    // The helper itself reports `fell_back` (the engine could not start the card): the app hears it as a reason
+    // without any process having died. This helper is the processor build (it said `cpu` at start): no card helper.
     let client = SttClient::new(config("cpu_fallback", &st));
     let loaded = client.load(model("whisper-turbo")).unwrap();
-    assert!(loaded.fell_back);
+    assert_eq!(loaded.fallback, Some(Fallback::NoCardHelper));
     let out = client.transcribe(&audio(), &opts()).unwrap();
-    assert!(out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::NoCardHelper));
+    assert!(out.fell_back());
     assert_eq!(out.backend.backend, "cpu");
     client.shutdown();
+}
+
+#[test]
+fn a_model_loaded_without_asking_for_the_card_has_no_reason() {
+    let _t = turn();
+    let (_d, st) = state();
+    let mut off = model("whisper-turbo");
+    off.gpu = false;
+    // A processor helper alone, and the same helper saying it fell back: neither is about a card nobody asked for.
+    for mode in ["", "cpu_fallback"] {
+        let client = SttClient::new(config(mode, &st));
+        assert_eq!(client.load(off.clone()).unwrap().fallback, None);
+        assert_eq!(client.transcribe(&audio(), &opts()).unwrap().fallback, None);
+    }
+}
+
+#[test]
+fn a_mac_helper_that_could_not_use_the_card_says_the_card_failed() {
+    let _t = turn();
+    let (_d, st) = state();
+    // The single helper started on `metal`, and its load says `cpu` with `fell_back`.
+    let client = SttClient::new(config("metal_refused", &st));
+    let loaded = client.load(model("whisper-turbo")).unwrap();
+    assert_eq!(loaded.fallback, Some(Fallback::CardFailed));
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(out.fallback, Some(Fallback::CardFailed));
+}
+
+#[test]
+fn a_card_helper_that_cannot_start_or_dies_of_memory_gives_its_own_reason_this_time() {
+    let _t = turn();
+    let (d, st) = state();
+    let failures = d.path().join("gpu.txt");
+    let client = SttClient::new(with_gpu(config("", &st), "die_at_start", &failures));
+    let loaded = client.load(model("whisper-turbo")).unwrap();
+    assert_eq!(loaded.fallback, Some(Fallback::CardFailed));
+    // The model is loaded on the processor helper now: later calls say the failure is remembered.
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(out.fallback, Some(Fallback::RememberedFailure));
+    client.shutdown();
+
+    let failures = d.path().join("gpu-oom.txt");
+    let client = SttClient::new(with_gpu(config("", &st), "gpu_oom", &failures));
+    client.load(model("whisper-turbo")).unwrap();
+    let out = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(out.backend.backend, "cpu");
+    assert_eq!(out.fallback, Some(Fallback::CardOutOfMemory));
+    let next = client.transcribe(&audio(), &opts()).unwrap();
+    assert_eq!(next.fallback, Some(Fallback::RememberedFailure));
 }
 
 #[test]
@@ -771,7 +827,7 @@ fn retry_gpu_puts_a_running_client_back_on_the_card_and_loads_the_model_there() 
     client.load(model("whisper-turbo")).unwrap();
     let out = client.transcribe(&audio(), &opts()).unwrap();
     assert_eq!(out.backend.backend, "cpu");
-    assert!(out.fell_back);
+    assert_eq!(out.fallback, Some(Fallback::CardFailed));
     assert!(failures.exists());
     // Still on the processor, whatever the app does to the file alone.
     voice_engine_client::clear_gpu_failure(&failures);
@@ -786,7 +842,7 @@ fn retry_gpu_puts_a_running_client_back_on_the_card_and_loads_the_model_there() 
     let out = client.transcribe(&audio(), &opts()).unwrap();
     assert_eq!(out.backend.backend, "vulkan");
     assert_eq!(out.value.language.as_deref(), Some("whisper-turbo"));
-    assert!(!out.fell_back);
+    assert_eq!(out.fallback, None);
     assert!(!failures.exists());
     assert_eq!(
         asked(&log),

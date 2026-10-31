@@ -147,11 +147,11 @@ fn a_say_clip_through_the_real_helper_and_the_model_stays_loaded_between_calls()
         loaded.value.seconds,
         began.elapsed().as_secs_f32(),
         loaded.backend,
-        loaded.fell_back
+        loaded.fell_back()
     );
     assert!(loaded.value.seconds > 0.0);
     assert_eq!(loaded.backend.backend, "metal");
-    assert!(!loaded.fell_back);
+    assert!(!loaded.fell_back());
 
     // The link goes away: from here the model can only be in the helper's memory. A helper that read the file again
     // for each call (or a client that started a new helper) would answer `model_missing`.
@@ -195,7 +195,7 @@ fn a_say_clip_through_the_real_helper_and_the_model_stays_loaded_between_calls()
     check_words(&words.value, ms(&clip));
     assert!(words.value.segments.iter().all(|s| s.words.len() == 1));
     assert_eq!(words.backend.backend, "metal");
-    assert!(!words.fell_back);
+    assert!(!words.fell_back());
 
     let segments = c
         .transcribe(

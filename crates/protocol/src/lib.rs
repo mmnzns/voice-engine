@@ -140,6 +140,29 @@ impl Backend {
     }
 }
 
+/// Why work the app asked to run on the graphics card (`gpu: true`) ran on the processor. The client works it out
+/// (a helper says where a request ran, not why it did not run on the card), so no message carries it and older helpers
+/// need no change; it lives here because the AI and speech clients share it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum Fallback {
+    /// The model has no card runtime on this system (a helper on a card-capable system answered with the processor
+    /// without a failure).
+    NoCardPath,
+    /// This time the card helper could not start, died, or reported a card failure, and the processor did the work.
+    /// Also the answer of a card helper that started but ran on the processor. This is the one an app tells the
+    /// person about, once.
+    CardFailed,
+    /// This time the card helper died of lack of memory (its stderr said so, or the system ended it), and the
+    /// processor did the work.
+    CardOutOfMemory,
+    /// The card was not tried: it failed in an earlier call, in an earlier run (the `gpu_failures` file) or since the
+    /// app started, and has not been given a new try (`retry_gpu`). The person was told when it happened.
+    RememberedFailure,
+    /// The app asked for the card but there is no card helper: this build ships the processor helper only.
+    NoCardHelper,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
@@ -432,6 +455,21 @@ mod tests {
             panic!("not ready: {ev:?}")
         };
         assert_eq!(protocol, 0);
+    }
+
+    #[test]
+    fn a_fallback_reason_is_a_snake_case_word() {
+        for (fallback, word) in [
+            (Fallback::NoCardPath, "no_card_path"),
+            (Fallback::CardFailed, "card_failed"),
+            (Fallback::CardOutOfMemory, "card_out_of_memory"),
+            (Fallback::RememberedFailure, "remembered_failure"),
+            (Fallback::NoCardHelper, "no_card_helper"),
+        ] {
+            let json = format!("\"{word}\"");
+            assert_eq!(serde_json::to_string(&fallback).unwrap(), json);
+            assert_eq!(serde_json::from_str::<Fallback>(&json).unwrap(), fallback);
+        }
     }
 
     #[test]

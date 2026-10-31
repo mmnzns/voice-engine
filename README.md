@@ -41,8 +41,23 @@ helper that dies at startup.
 
 `voice-engine-client` is what an app uses to talk to its AI helper: build an `LlmClient` with the helper paths and
 call `load`, `complete`, `embed`, `inspect`, `devices`, `unload`, `set_idle` and `cancel` from any thread. Match failures on
-`EngineError`, never on text. Each result says which backend ran it and whether the graphics card failed during the
-call (`fell_back`): show "Graphics card failed, used processor" once, then keep passing the same config.
+`EngineError`, never on text. Each result (`Outcome`) says which backend ran it and, when the app asked for the card
+and the processor did the work, why (`fallback`, below): show "Graphics card failed, used processor" once, when it is
+`CardFailed` or `CardOutOfMemory`, then keep passing the same config.
+
+`Outcome::fallback` is `Option<Fallback>`. It is `None` when the request ran on the card, and when it did not ask for the
+card (`gpu: false`). When the app asked for the card (`gpu: true`) and the processor ran, it is one of:
+
+| `Fallback` | Why | What the app does |
+| --- | --- | --- |
+| `CardFailed` | the card helper could not start, died, or said the card failed, during this call (or the card helper that started ran on the processor) | say so once |
+| `CardOutOfMemory` | the card helper died of lack of memory during this call | say so once (the model may not fit the card) |
+| `RememberedFailure` | the card was not tried: it failed earlier (this run, or the `gpu_failures` file) and `retry_gpu` has not cleared it | nothing; the person was told |
+| `NoCardHelper` | `gpu_helper` is not set and the one helper is a processor build | nothing; this build has no card helper |
+| `NoCardPath` | the one helper is a card helper (the Mac's Metal helper) and still answered with the processor | nothing; the model has no card runtime |
+
+`Outcome::fell_back()` is `fallback.is_some()`. The client works the reason out; no helper message carries it, so a
+helper from v0.2.x works as before.
 
 When `gpu_helper` is set and the card helper fails (it dies, says the card failed, or failed in an earlier run), the
 processor helper gets the same request with `gpu: false` (`load`, `complete`, `embed` in `LlmClient`; the `load` in
@@ -75,6 +90,10 @@ not exit within a second of closing its output is stopped by the client and repo
 
 - `EngineError::Crashed` is a struct variant now: match `EngineError::Crashed { .. }`, or read `exit_code`, `signal` and
   `detail` for the log.
+- `Outcome::fell_back` (a field) is `Outcome::fallback: Option<Fallback>` now, with `fell_back()` as a method. It is `Some`
+  whenever the app asked for the card and the processor ran, not only on the call where the card failed: to say "graphics
+  card failed" once, match `Some(Fallback::CardFailed | Fallback::CardOutOfMemory)`; `RememberedFailure`, `NoCardHelper`
+  and `NoCardPath` need no message. `Fallback` is exported from `voice_engine_client` and `voice_engine_protocol`.
 
 ## Local AI servers
 
@@ -181,7 +200,8 @@ protocol 2 in `voice_engine_protocol::stt`; the Vulkan build is never linked int
 a `SttClient` with the paths of its helpers (a Vulkan one and a processor one) and calls `load`, `transcribe`, `devices`,
 `unload`, `cancel` and `shutdown` from any thread; failures are `EngineError` (`BadModel`, `TooLong`, `Unsupported`, `Crashed`,
 `OutOfMemory`, `Cancelled`, and the others). It works like `LlmClient`: it starts the helper, restarts it when it dies,
-tries the Vulkan helper first and falls back to the processor helper with the failure remembered (`fell_back`). The client
+tries the Vulkan helper first and falls back to the processor helper with the failure remembered (`Outcome::fallback`, as
+for `LlmClient`; a `Transcribe` says why the model runs on the processor when the loaded model asked for the card). The client
 remembers the model the app loaded and loads it into every helper it has to start again, so a crash costs the app one
 `Crashed` and nothing else. The helper serves Whisper only; the ONNX models run in the app's own process through `load`.
 `cancel` ends the call with `Cancelled`, but a Whisper decode cannot be interrupted, so unless the helper answers sooner,

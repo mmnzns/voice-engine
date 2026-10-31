@@ -18,6 +18,8 @@
 //!   does that for the first `transcribe` (over all starts) and works after; `gpu_error` reports a
 //!   card and answers `transcribe` with the graphics card failed; `cpu_fallback` runs the model on the processor
 //!   though the card was asked for (`fell_back` in `loaded` and `transcribed`).
+//! - `gpu_oom` reports a card and dies of memory on `transcribe`; `metal_refused` is a Mac helper whose card did not
+//!   take the model: `ready` says `metal`, and `loaded` and `transcribed` say `cpu` with `fell_back`.
 //! - `too_long` answers `transcribe` with too long (max 40 s); `missing` answers `load` with model missing;
 //!   `slow_load` takes 4 s to load, far past the tests' 600 ms stall limit (the client stops it at the limit).
 //!
@@ -98,6 +100,12 @@ fn main() {
             device: Some("Fake GPU".into()),
             vram_mb: 8000,
         }
+    } else if mode == "metal_refused" {
+        Backend {
+            backend: "metal".into(),
+            device: None,
+            vram_mb: 0,
+        }
     } else {
         Backend::cpu()
     };
@@ -111,7 +119,7 @@ fn main() {
         SpeechBackend {
             backend: "cpu".into(),
             device: None,
-            fell_back: mode == "cpu_fallback",
+            fell_back: matches!(mode.as_str(), "cpu_fallback" | "metal_refused"),
         }
     };
     let protocol = if mode == "wrong_protocol" {
@@ -191,7 +199,7 @@ fn main() {
                         }
                         send(&answer(model, &audio_b64, &options, &ran_on));
                     }
-                    "oom" => {
+                    "oom" | "gpu_oom" => {
                         eprintln!("GGML_ASSERT: out of memory");
                         std::process::exit(137);
                     }

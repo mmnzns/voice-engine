@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use voice_engine_protocol::{
-    Backend, Completion, Configure, Device, DeviceList, Embedding, Event, Inspect, Inspection,
-    Load, PROTOCOL_VERSION, Reply, Request, encode,
+    Backend, Completion, Configure, Device, DeviceList, Embedding, Event, Fallback, Inspect,
+    Inspection, Load, PROTOCOL_VERSION, Reply, Request, encode,
 };
 
 /// How long a helper that was asked to stop may keep going before it is killed.
@@ -71,13 +71,25 @@ pub struct LlmConfig {
 
 /// A successful call: the value, where it ran (what the helper said for this request when it said anything: a
 /// request with `gpu: false` runs on the processor in a helper that started on Metal, and an older helper that says
-/// nothing counts as what it said when it started), and whether the graphics card failed during this call and the
-/// processor did the work instead (the app says so once and stops asking for the card).
+/// nothing counts as what it said when it started), and why the card was not used.
+///
+/// `fallback` is `Some` only when the app asked for the card (`gpu: true`) and the work ran on the processor, and says
+/// why. `CardFailed` and `CardOutOfMemory` are about this call: the app says "graphics card failed, used processor"
+/// once and stops asking for the card. After that, and in a new run that reads the `gpu_failures` file, it is
+/// `RememberedFailure`, which needs no message. `NoCardHelper` and `NoCardPath` are not failures at all. A request
+/// with `gpu: false`, and any request that ran on the card, has `None`.
 #[derive(Debug, Clone)]
 pub struct Outcome<T> {
     pub value: T,
     pub backend: Backend,
-    pub fell_back: bool,
+    pub fallback: Option<Fallback>,
+}
+
+impl<T> Outcome<T> {
+    /// The app asked for the card and the processor did the work (for any reason: see `fallback`).
+    pub fn fell_back(&self) -> bool {
+        self.fallback.is_some()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -96,6 +108,11 @@ struct Running {
     /// start. On the Mac the two helpers can be the same binary, which would load on Metal again for a request that
     /// still says `gpu: true`, so every request sent to it says `gpu: false`.
     processor_fallback: bool,
+    /// This helper came from the card helper's path (`gpu_helper`), whatever it then said it runs on.
+    card_helper: bool,
+    /// The card helper just failed to start for this helper's `start`: the first call to use it reports that (later
+    /// calls report the failure as remembered).
+    fresh_failure: Option<Fallback>,
 }
 
 /// Why one attempt at a request ended without an answer.
@@ -304,13 +321,17 @@ impl LlmClient {
         pick: &dyn Fn(&Event) -> Option<T>,
     ) -> Result<Outcome<T>, EngineError> {
         let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
-        let mut fell_back = false;
+        // Why the card was given up on during this call, when it was.
+        let mut failed_now: Option<Fallback> = None;
         let mut retried = false;
         loop {
             if running.is_none() {
                 *running = Some(self.start()?);
             }
             let r = running.as_mut().expect("started above");
+            if let Some(why) = r.fresh_failure.take() {
+                failed_now = failed_now.or(Some(why));
+            }
             *self.live_stdin.lock().unwrap_or_else(|e| e.into_inner()) =
                 Some(r.process.stdin_handle());
             *self.cancel_asked.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -323,10 +344,12 @@ impl LlmClient {
             *self.live_stdin.lock().unwrap_or_else(|e| e.into_inner()) = None;
             match attempt {
                 Ok((value, ran)) => {
+                    let backend = ran.unwrap_or_else(|| r.backend.clone());
+                    let fallback = fallback_reason(request, &backend, failed_now, r);
                     return Ok(Outcome {
                         value,
-                        backend: ran.unwrap_or_else(|| r.backend.clone()),
-                        fell_back,
+                        backend,
+                        fallback,
                     });
                 }
                 Err(Attempt::Died { answered }) => {
@@ -335,7 +358,11 @@ impl LlmClient {
                     if dead.on_gpu {
                         // The graphics card helper died: remember it and do the work on the processor.
                         self.gpu_failed();
-                        fell_back = true;
+                        failed_now = Some(if death.out_of_memory() {
+                            Fallback::CardOutOfMemory
+                        } else {
+                            Fallback::CardFailed
+                        });
                         continue;
                     }
                     if !answered && !retried {
@@ -350,7 +377,7 @@ impl LlmClient {
                         let mut dead = running.take().expect("running above");
                         dead.process.kill();
                         self.gpu_failed();
-                        fell_back = true;
+                        failed_now = Some(Fallback::CardFailed);
                         continue;
                     }
                     if kill && let Some(mut dead) = running.take() {
@@ -432,6 +459,7 @@ impl LlmClient {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+        let mut fresh_failure = None;
         if let Some(gpu_path) = &cfg.gpu_helper
             && !self.gpu_disabled.load(Ordering::Relaxed)
             && !gpu_memory::failed(cfg.gpu_failures.as_deref(), &cfg.gpu_key)
@@ -445,11 +473,16 @@ impl LlmClient {
                         backend,
                         on_gpu,
                         processor_fallback: false,
+                        card_helper: true,
+                        fresh_failure: None,
                     });
                 }
                 // A version mismatch is the app's problem, not the card's.
                 Err(e @ EngineError::VersionMismatch { .. }) => return Err(e),
-                Err(_) => self.gpu_failed(),
+                Err(_) => {
+                    self.gpu_failed();
+                    fresh_failure = Some(Fallback::CardFailed);
+                }
             }
         }
         let (process, backend) = start_with_retries(&cfg.cpu_helper, &cfg.env, &cfg)?;
@@ -460,6 +493,8 @@ impl LlmClient {
             // Without a card helper configured the one helper is the app's only choice (on the Mac it is the Metal
             // one): the app's `gpu` goes through as it is.
             processor_fallback: cfg.gpu_helper.is_some(),
+            card_helper: false,
+            fresh_failure,
         })
     }
 
@@ -484,6 +519,43 @@ impl LlmClient {
         *self.cancel_asked.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
         let _ = write_line(&stdin, &encode(&Request::Cancel));
     }
+}
+
+/// Whether the app asked for the card in `request`: `load`, `complete` and `embed` carry `gpu`; nothing else does.
+fn asked_for_card(request: &Request) -> bool {
+    match request {
+        Request::Load(l) => l.gpu,
+        Request::Complete(c) => c.gpu,
+        Request::Embed(e) => e.gpu,
+        _ => false,
+    }
+}
+
+/// Why `request`, which ran on `ran`, was not on the card. `failed_now`: the card failed during this call. `r`: the
+/// helper that answered.
+fn fallback_reason(
+    request: &Request,
+    ran: &Backend,
+    failed_now: Option<Fallback>,
+    r: &Running,
+) -> Option<Fallback> {
+    if !asked_for_card(request) || ran.on_gpu() {
+        return None;
+    }
+    Some(if let Some(why) = failed_now {
+        why
+    } else if r.processor_fallback {
+        // The processor helper took over after the card failed, now or earlier: the request it got said `gpu: false`.
+        Fallback::RememberedFailure
+    } else if r.card_helper {
+        // The card helper is running but its answer was the processor.
+        Fallback::CardFailed
+    } else if r.backend.on_gpu() {
+        // The one helper is a card helper (the Mac's), and this request still ran on the processor.
+        Fallback::NoCardPath
+    } else {
+        Fallback::NoCardHelper
+    })
 }
 
 /// `request` as the processor helper must get it after the card helper failed: the same request with `gpu: false`.
