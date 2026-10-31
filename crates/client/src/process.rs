@@ -46,7 +46,9 @@ impl Wire for LlmWire {
 
     fn ready(event: &Event) -> Option<(Backend, u32)> {
         match event {
-            Event::Ready { backend, protocol } => Some((backend.clone(), *protocol)),
+            Event::Ready {
+                backend, protocol, ..
+            } => Some((backend.clone(), *protocol)),
             _ => None,
         }
     }
@@ -73,7 +75,9 @@ impl Wire for SttWire {
 
     fn ready(event: &SttEvent) -> Option<(Backend, u32)> {
         match event {
-            SttEvent::Ready { backend, protocol } => Some((backend.clone(), *protocol)),
+            SttEvent::Ready {
+                backend, protocol, ..
+            } => Some((backend.clone(), *protocol)),
             _ => None,
         }
     }

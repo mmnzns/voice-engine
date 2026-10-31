@@ -714,6 +714,100 @@ fn load_and_embed_report_the_reason_too_and_a_retry_clears_it() {
 }
 
 #[test]
+fn loaded_model_with_no_helper_running_is_none_and_starts_nothing() {
+    let _t = turn();
+    let (_d, st) = state();
+    // A helper that cannot start would make any call that starts one an error.
+    let client = LlmClient::new(config("die_at_start", &st));
+    assert_eq!(client.loaded_model().unwrap(), None);
+}
+
+#[test]
+fn loaded_model_follows_load_complete_and_unload() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = LlmClient::new(config("", &st));
+    assert_eq!(client.loaded_model().unwrap(), None);
+    client.load("/a.gguf", 512, true, &mut |_| {}).unwrap();
+    assert_eq!(client.loaded_model().unwrap().as_deref(), Some("/a.gguf"));
+    // A request for another model replaces it.
+    let mut c = completion();
+    c.model_path = "/b.gguf".into();
+    client.complete(c, &mut |_| {}).unwrap();
+    assert_eq!(client.loaded_model().unwrap().as_deref(), Some("/b.gguf"));
+    client.unload().unwrap();
+    assert_eq!(client.loaded_model().unwrap(), None);
+    client.load("/a.gguf", 512, true, &mut |_| {}).unwrap();
+    // Stopping the helper frees the model, and asking afterwards starts no helper.
+    client.shutdown();
+    assert_eq!(client.loaded_model().unwrap(), None);
+}
+
+#[test]
+fn a_helper_stopped_by_a_cancel_or_a_crash_holds_no_model() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = LlmClient::new(config("ignore_cancel", &st));
+    client.load("/a.gguf", 512, true, &mut |_| {}).unwrap();
+    assert!(client.loaded_model().unwrap().is_some());
+    // The helper ignores the cancel and is killed after the grace period: its model is gone.
+    let result = std::thread::scope(|s| {
+        let worker = s.spawn(|| client.complete(completion(), &mut |_| {}));
+        std::thread::sleep(Duration::from_millis(300));
+        client.cancel();
+        worker.join().unwrap()
+    });
+    assert_eq!(result.unwrap_err(), EngineError::Cancelled);
+    assert_eq!(client.loaded_model().unwrap(), None);
+
+    let client = LlmClient::new(config("die_on_complete", &st));
+    client.load("/a.gguf", 512, true, &mut |_| {}).unwrap();
+    client.complete(completion(), &mut |_| {}).unwrap_err();
+    assert_eq!(client.loaded_model().unwrap(), None);
+}
+
+#[test]
+fn a_helper_that_exited_while_idle_holds_no_model_and_loaded_model_starts_no_other() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = LlmClient::new(config("exit_after_load", &st));
+    client.load("/a.gguf", 512, true, &mut |_| {}).unwrap();
+    std::thread::sleep(Duration::from_millis(700));
+    assert_eq!(client.loaded_model().unwrap(), None);
+    // One start, for the load; asking did not start another helper.
+    assert_eq!(std::fs::read_to_string(&st).unwrap().trim(), "1");
+}
+
+#[test]
+fn an_older_helper_that_does_not_say_reads_as_none() {
+    let _t = turn();
+    let (_d, st) = state();
+    let client = LlmClient::new(config("old_ready", &st));
+    client.load("/a.gguf", 512, true, &mut |_| {}).unwrap();
+    assert_eq!(client.loaded_model().unwrap(), None);
+}
+
+#[test]
+fn a_helper_that_does_not_answer_is_given_up_on_after_the_short_limit() {
+    let _t = turn();
+    let (_d, st) = state();
+    let mut cfg = config("deaf_ping", &st);
+    cfg.limits.stall = Duration::from_secs(120);
+    cfg.limits.total = Duration::from_secs(30 * 60);
+    let client = LlmClient::new(cfg);
+    client.load("/a.gguf", 512, true, &mut |_| {}).unwrap();
+    let began = Instant::now();
+    assert_eq!(client.loaded_model().unwrap_err(), EngineError::TimedOut);
+    assert!(
+        began.elapsed() < Duration::from_secs(15),
+        "{:?}",
+        began.elapsed()
+    );
+    // The helper was stopped, so nothing is loaded and nothing is started.
+    assert_eq!(client.loaded_model().unwrap(), None);
+}
+
+#[test]
 fn cancel_stops_the_request_and_the_helper_keeps_going() {
     let _t = turn();
     let (_d, st) = state();

@@ -113,6 +113,13 @@ pub(crate) struct Loaded {
     model: LlamaModel,
 }
 
+impl Loaded {
+    /// The `model_path` the model was loaded from, as the request wrote it.
+    pub(crate) fn path(&self) -> &str {
+        &self.key.path
+    }
+}
+
 /// GPU memory left free for the driver, the desktop and other apps (llama.cpp's own default margin).
 const GPU_MARGIN: usize = 1024 * 1024 * 1024;
 

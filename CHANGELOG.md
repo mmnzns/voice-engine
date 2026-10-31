@@ -19,6 +19,9 @@ asked for and the processor ran, so match `CardFailed | CardOutOfMemory` to say 
 - feat: a GGUF without a chat template no longer fails with `NoChatTemplate`: the helper writes a plain prompt (system
   text, blank line, user text, blank line) and the reply carries `plain_format: true`, so an app can warn on import;
   `inspect` already said `has_chat_template: false` (#29). Verified with a real model whose template key was renamed.
+- feat: the `ready` answer to `ping` carries `loaded_model` (the path of the model the helper holds, left out when none),
+  and `LlmClient::loaded_model()` returns it without starting a helper when none runs; it answers within 10 s (#30). A
+  v0.2.x helper sends none, which reads as `None`.
 
 ## v0.2.3 (2026-10-31)
 

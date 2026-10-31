@@ -152,6 +152,7 @@ pub fn run(config: HelperConfig) {
                 // What a request that asks for the card (the default) gets.
                 backend: backend(place_here(true, gpu.as_ref())),
                 protocol: PROTOCOL_VERSION,
+                loaded_model: loaded.as_ref().map(|l| l.path().to_string()),
             }),
             Ok(Request::Devices) => send(&Event::Devices {
                 devices: all.clone(),

@@ -18,6 +18,10 @@
 //! `no_card_path` is a Mac helper that has no card runtime for the model: `ready` says `metal`, and every reply says
 //! `cpu`. `gpu_oom` reports a Vulkan GPU and dies of memory on `complete` (an out-of-memory line on stderr).
 //!
+//! Every mode but `old_ready` says in `ready` which model it holds (the path of the last `load`, `complete` or `embed`
+//! until `unload`); `old_ready` says none, like a helper from before.
+//! `exit_after_load` exits 200 ms after answering a `load` (an idle exit) and counts its starts in `FAKE_STATE`.
+//! `deaf_ping` answers the startup ping and no other.
 //! `plain` answers `complete` like a model with no chat template: the reply says `plain_format`.
 //! `slow_reply` loads for `FAKE_LOAD_MS` and replies for `FAKE_REPLY_MS` (both default 0), like the real helper: a model
 //! it does not hold yet is announced with a `loading` progress, loaded in silence, and the prompt is ready with a
@@ -79,6 +83,10 @@ fn main() {
     if mode == "die_at_start" || (mode == "die_at_start_twice" && bump(&state) < 2) {
         std::process::exit(138);
     }
+    if mode == "exit_after_load" {
+        // Counts the starts, so a test can tell whether a helper was started.
+        bump(&state);
+    }
     let metal = Backend {
         backend: "metal".into(),
         device: None,
@@ -126,23 +134,44 @@ fn main() {
         )
     };
     let mut loaded = false;
+    let mut pings = 0;
+    // The model path of the last `load`, `complete` or `embed`, until `unload`: what `ping` says is loaded.
+    let mut model: Option<String> = None;
     while let Ok(line) = rx.recv() {
         let Ok(request) = decode_request(&line) else {
             continue;
         };
         match request {
-            Request::Ping => send(&Event::Ready {
-                backend: backend.clone(),
-                protocol,
-            }),
+            // `deaf_ping` answers the startup ping only.
+            Request::Ping if mode == "deaf_ping" && pings > 0 => {}
+            Request::Ping => {
+                pings += 1;
+                send(&Event::Ready {
+                    backend: backend.clone(),
+                    protocol,
+                    loaded_model: if mode == "old_ready" {
+                        None
+                    } else {
+                        model.clone()
+                    },
+                });
+            }
             Request::Configure(c) => send(&Event::Configured {
                 idle_secs: c.idle_secs,
             }),
             Request::Load(l) => {
                 log(&mode, "load", l.gpu);
+                model = Some(l.model_path.clone());
                 if mode == "slow_reply" && !loaded {
                     slow_load(millis("FAKE_LOAD_MS"));
                     loaded = true;
+                }
+                if mode == "exit_after_load" {
+                    // An idle exit, a moment after the model is loaded and the helper is quiet.
+                    std::thread::spawn(|| {
+                        std::thread::sleep(Duration::from_millis(200));
+                        std::process::exit(0);
+                    });
                 }
                 send(&Event::Loaded {
                     seconds: 0.5,
@@ -154,7 +183,10 @@ fn main() {
                     },
                 });
             }
-            Request::Unload => send(&Event::Unloaded),
+            Request::Unload => {
+                model = None;
+                send(&Event::Unloaded);
+            }
             Request::Inspect(_) => send(&Event::Inspected(Inspection {
                 has_chat_template: true,
                 thinks: false,
@@ -163,6 +195,7 @@ fn main() {
             })),
             Request::Embed(e) => {
                 log(&mode, "embed", e.gpu);
+                model = Some(e.model_path.clone());
                 send(&Event::Embedded {
                     vectors: vec![vec![1.0]],
                     backend: says(e.gpu),
@@ -179,6 +212,7 @@ fn main() {
             }
             Request::Complete(c) => {
                 log(&mode, "complete", c.gpu);
+                model = Some(c.model_path.clone());
                 match mode.as_str() {
                     "die_on_complete" | "gpu_die" | "metal_die" => {
                         send(&Event::Progress {

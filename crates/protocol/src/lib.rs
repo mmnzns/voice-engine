@@ -25,7 +25,7 @@ pub const JSON_OBJECT_SCHEMA: &str = r#"{"type":"object"}"#;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Request {
-    /// Answers with `Event::Ready`. Used to check the helper started.
+    /// Answers with `Event::Ready`. Used to check the helper started, and to ask which model it holds.
     Ping,
     /// Sets how long the helper waits without a request before exiting. Answers with `Event::Configured`.
     Configure(Configure),
@@ -166,11 +166,17 @@ pub enum Fallback {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
+    /// The answer to `ping`: what the helper runs on, its protocol version and the model it holds now.
     Ready {
         #[serde(flatten)]
         backend: Backend,
         #[serde(default)]
         protocol: u32,
+        /// The `model_path` of the model loaded now (the text the app sent in `load`, `complete` or `embed`), or None
+        /// when no model is loaded: nothing was loaded yet, `unload` freed it, or the helper started again after it
+        /// was stopped. An older helper never sends it, which reads as None.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        loaded_model: Option<String>,
     },
     /// Reading the prompt (`done` of `total` tokens; the first one, with `done` 0, says the model is loaded and the
     /// prompt is ready), then writing (`done` tokens written, `total` 0). `Loading` comes first when the request
@@ -386,6 +392,7 @@ mod tests {
                 vram_mb: 16303,
             },
             protocol: PROTOCOL_VERSION,
+            loaded_model: None,
         };
         let line = encode(&gpu);
         assert_eq!(
@@ -394,8 +401,9 @@ mod tests {
         );
         assert_eq!(serde_json::from_str::<Event>(&line).unwrap(), gpu);
         // The fake helpers in tests (and a 1.0.x helper) answer with just this.
-        let Event::Ready { backend, protocol } =
-            serde_json::from_str::<Event>(r#"{"event":"ready"}"#).unwrap()
+        let Event::Ready {
+            backend, protocol, ..
+        } = serde_json::from_str::<Event>(r#"{"event":"ready"}"#).unwrap()
         else {
             panic!()
         };
@@ -413,7 +421,8 @@ mod tests {
         assert_eq!(
             encode(&Event::Ready {
                 backend: Backend::cpu(),
-                protocol: PROTOCOL_VERSION
+                protocol: PROTOCOL_VERSION,
+                loaded_model: None
             }),
             r#"{"event":"ready","backend":"cpu","vram_mb":0,"protocol":2}"#
         );
@@ -452,10 +461,35 @@ mod tests {
     }
 
     #[test]
+    fn ready_says_which_model_is_loaded_and_an_old_ready_says_none() {
+        let line = encode(&Event::Ready {
+            backend: Backend::cpu(),
+            protocol: PROTOCOL_VERSION,
+            loaded_model: Some("/models/m.gguf".into()),
+        });
+        assert_eq!(
+            line,
+            r#"{"event":"ready","backend":"cpu","vram_mb":0,"protocol":2,"loaded_model":"/models/m.gguf"}"#
+        );
+        let Event::Ready { loaded_model, .. } = decode_event(&line).unwrap() else {
+            panic!()
+        };
+        assert_eq!(loaded_model.as_deref(), Some("/models/m.gguf"));
+        // A helper from before v0.3.0 sends none, and None is left out of the message.
+        let Event::Ready { loaded_model, .. } =
+            decode_event(r#"{"event":"ready","backend":"cpu","vram_mb":0,"protocol":2}"#).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(loaded_model, None);
+    }
+
+    #[test]
     fn ready_carries_the_protocol_version() {
         let line = encode(&Event::Ready {
             backend: Backend::cpu(),
             protocol: PROTOCOL_VERSION,
+            loaded_model: None,
         });
         assert!(line.contains(r#""protocol":2"#), "{line}");
     }
@@ -529,6 +563,7 @@ mod tests {
                     ..Default::default()
                 },
                 protocol: PROTOCOL_VERSION,
+                loaded_model: Some("/m.gguf".into()),
             },
             Event::Progress {
                 phase: Phase::Reading,
@@ -567,8 +602,9 @@ mod tests {
     #[test]
     fn ensayo_a_ready_from_an_app_with_only_a_backend_name_still_reads() {
         // Ensayo's helper before the engine said just the backend name; it must keep working.
-        let Event::Ready { backend, protocol } =
-            decode_event(r#"{"event":"ready","backend":"cpu"}"#).unwrap()
+        let Event::Ready {
+            backend, protocol, ..
+        } = decode_event(r#"{"event":"ready","backend":"cpu"}"#).unwrap()
         else {
             panic!()
         };

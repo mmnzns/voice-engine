@@ -530,3 +530,23 @@ fn a_model_without_a_chat_template_answers_in_the_plain_format_and_says_so() {
         err.len()
     );
 }
+
+#[test]
+#[ignore]
+fn ping_says_which_model_is_loaded() {
+    let mut h = Helper::start();
+    let loaded_model = |h: &mut Helper| {
+        h.send(&serde_json::json!({"op": "ping"}));
+        match h.answer() {
+            Event::Ready { loaded_model, .. } => loaded_model,
+            other => panic!("expected ready, got {}", kind(&other)),
+        }
+    };
+    assert_eq!(loaded_model(&mut h), None);
+    h.send(&serde_json::json!({"op": "load", "model_path": model(), "n_ctx": 4096, "gpu": false}));
+    assert!(matches!(h.answer(), Event::Loaded { .. }));
+    assert_eq!(loaded_model(&mut h), Some(model()));
+    h.send(&serde_json::json!({"op": "unload"}));
+    assert!(matches!(h.answer(), Event::Unloaded));
+    assert_eq!(loaded_model(&mut h), None);
+}

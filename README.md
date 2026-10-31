@@ -83,6 +83,14 @@ client's memory, and stops the processor helper if that is the one running, so t
 running. The engine compares `gpu_key` only, so an app should fold the graphics driver version into it: a driver update
 then tries the card again.
 
+**Which model is loaded.** `ready`, the answer to `ping`, carries `loaded_model`: the `model_path` of the model the helper
+holds, left out when none is loaded (nothing yet, `unload`, or a helper started again). `LlmClient::loaded_model()` gives
+`Result<Option<String>, EngineError>`: with no helper running it is `Ok(None)` and starts none, which is what a cancel that
+killed the helper, a crash, a stall, `shutdown` and an idle exit all leave; otherwise it pings the running helper, with
+the same 10 s limit as `devices()` (`TimedOut`, and the helper is stopped). It waits for a request in progress to end.
+An app asks before a request, to show "loading" only when the model really has to load: compare the answer with the
+path it is about to use. A helper from before v0.3.0 sends no `loaded_model`, which reads as `None`.
+
 **A limit on one reply.** `Limits` are set once and cover every call, the model load included. For a reply that must
 be quick (a cleanup of dictated text) while the model may take a minute to load, call
 `complete_within(limit: Duration, completion, progress)` instead of `complete`. `limit` runs from the moment the model is
@@ -105,8 +113,9 @@ not exit within a second of closing its output is stopped by the client and repo
 
 ### Moving from v0.2.x to v0.3.0
 
-Nothing to change for the additions: `complete_within` and `Reply::plain_format` (a new field on a struct an app only
-reads; an app that builds a `Reply` itself, in a test, adds `plain_format: false`).
+Nothing to change for the additions: `complete_within`, `loaded_model()` and `Reply::plain_format` (a new field on a
+struct an app only reads; an app that builds a `Reply` itself, in a test, adds `plain_format: false`; one that matches
+`Event::Ready { backend, protocol }` adds `..`).
 
 - `EngineError::Crashed` is a struct variant now: match `EngineError::Crashed { .. }`, or read `exit_code`, `signal` and
   `detail` for the log.

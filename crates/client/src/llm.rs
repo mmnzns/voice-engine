@@ -266,6 +266,45 @@ impl LlmClient {
         Ok(self.devices()?.discrete_card().cloned())
     }
 
+    /// The model the helper holds now: the `model_path` of the last `load`, `complete` or `embed`, or None when none
+    /// is loaded. With no helper running it is None and none is started (a helper that was stopped, by `cancel`,
+    /// `shutdown`, a stall or a crash, or that exited when idle, holds nothing), so an app can ask before a request to
+    /// show "loading" only when the model really has to load. Otherwise it asks the running helper, and gives up after
+    /// 10 s like `devices` (`TimedOut`, and the helper is stopped). It waits for a request in progress to end first.
+    pub fn loaded_model(&self) -> Result<Option<String>, EngineError> {
+        let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(r) = running.as_mut() else {
+            return Ok(None);
+        };
+        *self.cancel_asked.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        let attempt = self.attempt(
+            r,
+            &Request::Ping,
+            Limit::capped(DEVICES_LIMIT),
+            &mut |_| {},
+            &|ev| match ev {
+                Event::Ready { loaded_model, .. } => Some(loaded_model.clone()),
+                _ => None,
+            },
+        );
+        match attempt {
+            Ok((model, _)) => Ok(model),
+            // The helper is gone, and so is its model: nothing to start for that.
+            Err(Attempt::Died { .. }) => {
+                if let Some(mut dead) = running.take() {
+                    dead.process.kill();
+                }
+                Ok(None)
+            }
+            Err(Attempt::Failed { error, kill }) => {
+                if kill && let Some(mut dead) = running.take() {
+                    dead.process.kill();
+                }
+                Err(error)
+            }
+        }
+    }
+
     /// Frees the loaded model's memory now. With no helper running there is nothing to free, and none is started.
     pub fn unload(&self) -> Result<(), EngineError> {
         if self

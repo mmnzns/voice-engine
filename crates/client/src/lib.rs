@@ -1,5 +1,6 @@
 //! The app side of the voice-engine helpers. An app builds an [`LlmClient`] with the paths of its helper binaries and
-//! calls `load`, `complete`, `embed`, `inspect`, `devices`, `unload` and `cancel` from any thread; the client starts the helper,
+//! calls `load`, `complete` (or `complete_within`, with its own reply limit), `embed`, `inspect`, `devices`,
+//! `loaded_model`, `unload` and `cancel` from any thread; the client starts the helper,
 //! restarts it when it dies, and turns every failure into an [`EngineError`].
 //!
 //! An [`SttClient`] does the same for the speech helper (Whisper on the Windows Vulkan helper, with the processor
