@@ -5,8 +5,8 @@
 use voice_engine_models::catalog::find;
 use voice_engine_stt::SpeechError;
 use voice_engine_stt::vad::{
-    FRAME_SAMPLES, VadSettings, centis_to_ms, detect, detect_with, is_shorter_than_a_frame,
-    pad_spans, spans_from_centiseconds,
+    FRAME_SAMPLES, VadDetector, VadSettings, centis_to_ms, detect, detect_with,
+    is_shorter_than_a_frame, pad_spans, spans_from_centiseconds,
 };
 
 /// The file name the catalog gives the voice detection model.
@@ -230,4 +230,35 @@ fn the_error_messages_say_nothing_about_the_file_or_the_audio() {
     let shown = e.to_string();
     assert!(!shown.contains(&*dir.path().to_string_lossy()), "{shown}");
     assert!(!shown.contains(vad_file_name()), "{shown}");
+}
+
+// ---- the loaded detector ----
+
+#[test]
+fn a_detector_loaded_from_an_empty_folder_is_model_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(
+        VadDetector::load(dir.path()).unwrap_err(),
+        SpeechError::ModelMissing
+    );
+    assert_eq!(
+        VadDetector::load(&dir.path().join("nowhere")).unwrap_err(),
+        SpeechError::ModelMissing
+    );
+}
+
+#[test]
+fn a_detector_loaded_from_a_file_that_is_not_a_model_is_bad_model() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join(vad_file_name()), b"this is not a ggml file").unwrap();
+    assert_eq!(
+        VadDetector::load(dir.path()).unwrap_err(),
+        SpeechError::BadModel
+    );
+}
+
+#[test]
+fn the_detector_is_send_so_an_app_can_keep_it_in_shared_state() {
+    fn is_send<T: Send>() {}
+    is_send::<VadDetector>();
 }

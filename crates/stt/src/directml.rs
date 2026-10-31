@@ -25,6 +25,8 @@ pub struct Adapter {
     pub dedicated_mb: u64,
     /// The PCI vendor id (0x10DE NVIDIA, 0x1002 AMD, 0x8086 Intel, 0x1414 Microsoft).
     pub vendor_id: u32,
+    /// The user-mode graphics driver's version as Windows shows it ("32.0.15.6614"); None when Windows doesn't say.
+    pub driver_version: Option<String>,
 }
 
 /// Microsoft's vendor id: "Microsoft Basic Display Adapter" (no driver installed) and Hyper-V or remote display
@@ -67,6 +69,31 @@ pub fn devices(adapters: &[Adapter]) -> Vec<Device> {
         .collect()
 }
 
+/// The four 16-bit parts of the driver version DXGI reports (`CheckInterfaceSupport`), high to low, joined with dots:
+/// 0x0020_0000_000F_19D6 is "32.0.15.6614".
+pub fn format_driver_version(raw: i64) -> String {
+    let raw = raw as u64;
+    format!(
+        "{}.{}.{}.{}",
+        (raw >> 48) & 0xFFFF,
+        (raw >> 32) & 0xFFFF,
+        (raw >> 16) & 0xFFFF,
+        raw & 0xFFFF
+    )
+}
+
+/// The driver version of a card: for a DirectML device (backend "DirectML") the adapter whose `index` is the device's;
+/// for any other device the first adapter whose name is the device's `description`. None when no adapter matches or
+/// Windows gave no version.
+pub fn driver_version_of(adapters: &[Adapter], device: &Device) -> Option<String> {
+    let found = if device.backend == DIRECTML {
+        adapters.iter().find(|a| a.index as usize == device.index)
+    } else {
+        adapters.iter().find(|a| a.name == device.description)
+    };
+    found.and_then(|a| a.driver_version.clone())
+}
+
 /// Every adapter, or none when this build has no DirectML (not Windows, or without the `directml` feature).
 pub fn adapters() -> Vec<Adapter> {
     #[cfg(all(windows, feature = "directml"))]
@@ -86,7 +113,7 @@ pub fn card() -> Option<Adapter> {
 
 #[cfg(all(windows, feature = "directml"))]
 mod dxgi {
-    use super::Adapter;
+    use super::{Adapter, format_driver_version};
     use std::ffi::c_void;
     use voice_engine_protocol::gpu::bytes_to_mb;
     use windows::Win32::Foundation::LUID;
@@ -94,8 +121,9 @@ mod dxgi {
         DXCoreCreateAdapterFactory, IDXCoreAdapter, IDXCoreAdapterFactory, IsIntegrated,
     };
     use windows::Win32::Graphics::Dxgi::{
-        CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIFactory1,
+        CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIDevice, IDXGIFactory1,
     };
+    use windows::core::Interface;
 
     /// Every DXGI adapter, in DXGI's order. Empty when Windows will not list them.
     pub fn adapters() -> Vec<Adapter> {
@@ -124,6 +152,10 @@ mod dxgi {
                     software: desc.Flags & (DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32) != 0,
                     dedicated_mb: bytes_to_mb(desc.DedicatedVideoMemory),
                     vendor_id: desc.VendorId,
+                    // The documented way to read the user-mode driver version; an error means Windows won't say.
+                    driver_version: unsafe { adapter.CheckInterfaceSupport(&IDXGIDevice::IID) }
+                        .ok()
+                        .map(format_driver_version),
                 });
             }
             index += 1;
@@ -162,6 +194,7 @@ mod tests {
             software: false,
             dedicated_mb,
             vendor_id: 0x10DE,
+            driver_version: None,
         }
     }
 
@@ -279,6 +312,61 @@ mod tests {
             chosen: None,
         };
         assert_eq!(list.discrete_card().unwrap().index, 1);
+    }
+
+    #[test]
+    fn the_driver_version_reads_as_windows_shows_it() {
+        assert_eq!(format_driver_version(0x0020_0000_000F_19D6), "32.0.15.6614");
+        assert_eq!(format_driver_version(0x0001_0002_0003_0004), "1.2.3.4");
+        // The top bit set is a negative i64, and must not turn into a minus sign.
+        assert_eq!(format_driver_version(-1), "65535.65535.65535.65535");
+    }
+
+    fn device(backend: &str, index: usize, description: &str) -> Device {
+        Device {
+            index,
+            name: String::new(),
+            description: description.into(),
+            backend: backend.into(),
+            kind: DeviceKind::Gpu,
+            memory_mb: 0,
+        }
+    }
+
+    #[test]
+    fn a_directml_device_finds_its_driver_by_adapter_number_and_another_by_name() {
+        let adapters = vec![
+            Adapter {
+                driver_version: Some("32.0.12.1".into()),
+                ..adapter(0, "AMD Radeon(TM) Graphics", true, 512)
+            },
+            Adapter {
+                driver_version: Some("32.0.15.6614".into()),
+                ..adapter(1, "NVIDIA GeForce RTX 5070 Ti", false, 16303)
+            },
+            adapter(2, "No Version Card", false, 4096),
+        ];
+        let by_index = driver_version_of(&adapters, &device("DirectML", 1, "anything"));
+        assert_eq!(by_index.as_deref(), Some("32.0.15.6614"));
+        // Another backend: the index is ggml's, so only the name counts.
+        let by_name = driver_version_of(
+            &adapters,
+            &device("Vulkan", 0, "NVIDIA GeForce RTX 5070 Ti"),
+        );
+        assert_eq!(by_name.as_deref(), Some("32.0.15.6614"));
+        assert_eq!(
+            driver_version_of(&adapters, &device("Vulkan", 1, "Unknown")),
+            None
+        );
+        assert_eq!(
+            driver_version_of(&adapters, &device("DirectML", 2, "")),
+            None
+        );
+        assert_eq!(
+            driver_version_of(&adapters, &device("DirectML", 9, "")),
+            None
+        );
+        assert_eq!(driver_version_of(&[], &device("DirectML", 0, "")), None);
     }
 
     #[test]

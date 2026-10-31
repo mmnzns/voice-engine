@@ -864,3 +864,50 @@ fn voice_detection_padding_widens_clamps_and_merges() {
     .unwrap();
     assert_eq!(wide, vec![(0, ms(&audio))]);
 }
+
+// ---- the loaded detector (`vad::VadDetector`) ----
+
+#[test]
+#[ignore]
+fn a_loaded_detector_gives_the_same_spans_every_time_and_the_same_as_detect() {
+    need_say!();
+    let _g = guard();
+    let dir = vad_dir();
+    let audio = two_phrases_with_a_short_pause();
+    let free = vad::detect(&dir, &audio).unwrap();
+    let mut detector = vad::VadDetector::load(&dir).unwrap();
+    for run in 0..3 {
+        assert_eq!(detector.detect(&audio).unwrap(), free, "run {run}");
+    }
+    // Custom settings go through the same path as the free `detect_with`.
+    let padded = vad::VadSettings {
+        padding_ms: 30,
+        min_silence_ms: 100,
+        ..vad::VadSettings::default()
+    };
+    assert_eq!(
+        detector.detect_with(&audio, &padded).unwrap(),
+        vad::detect_with(&dir, &audio, &padded).unwrap()
+    );
+    eprintln!("{} spans, identical on 3 runs", free.len());
+    assert!(!free.is_empty());
+}
+
+#[test]
+#[ignore]
+fn a_loaded_detector_carries_nothing_from_speech_into_the_silence_after_it() {
+    need_clip!();
+    let _g = guard();
+    let speech = say(PHRASE);
+    let audio = silence_speech_silence(1_000, &speech, 1_000);
+    let silence = vec![0.0f32; 16_000 * 5];
+    let mut detector = vad::VadDetector::load(&vad_dir()).unwrap();
+    let first = detector.detect(&audio).unwrap();
+    assert!(!first.is_empty());
+    assert_eq!(detector.detect(&silence).unwrap(), vec![]);
+    assert_eq!(detector.detect(&audio).unwrap(), first);
+    // And silence first, then speech: the speech is found as if the detector were new.
+    let mut fresh = vad::VadDetector::load(&vad_dir()).unwrap();
+    assert_eq!(fresh.detect(&silence).unwrap(), vec![]);
+    assert_eq!(fresh.detect(&audio).unwrap(), first);
+}
