@@ -41,7 +41,11 @@ use crate::words::clean;
 use std::path::Path;
 use voice_engine_models::catalog::{Kind, ModelInfo};
 
-/// Half a second of silence on each side of every decode (16 kHz).
+/// Half a second of silence on each side of every decode (16 kHz). Talaan's and Ensayo's value, kept on purpose:
+/// on a Mac (Parakeet Ultra, the processor, 15 s windows cut at six offsets from `docs/data/clip-bench.wav`) a pad of
+/// 0.25 s, 0.1 s or none changed the words or their punctuation and capitals in 3 or 4 of the 6 windows (and in the
+/// 29 s clip and the end of the short one with none), while the decode time did not fall by more than the noise of
+/// the run (about 3% is all the audio saved). A window cut in the middle of speech is the case that needs it.
 pub const PAD_SAMPLES: usize = 8_000;
 /// The chunk limit when the catalog entry gives none (every ONNX entry gives 40).
 pub const DEFAULT_MAX_SECS: u32 = 40;

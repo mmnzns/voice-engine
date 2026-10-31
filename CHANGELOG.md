@@ -7,6 +7,8 @@
   ONNX models: always `true`). `voice_engine_stt::join_segments` joins by it. Reads as `true` from a helper that does
   not send it. Breaking: `Segment` has a new public field, so code that builds a `Segment` with a struct literal must
   set `starts_word`.
+- docs: Parakeet's 0.5 s of silence on each side stays (#33). Measured on Parakeet Ultra: 0.25 s, 0.1 s and no padding
+  changed the transcript on some 15 s windows, and none was reliably faster (the audio saved is about 3%).
 - feat: voice detection settings (#31). `vad::VadSettings` (`threshold`, `min_speech_ms`, `min_silence_ms`, `padding_ms`;
   `Default` is the old fixed values) and `vad::detect_with(model_dir, &audio, &settings)`. `detect` is unchanged.
   Padding grows each span, stops at the ends of the audio and merges spans that meet.
