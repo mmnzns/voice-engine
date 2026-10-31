@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.3.1 (unreleased)
+## v0.3.1 (2026-10-31)
 
 Drop-in over v0.3.0: nothing that existed changes. One small exception: `directml::Adapter` has a new public field,
 `driver_version`, so code that builds an `Adapter` literal adds it.
