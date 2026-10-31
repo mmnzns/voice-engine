@@ -20,22 +20,23 @@ triple: `ensayo-llm-vulkan-x86_64-pc-windows-msvc.exe`. Vulkan builds exist for 
 ### DirectML and the helpers' imports
 
 Both Vulkan helpers are built with `--features vulkan` only. The speech helper runs Whisper only; Parakeet runs in the
-app's own process, so an app that wants Parakeet on the card enables `voice-engine-stt/directml` in its own `Cargo.toml`.
-From `ort-sys 2.0.0-rc.13`'s build script: that build links ONNX Runtime statically and the program imports
-`DirectML.dll`, `D3D12.dll`, `DXGI.dll` and `DXCORE.dll` at load time (`ort`'s `copy-dylibs` is off, so nothing is copied
-next to the exe). All four come from Windows: `DirectML.dll` has been in `C:\Windows\System32` since Windows 10 1903.
-Nothing ships with the app. These are load-time imports, not something Parakeet asks for when it loads a model: the DirectML
-link line is added to every Windows build by `ort-sys`, and `ort` is an unconditional dependency of `voice-engine-stt`.
-So a Windows helper (and any app that links the speech crate) may import `DirectML.dll` whatever its features are. If an
-export ONNX Runtime needs is missing from the in-box file (for example `DMLCreateDevice1` on a very old Windows 10), the
-program does not start, and there is no fall back to the processor. Windows 10 1903 (build 18362) is the oldest we
-state; which exact builds have the exports ONNX Runtime needs is not checked. Do not rely on what the helpers import:
-run `dumpbin /dependents` on the built `.exe` files (from a Visual Studio developer prompt) and read the list.
+app's own process, so an app that wants Parakeet on the card enables `voice-engine-stt/directml` in its own
+`Cargo.toml`. From `ort-sys 2.0.0-rc.13`'s build script: that build links ONNX Runtime statically and the program
+imports `DirectML.dll`, `D3D12.dll`, `DXGI.dll` and `DXCORE.dll` at load time (`ort`'s `copy-dylibs` is off, so nothing
+is copied next to the exe). All four come from Windows: `DirectML.dll` has been in `C:\Windows\System32` since Windows
+10 1903. Nothing ships with the app. These are load-time imports, not something Parakeet asks for when it loads a model:
+the DirectML link line is added to every Windows build by `ort-sys`, and `ort` is an unconditional dependency of
+`voice-engine-stt`. So a Windows helper (and any app that links the speech crate) may import `DirectML.dll` whatever its
+features are. If an export ONNX Runtime needs is missing from the in-box file (for example `DMLCreateDevice1` on a very
+old Windows 10), the program does not start, and there is no fall back to the processor. Windows 10 1903 (build 18362)
+is the oldest we state; which exact builds have the exports ONNX Runtime needs is not checked. Do not rely on what the
+helpers import: run `dumpbin /dependents` on the built `.exe` files (from a Visual Studio developer prompt) and read the
+list.
 
 ## Which environment variables the helpers read
 
-The helpers this workflow and the build scripts make are the engine's own binaries, built from the engine's checkout with
-the prefix `VOICE_ENGINE`. They read `VOICE_ENGINE_GPU` (for example `fail`, the forced card failure check) and
+The helpers this workflow and the build scripts make are the engine's own binaries, built from the engine's checkout
+with the prefix `VOICE_ENGINE`. They read `VOICE_ENGINE_GPU` (for example `fail`, the forced card failure check) and
 `VOICE_ENGINE_LLM_IDLE_SECS`, whatever `llm-name` and `stt-name` say. An app's own dev helper, built from its 3-line
 `main.rs` with `env_prefix`, reads `<PREFIX>_GPU` and `<PREFIX>_LLM_IDLE_SECS` (Talaan: `TALAAN_GPU`). Both are
 test-only settings.

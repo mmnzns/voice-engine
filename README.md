@@ -193,10 +193,10 @@ off by default. A timeout does not mark the card as failed.
 
 `DirectML.dll` comes from Windows (`C:\Windows\System32`, Windows 10 1903 and later): nothing ships with the app and the
 engine adds no file to the helpers' output. It is imported when the program starts, not when Parakeet loads: `ort-sys`
-adds the DirectML link line to every Windows build and `voice-engine-stt` always depends on `ort`, so the helpers, and an
-app that links the speech crate, may import `DirectML.dll` even without the `directml` feature. If an export ONNX Runtime
-needs is missing (for example `DMLCreateDevice1` on a very old Windows 10), the program does not start and there is no
-fall back to the processor. Check what a built file imports with `dumpbin /dependents <file>.exe`.
+adds the DirectML link line to every Windows build and `voice-engine-stt` always depends on `ort`, so the helpers, and
+an app that links the speech crate, may import `DirectML.dll` even without the `directml` feature. If an export ONNX
+Runtime needs is missing (for example `DMLCreateDevice1` on a very old Windows 10), the program does not start and there
+is no fall back to the processor. Check what a built file imports with `dumpbin /dependents <file>.exe`.
 
 ### What runs where
 
@@ -370,13 +370,14 @@ rustflags = ["-C", "target-feature=+avx2,+fma,+f16c,+bmi2"]   # llama-cpp-sys-2 
 
 **Cargo reads `.cargo/config.toml` only for the workspace it builds.** An app that depends on the engine as a git
 dependency does not get these lines, and nothing warns it: it builds the libraries for its own build machine. So an app
-that links `voice-engine-llm` or `voice-engine-stt` (the helper programs, or the speech crate in process) copies the block
-above into a committed `.cargo/config.toml` in the folder cargo runs from, usually the repo root. Cargo reads
-`.cargo/config.toml` from the working directory and its parents, not from the manifest's folder: with
-`cargo test --manifest-path src-tauri/Cargo.toml` run from the root, a `src-tauri/.cargo/config.toml` is never read and
-the baseline silently does not apply. Commit the file; the local patch in the next section goes elsewhere. Or it sets the same variables in its release workflow, or builds the helpers with the
-reusable workflow described in `docs/building-helpers.md`, which builds in the engine's own checkout and so carries
-them. The rustflags line is for Windows x64 only.
+that links `voice-engine-llm` or `voice-engine-stt` (the helper programs, or the speech crate in process) copies the
+block above into a committed `.cargo/config.toml` in the folder cargo runs from, usually the repo root. Cargo reads
+`.cargo/config.toml` from the working directory and its parents, not from the manifest's folder: with `cargo test
+--manifest-path src-tauri/Cargo.toml` run from the root, a `src-tauri/.cargo/config.toml` is never read and the baseline
+silently does not apply. Commit the file; the local patch in the next section goes elsewhere. Or it sets the same
+variables in its release workflow, or builds the helpers with the reusable workflow described in
+`docs/building-helpers.md`, which builds in the engine's own checkout and so carries them. The rustflags line is for
+Windows x64 only.
 
 **Keep `lto = false` (the default) in the app's release profile.** With `lto = true` or `"thin"`, linking on macOS fails
 with `Undefined symbols: ___isPlatformVersionAtLeast`, referenced from ggml's Metal objects. We reproduced it at v0.2.2
@@ -421,8 +422,8 @@ its handshake.
 
 ## Try an engine change in an app before tagging
 
-Put this in `~/.cargo/config.toml` (or pass it with `cargo --config`), never in the app's committed `.cargo/config.toml`,
-so the build block and the local patch never share a file:
+Put this in `~/.cargo/config.toml` (or pass it with `cargo --config`), never in the app's committed
+`.cargo/config.toml`, so the build block and the local patch never share a file:
 
 ```toml
 [patch."https://github.com/mmnzns/voice-engine"]
@@ -486,8 +487,8 @@ brings `DirectML.dll`). Every line a bench prints has `backend`, `device` (the a
 `device` must be the discrete card. Each step is one block, run from a clone of the engine, with the clip and the models set
 as above (`$env:VOICE_ENGINE_TEST_CLIP = "$PWD\docs\data\clip-bench.wav"`).
 
-Set `VOICE_ENGINE_TEST_EXPECT_CARD=1` for the test steps (4 and 5). A card test whose model or helper variables are not set
-still skips. With the variable set, a test that finds the card did not run (the work ran on the processor, with
+Set `VOICE_ENGINE_TEST_EXPECT_CARD=1` for the test steps (4 and 5). A card test whose model or helper variables are not
+set still skips. With the variable set, a test that finds the card did not run (the work ran on the processor, with
 `fell_back`, or the helper found no card) fails instead of printing SKIPPED and passing.
 
 1. Parakeet on DirectML and Whisper on Vulkan in this process (the `vulkan` feature builds the Vulkan backend into the
