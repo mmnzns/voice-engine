@@ -62,6 +62,18 @@ pub enum Released {
     NotUsing,
 }
 
+/// What `remove_everywhere` did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Removed {
+    /// The model's folder and every app's marker are gone, and so are the old copies, except `old_copies_left`
+    /// that could not be deleted (a file another program has open, on Windows).
+    Erased { old_copies_left: usize },
+    /// An app has the model loaded or is downloading it: nothing was touched.
+    InUse,
+    /// There was nothing of this model on this computer (no folder, no marker, no old copy).
+    NotThere,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StoreError {
     UnknownModel(String),
@@ -505,6 +517,48 @@ impl SharedStore {
             Erase::Busy => Released::Kept { users: Vec::new() },
             Erase::Users(users) => Released::Kept { users },
         })
+    }
+
+    /// The "Remove from this computer" button: erases the model for every app at once, unlike `release`, which
+    /// only lets go for this app. The model's folder, every app's marker and the old copies `move_in` left in the
+    /// apps' old folders (hard links or full copies, which keep the bytes on disk) all go. The other apps then
+    /// see the model as `Missing`, with a Download button. An old file is deleted only when its size is the
+    /// catalog's; the old folder goes only when it is empty. Ids that are not in the catalog (imported GGUF files
+    /// tracked by an app) have no old copies: their folder and markers go.
+    ///
+    /// Show a confirmation first, naming the other apps from `Status::Installed { users, .. }` ("Also used by ...").
+    ///
+    /// `InUse` when any app has the model loaded or is downloading it, nothing touched. This app's own
+    /// `ModelHandle` counts too, so unload the model first. Refused with `PermissionDenied` on a `read_only` view
+    /// and `InvalidInput` for an id that is not one plain folder name. A store from `open_at` never looks at old
+    /// folders. An old copy that cannot be deleted (a file another program has open, on Windows) is counted in
+    /// `old_copies_left`; the rest is still erased.
+    pub fn remove_everywhere(&self, id: &str) -> io::Result<Removed> {
+        self.writable()?;
+        if !valid_id(id) {
+            return Err(invalid_id());
+        }
+        let use_lock = self.lock_file(id, "use")?;
+        if !try_exclusive(&use_lock)? {
+            return Ok(Removed::InUse);
+        }
+        let download_lock = self.lock_file(id, "download")?;
+        if !try_exclusive(&download_lock)? {
+            return Ok(Removed::InUse);
+        }
+        let mut found = false;
+        for dir in [self.users_dir(id), self.model_dir(id)] {
+            match fs::remove_dir_all(dir) {
+                Ok(()) => found = true,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+        }
+        let (old_found, old_copies_left) = self.remove_old_copies(id);
+        if !found && old_found == 0 {
+            return Ok(Removed::NotThere);
+        }
+        Ok(Removed::Erased { old_copies_left })
     }
 
     /// `release` for every model this app uses: "Delete all data" in an app calls this instead of removing a

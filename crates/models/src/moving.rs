@@ -9,7 +9,7 @@
 use crate::catalog::{self, ModelFile, ModelInfo};
 use crate::imports::import_id;
 use crate::legacy::{App, LegacyEntry, LegacySource};
-use crate::shared::{SharedStore, app_name, valid_id};
+use crate::shared::{OldFolders, SharedStore, app_name, valid_id};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read};
@@ -110,7 +110,49 @@ enum Outcome {
     Left(&'static str),
 }
 
+/// Every app's old folders on this computer, as `move_in` reads them and `remove_everywhere` cleans them.
+pub(crate) fn legacy_table(old: &OldFolders) -> Vec<LegacySource> {
+    App::ALL
+        .into_iter()
+        .flat_map(|app| {
+            LegacySource::all(app, &old.local_data, old.roaming.as_deref(), old.windows)
+        })
+        .collect()
+}
+
 impl SharedStore {
+    /// Deletes the old copies of catalog model `id` (hard links or full copies `move_in` left in the apps' old
+    /// folders). Only files with the catalog's exact size are deleted, and only the entry's folder is removed, and
+    /// only when it is empty. Returns `(found, left)`: how many old files were there, and how many of them could
+    /// not be deleted. A store without old folders does nothing.
+    pub(crate) fn remove_old_copies(&self, id: &str) -> (usize, usize) {
+        let (Some(old), Some(model)) = (&self.old_folders, catalog::find(id)) else {
+            return (0, 0);
+        };
+        let (mut found, mut left) = (0, 0);
+        for src in legacy_table(old) {
+            for entry in src.entries.iter().filter(|e| e.id == id) {
+                let Some(files) = entry.disk_files(model) else {
+                    continue;
+                };
+                let folder = src.root.join(entry.rel);
+                for (disk_name, file) in files {
+                    let path = folder.join(disk_name);
+                    if !is_exact(&path, file.size) {
+                        continue;
+                    }
+                    found += 1;
+                    if fs::remove_file(&path).is_err() {
+                        left += 1;
+                    }
+                }
+                // Never `remove_dir_all` here: it only goes when nothing else is in it.
+                let _ = fs::remove_dir(&folder);
+            }
+        }
+        (found, left)
+    }
+
     /// Moves what the apps kept in their old folders into the shared folder. The app calls it first thing, before
     /// it opens a model or starts a helper. `used` are the model ids the app's settings point to.
     ///
@@ -121,12 +163,7 @@ impl SharedStore {
         let Some(old) = &self.old_folders else {
             return Ok(MoveReport::skipped());
         };
-        let legacy: Vec<LegacySource> = App::ALL
-            .into_iter()
-            .flat_map(|app| {
-                LegacySource::all(app, &old.local_data, old.roaming.as_deref(), old.windows)
-            })
-            .collect();
+        let legacy = legacy_table(old);
         let catalog: Vec<&ModelInfo> = catalog::all().iter().collect();
         self.move_in_with(&catalog, &legacy, used)
     }

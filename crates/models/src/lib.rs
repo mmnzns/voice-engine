@@ -13,4 +13,4 @@ pub use catalog::{GpuSupport, Kind, Licence, LlmInfo, ModelFile, ModelInfo};
 pub use download::{DownloadError, Progress};
 pub use legacy::{App, LegacyEntry, LegacySource};
 pub use moving::{ImportedGguf, MoveHooks, MoveReport};
-pub use shared::{ModelHandle, Released, SharedStore, Status, StoreError};
+pub use shared::{ModelHandle, Released, Removed, SharedStore, Status, StoreError};
