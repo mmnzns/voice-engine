@@ -20,7 +20,7 @@ use crate::api::{
     Transcript, Word,
 };
 use crate::threads::{ThreadKind, logical_cores, resolve_threads};
-use crate::words::clean;
+use crate::words::{clean, clean_flagged};
 use std::borrow::Cow;
 use std::path::Path;
 use voice_engine_protocol::gpu::{Device, DeviceKind, pick, whisper_gpu_index};
@@ -142,6 +142,7 @@ pub fn segments_from_raw(raw: Vec<RawSegment>, timing: Timing, audio_ms: u64) ->
         Timing::Segments => raw
             .into_iter()
             .filter_map(|r| {
+                let starts_word = r.text.starts_with(char::is_whitespace);
                 let text = r.text.trim().to_string();
                 if crate::is_noise(&text) || r.no_speech > NO_SPEECH_MAX {
                     return None;
@@ -164,6 +165,7 @@ pub fn segments_from_raw(raw: Vec<RawSegment>, timing: Timing, audio_ms: u64) ->
                     start_ms,
                     end_ms,
                     text,
+                    starts_word,
                     words,
                 })
             })
@@ -175,19 +177,24 @@ pub fn segments_from_raw(raw: Vec<RawSegment>, timing: Timing, audio_ms: u64) ->
                 .filter(|r| r.no_speech <= NO_SPEECH_MAX)
                 .map(|r| {
                     let (start_ms, end_ms) = clamp_span(r.start_ms, r.end_ms, audio_ms);
-                    Word {
-                        text: r.text,
-                        start_ms,
-                        end_ms,
-                    }
+                    let starts_word = r.text.starts_with(char::is_whitespace);
+                    (
+                        Word {
+                            text: r.text,
+                            start_ms,
+                            end_ms,
+                        },
+                        starts_word,
+                    )
                 })
                 .collect();
-            clean(words)
+            clean_flagged(words)
                 .into_iter()
-                .map(|w| Segment {
+                .map(|(w, starts_word)| Segment {
                     start_ms: w.start_ms,
                     end_ms: w.end_ms,
                     text: w.text.clone(),
+                    starts_word,
                     words: vec![w],
                 })
                 .collect()

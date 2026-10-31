@@ -4,7 +4,7 @@
 
 Breaking: `EngineError::Crashed` is `Crashed { exit_code, signal, detail }`; match `Crashed { .. }`. `Outcome::fell_back`
 is `Outcome::fallback: Option<Fallback>` (the field is gone, `fell_back()` is a method); it is `Some` whenever the card was
-asked for and the processor ran, so match `CardFailed | CardOutOfMemory` to say "card failed" once.
+asked for and the processor ran, so match `CardFailed | CardOutOfMemory` to say "card failed" once. `Segment` has a new field, `starts_word`.
 
 - feat: out-of-memory deaths are recognised from more messages, Windows' `STATUS_NO_MEMORY` and a Unix SIGKILL, and
   `EngineError::Crashed` carries the exit code, the signal and a short stderr tail with no user text (#26). A helper
@@ -22,6 +22,16 @@ asked for and the processor ran, so match `CardFailed | CardOutOfMemory` to say 
 - feat: the `ready` answer to `ping` carries `loaded_model` (the path of the model the helper holds, left out when none),
   and `LlmClient::loaded_model()` returns it without starting a helper when none runs; it answers within 10 s (#30). A
   v0.2.x helper sends none, which reads as `None`.
+- feat: `Segment::starts_word` (#32). Segment text stays trimmed; the new field says whether a space goes before it
+  when segments are joined (Whisper: the raw text began with whitespace, so CJK joins with none; Parakeet and the other
+  ONNX models: always `true`). `voice_engine_stt::join_segments` joins by it. Reads as `true` from a helper that does
+  not send it. Breaking: `Segment` has a new public field, so code that builds a `Segment` with a struct literal must
+  set `starts_word`.
+- docs: Parakeet's 0.5 s of silence on each side stays (#33). Measured on Parakeet Ultra: 0.25 s, 0.1 s and no padding
+  changed the transcript on some 15 s windows, and none was reliably faster (the audio saved is about 3%).
+- feat: voice detection settings (#31). `vad::VadSettings` (`threshold`, `min_speech_ms`, `min_silence_ms`, `padding_ms`;
+  `Default` is the old fixed values) and `vad::detect_with(model_dir, &audio, &settings)`. `detect` is unchanged.
+  Padding grows each span, stops at the ends of the audio and merges spans that meet.
 
 ## v0.2.3 (2026-10-31)
 

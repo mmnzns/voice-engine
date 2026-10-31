@@ -169,12 +169,14 @@ fn segments_mode_gives_the_sentences_with_their_words() {
                 start_ms: 0,
                 end_ms: 850,
                 text: "Hello world.".into(),
+                starts_word: true,
                 words: vec![w("Hello", 0, 400), w("world.", 400, 850)],
             },
             Segment {
                 start_ms: 1_000,
                 end_ms: 1_650,
                 text: "How are you?".into(),
+                starts_word: true,
                 words: vec![
                     w("How", 1_000, 1_200),
                     w("are", 1_200, 1_400),
@@ -800,4 +802,22 @@ fn the_non_speech_kinds_are_still_not_loadable_as_speech() {
         load(vad, dir.path(), LoadOptions::default()).err().unwrap(),
         SpeechError::Unsupported(_)
     ));
+}
+
+#[test]
+fn every_parakeet_segment_starts_a_word_in_both_modes() {
+    for timing in [Timing::Segments, Timing::Words] {
+        let got = segments_from_words(two_sentences(), timing);
+        assert!(!got.is_empty());
+        assert!(got.iter().all(|s| s.starts_word), "{timing:?}");
+    }
+    // So joining gives the segments with single spaces.
+    let got = segments_from_words(two_sentences(), Timing::Segments);
+    assert_eq!(
+        voice_engine_stt::join_segments(&got),
+        got.iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
 }

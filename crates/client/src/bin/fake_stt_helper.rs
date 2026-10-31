@@ -268,6 +268,7 @@ fn answer(
                 start_ms: 0,
                 end_ms: 900,
                 text: text.clone(),
+                starts_word: true,
                 words: text
                     .split(' ')
                     .zip([0u64, 300, 600])

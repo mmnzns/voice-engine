@@ -2,6 +2,7 @@
 //! arithmetic, `words::clean`, the thread rule, the choice of GPU) and the errors a missing or broken file gives.
 
 use voice_engine_protocol::gpu::{Device, DeviceKind};
+use voice_engine_stt::join_segments;
 use voice_engine_stt::threads::{ThreadKind, default_threads, resolve_threads};
 use voice_engine_stt::whisper_engine::{
     FILLER_PROMPT, MAX_PASSES, MIN_SAMPLES, Pass, PassDecoder, RESUME_GAP_MS, RawSegment, Token,
@@ -339,12 +340,14 @@ fn words_mode_is_one_word_per_segment_after_clean() {
                 start_ms: 0,
                 end_ms: 320,
                 text: "Okay.".into(),
+                starts_word: true,
                 words: vec![w("Okay.", 0, 320)]
             },
             Segment {
                 start_ms: 400,
                 end_ms: 600,
                 text: "So".into(),
+                starts_word: true,
                 words: vec![w("So", 400, 600)]
             },
         ]
@@ -389,6 +392,7 @@ fn pass(spans: &[(&str, u64, u64)], language: Option<&str>) -> Pass {
                 start_ms: *a,
                 end_ms: *b,
                 text: (*t).into(),
+                starts_word: true,
                 words: vec![w(t, *a, *b)],
             })
             .collect(),
@@ -671,4 +675,91 @@ fn the_api_types_are_what_the_spec_says() {
     ] {
         assert!(!e.to_string().is_empty());
     }
+}
+
+// ---- starts_word and join_segments ----
+
+fn seg(text: &str, starts_word: bool) -> Segment {
+    Segment {
+        start_ms: 0,
+        end_ms: 100,
+        text: text.into(),
+        starts_word,
+        words: vec![],
+    }
+}
+
+#[test]
+fn segments_mode_keeps_text_trimmed_and_says_whether_whisper_put_a_space_before() {
+    let segs = vec![
+        raw(" Hello there.", 0, 900, 0.0, vec![]),
+        raw(" Second one.", 1_000, 1_900, 0.0, vec![]),
+        // As whisper.cpp gives Chinese, Japanese or Korean: no space before the segment.
+        raw("\u{4f60}\u{597d}", 2_000, 2_500, 0.0, vec![]),
+        raw("\u{4e16}\u{754c}", 2_500, 3_000, 0.0, vec![]),
+    ];
+    let got = segments_from_raw(segs, Timing::Segments, 5_000);
+    assert_eq!(
+        got.iter().map(|s| s.starts_word).collect::<Vec<_>>(),
+        vec![true, true, false, false]
+    );
+    assert!(got.iter().all(|s| s.text == s.text.trim()));
+    assert_eq!(
+        join_segments(&got),
+        "Hello there. Second one.\u{4f60}\u{597d}\u{4e16}\u{754c}"
+    );
+}
+
+#[test]
+fn words_mode_carries_the_flag_through_clean() {
+    let segs = vec![
+        raw(" Okay", 0, 300, 0.0, vec![]),
+        raw(".", 300, 320, 0.0, vec![]),
+        raw(" [BLANK_AUDIO]", 320, 400, 0.0, vec![]),
+        raw(" So", 400, 600, 0.0, vec![]),
+        raw("on", 600, 700, 0.0, vec![]),
+    ];
+    let got = segments_from_raw(segs, Timing::Words, 5_000);
+    // "Okay." (the full stop glued on), "So" after the dropped noise, "on" with no space before it.
+    assert_eq!(
+        got.iter()
+            .map(|s| (s.text.as_str(), s.starts_word))
+            .collect::<Vec<_>>(),
+        vec![("Okay.", true), ("So", true), ("on", false)]
+    );
+    assert_eq!(join_segments(&got), "Okay. Soon");
+}
+
+#[test]
+fn join_segments_puts_a_space_only_where_a_segment_starts_a_word() {
+    assert_eq!(join_segments(&[]), "");
+    // The first segment's flag does not matter: nothing goes before it.
+    assert_eq!(join_segments(&[seg("a", true), seg("b", true)]), "a b");
+    assert_eq!(join_segments(&[seg("a", false), seg("b", false)]), "ab");
+    assert_eq!(
+        join_segments(&[seg("a", true), seg("b", false), seg("c", true)]),
+        "ab c"
+    );
+}
+
+#[test]
+fn join_segments_skips_empty_text_and_trims() {
+    let segs = [
+        seg("a", true),
+        seg("  ", true),
+        seg(" b ", true),
+        seg("", false),
+        seg("c", false),
+    ];
+    assert_eq!(join_segments(&segs), "a bc");
+}
+
+#[test]
+fn a_segment_from_an_older_helper_reads_as_starting_a_word() {
+    let s: Segment =
+        serde_json::from_str(r#"{"start_ms":0,"end_ms":10,"text":"x","words":[]}"#).unwrap();
+    assert!(s.starts_word);
+    let back: Segment =
+        serde_json::from_str(&serde_json::to_string(&seg("y", false)).unwrap()).unwrap();
+    assert!(!back.starts_word);
 }

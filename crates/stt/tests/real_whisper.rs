@@ -166,6 +166,21 @@ fn segments_mode_is_what_talaans_settings_give() {
         );
         assert_eq!(got, want, "gpu {gpu}");
         check_shape(&ours, ms(&clip));
+        // English: whisper.cpp spaces every segment, so each one starts a word and the join has single spaces.
+        let starts: Vec<bool> = ours.segments.iter().map(|s| s.starts_word).collect();
+        eprintln!("gpu {gpu}: starts_word {starts:?}");
+        assert!(ours.segments.iter().all(|s| s.starts_word), "gpu {gpu}");
+        let joined = voice_engine_stt::join_segments(&ours.segments);
+        let spaced = ours
+            .segments
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            joined == spaced,
+            "gpu {gpu}: the join differs from single spaces"
+        );
     }
 }
 
@@ -755,4 +770,97 @@ fn voice_detection_edge_cases_on_the_real_model() {
     assert!(spans.len() >= 10, "{}", spans.len());
     assert!(spans.windows(2).all(|w| w[0].1 < w[1].0));
     assert!(spans.iter().all(|&(a, b)| a < b && b <= ms(&long)));
+}
+
+/// The speech twice with a short pause between (the clip's own quiet ends make it about 240 ms with the clip, under the
+/// default 300 ms minimum silence and over a 100 ms one), with a second of silence on each side.
+fn two_phrases_with_a_short_pause() -> Vec<f32> {
+    let speech = say(PHRASE);
+    let mut audio = silence_speech_silence(1_000, &speech, 100);
+    audio.extend_from_slice(&speech);
+    audio.extend(std::iter::repeat_n(0.0f32, 16_000));
+    audio
+}
+
+#[test]
+#[ignore]
+fn voice_detection_settings_default_is_what_detect_gives() {
+    need_clip!();
+    let _g = guard();
+    let dir = vad_dir();
+    let audio = two_phrases_with_a_short_pause();
+    let plain = vad::detect(&dir, &audio).unwrap();
+    let with = vad::detect_with(&dir, &audio, &vad::VadSettings::default()).unwrap();
+    eprintln!(
+        "{} ms of audio: {} spans with the defaults",
+        ms(&audio),
+        plain.len()
+    );
+    assert_eq!(plain, with);
+    assert!(!plain.is_empty());
+}
+
+#[test]
+#[ignore]
+fn voice_detection_smaller_minimum_silence_gives_more_spans() {
+    need_clip!();
+    let _g = guard();
+    let dir = vad_dir();
+    let audio = two_phrases_with_a_short_pause();
+    let default = vad::detect(&dir, &audio).unwrap();
+    let short = vad::VadSettings {
+        min_silence_ms: 100,
+        ..vad::VadSettings::default()
+    };
+    let more = vad::detect_with(&dir, &audio, &short).unwrap();
+    eprintln!("default {default:?}, 100 ms minimum silence {more:?}");
+    assert!(
+        more.len() > default.len(),
+        "{} vs {}",
+        more.len(),
+        default.len()
+    );
+    assert!(more.windows(2).all(|w| w[0].1 < w[1].0));
+}
+
+#[test]
+#[ignore]
+fn voice_detection_padding_widens_clamps_and_merges() {
+    need_clip!();
+    let _g = guard();
+    let dir = vad_dir();
+    let audio = two_phrases_with_a_short_pause();
+    let short = vad::VadSettings {
+        min_silence_ms: 100,
+        ..vad::VadSettings::default()
+    };
+    let bare = vad::detect_with(&dir, &audio, &short).unwrap();
+    // 30 ms each side: every span is wider, none runs outside the audio.
+    let padded = vad::detect_with(
+        &dir,
+        &audio,
+        &vad::VadSettings {
+            padding_ms: 30,
+            ..short
+        },
+    )
+    .unwrap();
+    eprintln!(
+        "{} spans bare, {} with 30 ms padding",
+        bare.len(),
+        padded.len()
+    );
+    assert!(padded[0].0 <= bare[0].0 && padded[0].1 >= bare[0].1);
+    assert!(padded.iter().all(|&(a, b)| a < b && b <= ms(&audio)));
+    // Padding of 2 s runs into both ends of the audio and joins everything into one span: the whole track.
+    let wide = vad::detect_with(
+        &dir,
+        &audio,
+        &vad::VadSettings {
+            padding_ms: 2_000,
+            ..short
+        },
+    )
+    .unwrap();
+    assert_eq!(wide, vec![(0, ms(&audio))]);
 }

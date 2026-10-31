@@ -171,6 +171,12 @@ words, so an app that needs sentences and an app that needs word times make the 
 - `Timing::Words` is Ensayo's (the default): token timestamps with one word per segment, run through `words::clean`
   (noise dropped, punctuation glued to the word before, times kept in order).
 
+`Segment::text` is trimmed. `Segment::starts_word` says whether a space goes before it when segments are joined. Whisper:
+the raw segment text began with whitespace (it does not in Chinese, Japanese or Korean, where words are not spaced).
+Parakeet, Parakeet Unified and Nemotron: always `true`. The first segment's value does not matter. A helper from before
+the field reads as `true`. `join_segments(&segments)` joins by it: a single space before each segment that starts a
+word, none before one that does not.
+
 Clips under 1 s are padded with silence and times are clamped to the real audio. When a decode stops with 2 s or more of
 audio after its last word, the engine decodes the rest again from there (up to 8 passes) and
 `Transcript::stopped_early_at_ms` says where the first stop was, so an app can see how often a model gives up early.
@@ -210,7 +216,11 @@ file name they chose.
 **Voice detection.** `vad::detect(model_dir, &audio)` returns the speech spans `(start_ms, end_ms)` of a track, in order,
 on the audio's clock (whisper.cpp's Silero detector with Talaan's settings, from the catalog's `vad` model, under 1 MB).
 Only speech needs to go to a speech model: silence costs time and makes models invent text. No speech is an empty list,
-not an error. It always runs on the processor.
+not an error. It always runs on the processor. `vad::detect_with(model_dir, &audio, &VadSettings { .. })` takes the app's
+own settings: `threshold` (0.5), `min_speech_ms` (250), `min_silence_ms` (300) and `padding_ms` (0). `VadSettings::default()`
+is those numbers, which is what `detect` uses. Padding is added after detection: each span grows on both sides, stops at
+the ends of the audio, and spans that overlap or touch after growing are merged. A dictation app can use a smaller
+minimum silence with a little padding (Parlato used 100 ms and 30 ms) to get more, tighter spans.
 
 **Speaker separation.** `diarize::load(model_dir, threads)` returns a `Diarizer`; `run(&track)` gives one `SpeakerFrame`
 per 10 ms, with a probability from 0 to 1 for each of up to 8 speakers (NVIDIA's Nemotron 3 Diarization through

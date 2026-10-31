@@ -125,8 +125,21 @@ pub struct Transcript {
 pub struct Segment {
     pub start_ms: u64,
     pub end_ms: u64,
+    /// The segment's text, trimmed (no space at either end).
     pub text: String,
+    /// Whether this segment starts a new word, so a space goes between the segment before it and this one when the
+    /// text is joined. Whisper: the raw segment text began with whitespace (whisper.cpp puts none before a segment
+    /// in Chinese, Japanese or Korean, where words are not spaced). Parakeet, Parakeet Unified and Nemotron: always
+    /// `true` (their words are spaced, and punctuation is already glued to the word before). The first segment's
+    /// value does not matter: nothing goes before it. A helper from before this field reads as `true`.
+    /// `voice_engine_stt::join_segments` joins segments by it.
+    #[serde(default = "starts_word_default")]
+    pub starts_word: bool,
     pub words: Vec<Word>,
+}
+
+fn starts_word_default() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -263,6 +276,7 @@ mod tests {
                 start_ms: 0,
                 end_ms: 1200,
                 text: "Bonjour, tout le monde.".into(),
+                starts_word: true,
                 words: vec![
                     Word {
                         text: "Bonjour,".into(),
