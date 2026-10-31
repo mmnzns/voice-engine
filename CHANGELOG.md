@@ -6,6 +6,8 @@
   not in `src-tauri/.cargo`; the local `[patch]` goes in `~/.cargo/config.toml` or `--config` (#20).
 - docs: helpers built by `build-helpers.yml` and the build scripts are the engine's own binaries and read
   `VOICE_ENGINE_GPU` and `VOICE_ENGINE_LLM_IDLE_SECS`; an app's own dev helper reads `<PREFIX>_GPU` and the rest (#21).
+- docs: an app's release profile must keep `lto = false`; with `lto = true` or `"thin"` the macOS link fails with
+  `Undefined symbols: ___isPlatformVersionAtLeast` (#22).
 ## v0.2.2 (2026-10-30)
 
 The Windows card check no longer counts a VM's or a driverless PC's display adapter as a card, and it answers within 10 s.

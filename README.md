@@ -374,6 +374,10 @@ the baseline silently does not apply. Commit the file; the local patch in the ne
 reusable workflow described in `docs/building-helpers.md`, which builds in the engine's own checkout and so carries
 them. The rustflags line is for Windows x64 only.
 
+**Keep `lto = false` (the default) in the app's release profile.** With `lto = true` or `"thin"`, linking on macOS fails
+with `Undefined symbols: ___isPlatformVersionAtLeast`, referenced from ggml's Metal objects. We reproduced it at v0.2.2
+with thin LTO. The C++ libraries never used Rust's LTO, so turning it off costs a little binary size and no speed.
+
 **The two `CMAKE_*_FLAGS_RELEASE` lines are not optional on Windows.** `cmake-rs` strips the `/O` flags from
 `CMAKE_<LANG>_FLAGS_RELEASE` under the Visual Studio generator, so without them whisper.cpp and llama.cpp are compiled at
 MSVC's default of `/Od` (no optimization) in release builds: on a Ryzen 7 a Whisper decode on the processor never
