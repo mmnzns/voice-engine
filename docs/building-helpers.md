@@ -17,16 +17,29 @@ Each file is named the way Tauri names a sidecar, `<name>-<target triple>[.exe]`
 `llm-name` and `stt-name` inputs; the engine fixes nothing). A Vulkan variant puts `-vulkan` after the name and before the
 triple: `ensayo-llm-vulkan-x86_64-pc-windows-msvc.exe`. Vulkan builds exist for Windows x64 only.
 
-### DirectML is not in the helpers
+### DirectML and the helpers' imports
 
 Both Vulkan helpers are built with `--features vulkan` only. The speech helper runs Whisper only; Parakeet runs in the
-app's own process, so an app that wants Parakeet on the card enables `voice-engine-stt/directml` in its own `Cargo.toml`.
-From `ort-sys 2.0.0-rc.13`'s build script: that build links ONNX Runtime statically and the program imports
-`DirectML.dll`, `D3D12.dll`, `DXGI.dll` and `DXCORE.dll` at load time (`ort`'s `copy-dylibs` is off, so nothing is copied
-next to the exe). All four come from Windows: `DirectML.dll` has been in `C:\Windows\System32` since Windows 10 1903.
-Nothing ships with the app, and the helpers do not import any of it. Not checked on a PC yet: that the in-box
-`DirectML.dll` is new enough for this ONNX Runtime on every Windows 10 build; if it is not, Parakeet falls back to the
-processor with `fell_back`.
+app's own process, so an app that wants Parakeet on the card enables `voice-engine-stt/directml` in its own
+`Cargo.toml`. From `ort-sys 2.0.0-rc.13`'s build script: that build links ONNX Runtime statically and the program
+imports `DirectML.dll`, `D3D12.dll`, `DXGI.dll` and `DXCORE.dll` at load time (`ort`'s `copy-dylibs` is off, so nothing
+is copied next to the exe). All four come from Windows: `DirectML.dll` has been in `C:\Windows\System32` since Windows
+10 1903. Nothing ships with the app. These are load-time imports, not something Parakeet asks for when it loads a model:
+the DirectML link line is added to every Windows build by `ort-sys`, and `ort` is an unconditional dependency of
+`voice-engine-stt`. So a Windows helper (and any app that links the speech crate) may import `DirectML.dll` whatever its
+features are. If an export ONNX Runtime needs is missing from the in-box file (for example `DMLCreateDevice1` on a very
+old Windows 10), the program does not start, and there is no fall back to the processor. Windows 10 1903 (build 18362)
+is the oldest we state; which exact builds have the exports ONNX Runtime needs is not checked. Do not rely on what the
+helpers import: run `dumpbin /dependents` on the built `.exe` files (from a Visual Studio developer prompt) and read the
+list.
+
+## Which environment variables the helpers read
+
+The helpers this workflow and the build scripts make are the engine's own binaries, built from the engine's checkout
+with the prefix `VOICE_ENGINE`. They read `VOICE_ENGINE_GPU` (for example `fail`, the forced card failure check) and
+`VOICE_ENGINE_LLM_IDLE_SECS`, whatever `llm-name` and `stt-name` say. An app's own dev helper, built from its 3-line
+`main.rs` with `env_prefix`, reads `<PREFIX>_GPU` and `<PREFIX>_LLM_IDLE_SECS` (Talaan: `TALAAN_GPU`). Both are
+test-only settings.
 
 ## Why the engine builds them, and not the app
 
@@ -56,7 +69,10 @@ dot-product or i8mm kernels, whatever the build machine's CPU is.
 
 An app that links `voice-engine-stt` **in its own process** (the speech models run there, not in a helper) is not covered
 by this workflow: its own build needs the same settings. The README section "Build settings an app must copy" lists
-them.
+them. They go in a committed `.cargo/config.toml` in the folder cargo runs from (usually the repo root), not next to the
+manifest: cargo reads that file from the working directory and its parents, so `src-tauri/.cargo/config.toml` is never
+read by `cargo test --manifest-path src-tauri/Cargo.toml` run from the root. A local `[patch]` to try engine changes
+belongs in `~/.cargo/config.toml` or `--config`, never in that committed file.
 
 ## Calling it
 

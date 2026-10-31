@@ -26,15 +26,9 @@ fn diarization() -> &'static ModelInfo {
     catalog::find("diarization").expect("diarization is in the catalog")
 }
 
-/// A store on `dir`. Panics if `dir` is inside the real shared model folder.
+/// A store on `dir`. Panics if `dir` is inside a real folder.
 fn store(app: App, dir: &Path) -> SharedStore {
-    if let Some(real) = SharedStore::default_dir() {
-        assert!(
-            !dir.starts_with(&real),
-            "a test must never use the real shared model folder: {}",
-            dir.display()
-        );
-    }
+    support::assert_not_real(dir);
     SharedStore::open_at(app, dir.to_path_buf()).unwrap()
 }
 
@@ -761,13 +755,13 @@ fn default_dir_is_a_path_under_craft_concepts_digital_and_building_it_creates_no
 }
 
 #[test]
-#[should_panic(expected = "real shared model folder")]
+#[should_panic(expected = "a test must never use a real folder")]
 fn the_test_helper_refuses_the_real_folder() {
     if let Some(real) = SharedStore::default_dir() {
         // `store` panics before it opens (or creates) anything.
         let _ = store(App::Talaan, &real.join("anything"));
     } else {
-        panic!("real shared model folder (none on this system)");
+        panic!("a test must never use a real folder (none on this system)");
     }
 }
 

@@ -119,7 +119,12 @@ fn the_client_reports_the_processor_for_gpu_false_and_reloads_when_the_place_cha
         .unwrap();
     assert_eq!(on_card.backend.backend, "metal");
     assert!(on_card.value.load_seconds > 0.0, "back to the card reloads");
-    assert_eq!(on_card.value.text, on_cpu.value.text);
+    assert!(
+        on_card.value.text == on_cpu.value.text,
+        "the card and the processor gave different replies ({} and {} chars)",
+        on_card.value.text.chars().count(),
+        on_cpu.value.text.chars().count()
+    );
     // A load for the processor says cpu, and reloads.
     let loaded = c.load(&path, 4096, false, &mut |_| {}).unwrap();
     assert_eq!(loaded.backend.backend, "cpu");

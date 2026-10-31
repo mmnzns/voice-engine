@@ -261,6 +261,28 @@ impl LlmClient {
         }
     }
 
+    /// The app's "Try again" for the graphics card on a live client: forgets that the card failed (in this client and
+    /// in the `gpu_failures` file, when one is configured) so the next request tries the card again. It waits for
+    /// a request in progress to finish. When the helper running now is the processor one that took over after the
+    /// card failed, it is stopped, so the next request starts a new helper on the card (the model loads again there
+    /// with that request); when the card helper is running, it is left alone. The card can fail again, and that is
+    /// remembered again. Calling `clear_gpu_failure` alone does not reach a running client.
+    pub fn retry_gpu(&self) {
+        let mut running = self.running.lock().unwrap_or_else(|e| e.into_inner());
+        {
+            let cfg = self.config.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(path) = cfg.gpu_failures.as_deref() {
+                gpu_memory::clear_gpu_failure(path);
+            }
+        }
+        self.gpu_disabled.store(false, Ordering::Relaxed);
+        if running.as_ref().is_some_and(|r| r.processor_fallback)
+            && let Some(mut r) = running.take()
+        {
+            r.process.kill();
+        }
+    }
+
     // --- the core -----------------------------------------------------------------------------------------------
 
     /// Sends `request` and waits for the event `pick` accepts, passing every other event to `progress`.

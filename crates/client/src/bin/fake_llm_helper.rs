@@ -1,17 +1,17 @@
 //! A fake AI helper for the client's tests. `FAKE_MODE` picks a behaviour, `FAKE_STATE` is a file it keeps a counter
 //! in (so a mode can fail the first N times and then work).
 //!
-//! Modes: (default) answers everything; `die_at_start` exits at once without a word; `die_at_start_twice` does that
-//! for the first two starts; `wrong_protocol` answers `ready` with protocol 1; `die_on_complete` exits after one
-//! progress event; `die_on_first_complete` exits before answering the first `complete` (an idle exit just as the
-//! request arrives); `oom` writes an out-of-memory message and dies on `complete`; `stall` never answers `complete`;
-//! `slow` writes progress until it gets `cancel`, then answers `cancelled`; `ignore_cancel` writes progress forever;
-//! `gpu_ok` reports a Vulkan GPU and works; `gpu_die` reports a GPU and dies on `complete`; `gpu_error` reports a GPU
-//! and answers `complete` with the graphics card failed; `per_request` is the Mac helper: `ready` says `metal`, and
-//! `loaded`, `done` and `embedded` say `metal` for a request with `gpu: true` and `cpu` for `gpu: false`. Every other
-//! mode answers like a helper from before replies said where they ran (no backend), so the client uses `ready`'s.
-//! `metal_die` is the Mac helper asked for as the card helper: `ready` says `metal` with no device, and it dies on
-//! `complete` like `gpu_die`.
+//! Modes: (default) answers everything; `die_at_start` exits at once without a word; `die_at_start_twice` does that for
+//! the first two starts; `wrong_protocol` answers `ready` with protocol 1; `die_on_complete` exits after one progress
+//! event; `die_on_first_complete` exits before answering the first `complete` (an idle exit just as the request
+//! arrives); `oom` writes an out-of-memory message and dies on `complete`; `stall` never answers `complete`; `slow`
+//! writes progress until it gets `cancel`, then answers `cancelled`; `ignore_cancel` writes progress forever; `gpu_ok`
+//! reports a Vulkan GPU and works; `gpu_die` reports a GPU and dies on `complete`; `gpu_die_once` does that for the
+//! first `complete` (over all starts) and works after; `gpu_error` reports a GPU and answers `complete` with the
+//! graphics card failed; `per_request` is the Mac helper: `ready` says `metal`, and `loaded`, `done` and `embedded` say
+//! `metal` for a request with `gpu: true` and `cpu` for `gpu: false`. Every other mode answers like a helper from
+//! before replies said where they ran (no backend), so the client uses `ready`'s. `metal_die` is the Mac helper asked
+//! for as the card helper: `ready` says `metal` with no device, and it dies on `complete` like `gpu_die`.
 //!
 //! `devices` answers with the list `FAKE_DEVICES` describes (fake_support/devices.rs); mode `no_devices` never answers it.
 //!
@@ -161,6 +161,17 @@ fn main() {
                             total: 0,
                         });
                         std::process::exit(139);
+                    }
+                    "gpu_die_once" => {
+                        if bump(&state) == 0 {
+                            send(&Event::Progress {
+                                phase: Phase::Loading,
+                                done: 0,
+                                total: 0,
+                            });
+                            std::process::exit(139);
+                        }
+                        answer(says(c.gpu));
                     }
                     "die_on_first_complete" => {
                         if bump(&state) == 0 {

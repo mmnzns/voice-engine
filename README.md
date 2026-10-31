@@ -50,6 +50,15 @@ processor helper gets the same request with `gpu: false` (`load`, `complete`, `e
 really runs on the processor. With no `gpu_helper` the one helper gets `gpu` as the app wrote it (on the Mac that is the
 Metal helper). A Metal helper that dies counts as a card failure like a Vulkan one.
 
+A card failure is remembered in the `gpu_failures` file (when the config names one) under the app's `gpu_key` (a build
+string such as `"1.2.0 | driver 560.94"`), and in the client itself until the app restarts. The app's "Try again" calls
+`retry_gpu()` on each live `LlmClient` and `SttClient`: it waits for a request in progress, clears the file and the
+client's memory, and stops the processor helper if that is the one running, so the next request starts on the card (the
+`SttClient` loads its remembered model into the new helper); a running card helper is left alone.
+`clear_gpu_failure(path)` only removes the file, which is enough for a client built afterwards but not for one already
+running. The engine compares `gpu_key` only, so an app should fold the graphics driver version into it: a driver update
+then tries the card again.
+
 ## Local AI servers
 
 `voice_engine_client::servers::detect()` says which local AI servers are running on this computer: Ollama (port 11434)
@@ -192,7 +201,11 @@ app can ask at startup without hanging. An app should treat an `Err` from `discr
 off by default. A timeout does not mark the card as failed.
 
 `DirectML.dll` comes from Windows (`C:\Windows\System32`, Windows 10 1903 and later): nothing ships with the app and the
-engine adds no file to the helpers' output. The helpers are built without DirectML and do not import it.
+engine adds no file to the helpers' output. It is imported when the program starts, not when Parakeet loads: `ort-sys`
+adds the DirectML link line to every Windows build and `voice-engine-stt` always depends on `ort`, so the helpers, and
+an app that links the speech crate, may import `DirectML.dll` even without the `directml` feature. If an export ONNX
+Runtime needs is missing (for example `DMLCreateDevice1` on a very old Windows 10), the program does not start and there
+is no fall back to the processor. Check what a built file imports with `dumpbin /dependents <file>.exe`.
 
 ### What runs where
 
@@ -336,6 +349,11 @@ fn main() {
 }
 ```
 
+The `env_prefix` names the test-only settings the helper reads, for example `TALAAN_GPU` and `TALAAN_LLM_IDLE_SECS`. The
+helpers that `build-helpers.yml` and the build scripts make are the engine's own binaries, built from the engine's
+checkout, so they read `VOICE_ENGINE_GPU` and `VOICE_ENGINE_LLM_IDLE_SECS`. An app's own dev helper, built from the
+3-line `main.rs`, reads `<PREFIX>_GPU` and the rest. Both are for tests only.
+
 ## Build settings an app must copy
 
 llama.cpp and whisper.cpp are built from source by CMake while an app compiles. Left alone they are compiled for the
@@ -361,11 +379,18 @@ rustflags = ["-C", "target-feature=+avx2,+fma,+f16c,+bmi2"]   # llama-cpp-sys-2 
 
 **Cargo reads `.cargo/config.toml` only for the workspace it builds.** An app that depends on the engine as a git
 dependency does not get these lines, and nothing warns it: it builds the libraries for its own build machine. So an app
-that links `voice-engine-llm` or `voice-engine-stt` (the helper programs, or the speech crate in process) copies the block
-above into its own `.cargo/config.toml` (for a Tauri app, next to `Cargo.toml` in `src-tauri/`; commit it, unlike the
-patch file in the next section), or sets the same variables in its release workflow, or builds the helpers with the
-reusable workflow described in `docs/building-helpers.md`, which builds in the engine's own checkout and so carries
-them. The rustflags line is for Windows x64 only.
+that links `voice-engine-llm` or `voice-engine-stt` (the helper programs, or the speech crate in process) copies the
+block above into a committed `.cargo/config.toml` in the folder cargo runs from, usually the repo root. Cargo reads
+`.cargo/config.toml` from the working directory and its parents, not from the manifest's folder: with `cargo test
+--manifest-path src-tauri/Cargo.toml` run from the root, a `src-tauri/.cargo/config.toml` is never read and the baseline
+silently does not apply. Commit the file; the local patch in the next section goes elsewhere. Or it sets the same
+variables in its release workflow, or builds the helpers with the reusable workflow described in
+`docs/building-helpers.md`, which builds in the engine's own checkout and so carries them. The rustflags line is for
+Windows x64 only.
+
+**Keep `lto = false` (the default) in the app's release profile.** With `lto = true` or `"thin"`, linking on macOS fails
+with `Undefined symbols: ___isPlatformVersionAtLeast`, referenced from ggml's Metal objects. We reproduced it at v0.2.2
+with thin LTO. The C++ libraries never used Rust's LTO, so turning it off costs a little binary size and no speed.
 
 **The two `CMAKE_*_FLAGS_RELEASE` lines are not optional on Windows.** `cmake-rs` strips the `/O` flags from
 `CMAKE_<LANG>_FLAGS_RELEASE` under the Visual Studio generator, so without them whisper.cpp and llama.cpp are compiled at
@@ -406,7 +431,8 @@ its handshake.
 
 ## Try an engine change in an app before tagging
 
-Put this in the app's `src-tauri/.cargo/config.toml` (git-ignored, never committed):
+Put this in `~/.cargo/config.toml` (or pass it with `cargo --config`), never in the app's committed
+`.cargo/config.toml`, so the build block and the local patch never share a file:
 
 ```toml
 [patch."https://github.com/mmnzns/voice-engine"]
@@ -426,7 +452,7 @@ own computer (they print times, sizes and counts, never text; always `--release`
 ```text
 cargo run --release -p voice-engine-stt --example bench                       # `-- sweep` adds other thread counts
 cargo run --release -p voice-engine-client --example bench_llm                # needs: cargo build --release -p voice-engine-llm
-cargo run --release -p voice-engine-models --example download_proof           # downloads whisper-base and whisper-tiny
+cargo run --release -p voice-engine-models --example download_proof -- --real # downloads whisper-base and whisper-tiny (or set VOICE_ENGINE_MODELS_DIR)
 ```
 
 `bench` and `bench_timing` look for each model on its own: in `$VOICE_ENGINE_TEST_MODELS` (a folder that holds a folder per
@@ -436,7 +462,9 @@ model id) when that is set, else in the shared folder, then in Talaan's real fol
 file named by `$VOICE_ENGINE_TEST_CLIP` (16-bit PCM or 32-bit float; repeated and cut to 29 s), and the macOS `say` command
 only when that is not set and the computer is a Mac. `bench_llm` takes catalog ids (default `qwen3.5-4b` and
 `granite-4.2-3b`), reads them from `$VOICE_ENGINE_TEST_MODELS` or else the shared folder, and finds the helper at
-`$VOICE_ENGINE_TEST_HELPER` or `target/release/voice-engine-llm` (`.exe` on Windows). `download_proof` writes into the real shared model folder.
+`$VOICE_ENGINE_TEST_HELPER` or `target/release/voice-engine-llm` (`.exe` on Windows). `download_proof` refuses to run
+unless `VOICE_ENGINE_MODELS_DIR` is set or `--real` is passed, and then writes into that folder (the real shared model
+folder for `--real`).
 
 ### Run the speed check and the real-model tests on a Windows PC
 
@@ -470,6 +498,10 @@ brings `DirectML.dll`). Every line a bench prints has `backend`, `device` (the a
 `device` must be the discrete card. Each step is one block, run from a clone of the engine, with the clip and the models set
 as above (`$env:VOICE_ENGINE_TEST_CLIP = "$PWD\docs\data\clip-bench.wav"`).
 
+Set `VOICE_ENGINE_TEST_EXPECT_CARD=1` for the test steps (4 and 5). A card test whose model or helper variables are not
+set still skips. With the variable set, a test that finds the card did not run (the work ran on the processor, with
+`fell_back`, or the helper found no card) fails instead of printing SKIPPED and passing.
+
 1. Parakeet on DirectML and Whisper on Vulkan in this process (the `vulkan` feature builds the Vulkan backend into the
    example), next to the processor rows:
 
@@ -496,6 +528,7 @@ cargo run --release -p voice-engine-client --example bench_llm
 
 ```powershell
 $env:VOICE_ENGINE_TEST_CLIP = "$PWD\docs\data\clip-sentence.wav"
+$env:VOICE_ENGINE_TEST_EXPECT_CARD = "1"
 cargo test --release -p voice-engine-stt --features vulkan,directml -- --ignored --test-threads=1 --nocapture
 ```
 
@@ -514,6 +547,7 @@ $env:VOICE_ENGINE_TEST_STT_HELPER = "$PWD\target\release\voice-engine-stt.exe"
 $env:VOICE_ENGINE_TEST_GPU_HELPER = "$env:TEMP\llm-vulkan.exe"
 $env:VOICE_ENGINE_TEST_HELPER = "$PWD\target\release\voice-engine-llm.exe"
 $env:VOICE_ENGINE_TEST_LLM = "C:\path\to\model.gguf"      # any chat model, a .gguf file
+$env:VOICE_ENGINE_TEST_EXPECT_CARD = "1"
 cargo test --release -p voice-engine-client --test real_fallback -- --ignored --nocapture --test-threads=1
 ```
 

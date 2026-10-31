@@ -10,7 +10,12 @@
 
 mod common;
 
-use common::{SENTENCE, check_shape, guard, lower_letters, model_dir, ms, say, text_of, words_of};
+#[cfg(feature = "directml")]
+use common::{EXPECT_CARD_ENV, expect_card};
+use common::{
+    SENTENCE, assert_same, check_shape, guard, lower_letters, model_dir, ms, say, seg_info,
+    text_of, words_of,
+};
 use std::path::PathBuf;
 use std::time::Instant;
 use voice_engine_models::catalog::find;
@@ -96,7 +101,11 @@ fn both_modes_give_segments_and_ordered_timed_words() {
         }
         check_shape(&t, ms(&clip));
         let heard = lower_letters(&words_of(&t).join(" "));
-        assert!(heard.contains("speechengine"), "heard {heard:?}");
+        assert!(
+            heard.contains("speechengine"),
+            "the clip was not heard in {} letters",
+            heard.len()
+        );
         // Parakeet TDT reports no language
         assert_eq!(t.language, None);
         match timing {
@@ -104,10 +113,14 @@ fn both_modes_give_segments_and_ordered_timed_words() {
                 // Ultra punctuates this as one sentence ("Hello there, this is ..."): one segment with all words
                 assert!(
                     t.segments[0].text.starts_with("Hello there"),
-                    "{:?}",
-                    t.segments[0]
+                    "the first segment does not open the way the clip does: {}",
+                    seg_info(&t.segments[0])
                 );
-                assert!(t.segments[0].words.len() >= 10, "{:?}", t.segments[0]);
+                assert!(
+                    t.segments[0].words.len() >= 10,
+                    "{}",
+                    seg_info(&t.segments[0])
+                );
             }
             Timing::Words => {
                 assert!(t.segments.len() >= 10, "{} segments", t.segments.len());
@@ -208,7 +221,7 @@ fn compare_with_parakeet_rs(clip: &[f32]) {
         got_segments.len()
     );
     assert!(!want_segments.is_empty());
-    assert_eq!(got_segments, want_segments);
+    assert_same(&got_segments, &want_segments, "the segments");
 
     // Ensayo: word mode, shifted and clamped, then `clean`
     let timed = theirs
@@ -236,7 +249,7 @@ fn compare_with_parakeet_rs(clip: &[f32]) {
         got_words.len()
     );
     assert!(want_words.len() >= 10);
-    assert_eq!(got_words, want_words);
+    assert_same(&got_words, &want_words, "the words");
     // and the words inside the sentences are the same words
     let in_sentences: Vec<&str> = segments
         .segments
@@ -244,7 +257,7 @@ fn compare_with_parakeet_rs(clip: &[f32]) {
         .flat_map(|s| s.words.iter().map(|w| w.text.as_str()))
         .collect();
     let in_words: Vec<&str> = got_words.iter().map(|w| w.text.as_str()).collect();
-    assert_eq!(in_sentences, in_words);
+    assert_same(&in_sentences, &in_words, "the words inside the sentences");
 }
 
 /// Short sentences with pauses, so the model ends them: `Timing::Segments` must give one segment per sentence the
@@ -264,23 +277,30 @@ fn sentences_come_out_as_segments_with_their_words() {
     }
     check_shape(&segments, ms(&clip));
     check_shape(&words, ms(&clip));
-    assert!(segments.segments.len() >= 3, "{:?}", text_of(&segments));
+    assert!(
+        segments.segments.len() >= 3,
+        "{} segments, {} chars",
+        segments.segments.len(),
+        text_of(&segments).chars().count()
+    );
     let enders = |s: &str| s.contains(['.', '?', '!']);
     let (last, rest) = segments.segments.split_last().unwrap();
     for s in rest {
         assert!(
             enders(s.words.last().map_or("", |w| w.text.as_str())),
-            "{s:?}"
+            "{}",
+            seg_info(s)
         );
         assert!(
             s.words[..s.words.len() - 1]
                 .iter()
                 .all(|w| !enders(&w.text)),
-            "a sentence ends inside {s:?}"
+            "a sentence ends inside {}",
+            seg_info(s)
         );
     }
     assert!(!last.words.is_empty());
-    assert_eq!(flat(&segments), flat(&words));
+    assert_same(&flat(&segments), &flat(&words), "segments and words");
     // the sentence's own times are its first word's start and its last word's end
     for s in &segments.segments {
         assert_eq!(s.start_ms, s.words[0].start_ms);
@@ -312,8 +332,8 @@ fn a_15_second_window_returns_timed_words_across_it() {
         assert!(words.len() >= 25, "{} words in 15 s of speech", words.len());
         assert!(
             words.last().unwrap().2 >= 11_000,
-            "speech stops at {:?}",
-            words.last()
+            "speech stops at {:?} ms",
+            words.last().map(|w| w.2)
         );
     }
 }
@@ -383,12 +403,13 @@ fn clips_of_every_short_length_work() {
                 .unwrap_or_else(|e| panic!("{n} samples {timing:?}: {e}"));
             let clip_ms = ms(part);
             for s in &t.segments {
-                assert!(s.end_ms <= clip_ms, "{n} samples: {s:?}");
+                assert!(s.end_ms <= clip_ms, "{n} samples: {}", seg_info(s));
                 assert!(
                     s.words
                         .iter()
                         .all(|w| w.end_ms <= clip_ms && w.start_ms <= w.end_ms),
-                    "{n} samples: {s:?}"
+                    "{n} samples: {}",
+                    seg_info(s)
                 );
             }
             eprintln!(
@@ -481,7 +502,13 @@ fn the_gpu_option_uses_directml_or_reports_the_fallback() {
                 "{b:?}"
             );
         }
-        "cpu" => assert!(b.fell_back, "{b:?}"),
+        "cpu" => {
+            assert!(b.fell_back, "{b:?}");
+            assert!(
+                !expect_card(),
+                "{EXPECT_CARD_ENV} is set, but the card did not run: {b:?}"
+            );
+        }
         other => panic!("unexpected backend {other}: {b:?}"),
     }
     let b = engine(LoadOptions {
@@ -573,7 +600,12 @@ fn fillers_vocabulary_and_language_hints_change_nothing_for_parakeet() {
             },
         )
         .unwrap();
-    assert_eq!(plain, with);
+    assert!(
+        plain == with,
+        "the options changed the transcript: {} against {} segments",
+        plain.segments.len(),
+        with.segments.len()
+    );
     assert_eq!(with.language, None);
 }
 

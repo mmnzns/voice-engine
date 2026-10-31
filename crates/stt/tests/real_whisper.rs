@@ -12,7 +12,8 @@
 mod common;
 
 use common::{
-    SENTENCE, check_shape, guard, lower_letters, model_dir, ms, say, text_of, use_gpu, words_of,
+    EXPECT_CARD_ENV, SENTENCE, check_shape, expect_card, guard, lower_letters, model_dir, ms, say,
+    seg_info, text_of, use_gpu, words_of,
 };
 use std::path::PathBuf;
 use std::time::Instant;
@@ -89,7 +90,8 @@ fn both_modes_give_segments_and_ordered_timed_words() {
         let heard = lower_letters(&words_of(&t).join(" "));
         assert!(
             heard.contains("speechengine") || heard.contains("shorttest"),
-            "heard {heard:?}"
+            "the clip was not heard in {} letters",
+            heard.len()
         );
         assert_eq!(t.language.as_deref(), Some("en"));
         if timing == Timing::Words {
@@ -279,12 +281,13 @@ fn clips_of_every_short_length_work() {
                 .unwrap_or_else(|e| panic!("{n} samples {timing:?}: {e}"));
             let clip_ms = ms(part);
             for s in &t.segments {
-                assert!(s.end_ms <= clip_ms, "{n} samples: {s:?}");
+                assert!(s.end_ms <= clip_ms, "{n} samples: {}", seg_info(s));
                 assert!(
                     s.words
                         .iter()
                         .all(|w| w.end_ms <= clip_ms && w.start_ms <= w.end_ms),
-                    "{n} samples: {s:?}"
+                    "{n} samples: {}",
+                    seg_info(s)
                 );
             }
             eprintln!(
@@ -296,8 +299,8 @@ fn clips_of_every_short_length_work() {
             if n >= 6_400 {
                 assert!(
                     lower_letters(&text_of(&t)).contains("hello"),
-                    "{n} samples {timing:?}: {:?}",
-                    text_of(&t)
+                    "{n} samples {timing:?}: hello not heard in {} chars",
+                    text_of(&t).chars().count()
                 );
             }
         }
@@ -393,7 +396,8 @@ fn vocabulary_reaches_whisper_cpps_prompt() {
     assert!(
         styled_text.trim_start().starts_with(char::is_uppercase)
             && styled_text.trim_end().ends_with('.'),
-        "a plain vocabulary keeps the capital and the full stop: {styled_text:?}"
+        "a plain vocabulary keeps the capital and the full stop ({} chars)",
+        styled_text.chars().count()
     );
     let words = vec!["Mago".to_string(), "Mogo".to_string(), "Magoo".to_string()];
     let with = e
@@ -468,6 +472,10 @@ fn fillers_option_is_accepted() {
 #[ignore]
 fn backend_names_the_card_with_it_and_cpu_without() {
     let _g = guard();
+    assert!(
+        use_gpu() || !expect_card(),
+        "{EXPECT_CARD_ENV} is set, but this build does not ask for the card (build with --features vulkan)"
+    );
     // The card is asked for on the Mac (Metal) and in a `vulkan` build; elsewhere there is no card to ask for.
     if use_gpu() {
         let e = engine(true);
@@ -485,6 +493,10 @@ fn backend_names_the_card_with_it_and_cpu_without() {
             "cpu" => {
                 assert_eq!(b.device, None);
                 assert!(b.fell_back, "{b:?}");
+                assert!(
+                    !expect_card(),
+                    "{EXPECT_CARD_ENV} is set, but the card did not run: {b:?}"
+                );
             }
             other => panic!("unexpected backend {other}: {b:?}"),
         }
@@ -589,7 +601,8 @@ fn silence_after_the_last_word_is_resumed_and_reported() {
     // The resume pass found nothing in the silence.
     assert!(
         t.segments.iter().all(|s| s.end_ms <= speech_ms + 1_000),
-        "{t:?}"
+        "{} segments, speech ends near {speech_ms} ms",
+        t.segments.len()
     );
 }
 

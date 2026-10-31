@@ -16,10 +16,10 @@ pub mod support;
 
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
-use voice_engine_stt::Transcript;
+use voice_engine_stt::{Segment, Transcript, Word};
 
 #[allow(unused_imports)]
-pub use support::SENTENCE;
+pub use support::{EXPECT_CARD_ENV, SENTENCE, expect_card};
 
 static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
 
@@ -80,6 +80,41 @@ pub fn say_with(voice: Option<&str>, text: &str) -> Vec<f32> {
     support::say_samples(voice, text).unwrap_or_else(|e| panic!("{e}"))
 }
 
+/// A segment for a failure message: times and counts, never its text.
+pub fn seg_info(s: &Segment) -> String {
+    format!(
+        "segment {}..{} ms, {} words, {} chars",
+        s.start_ms,
+        s.end_ms,
+        s.words.len(),
+        s.text.chars().count()
+    )
+}
+
+/// A word for a failure message: times and length, never its text.
+pub fn word_info(w: &Word) -> String {
+    format!(
+        "word {}..{} ms, {} chars",
+        w.start_ms,
+        w.end_ms,
+        w.text.chars().count()
+    )
+}
+
+/// `got == want`, and when not, a message with counts and the first place they differ, never the values (they are
+/// transcripts).
+pub fn assert_same<T: PartialEq>(got: &[T], want: &[T], what: &str) {
+    if got == want {
+        return;
+    }
+    let first = got.iter().zip(want).position(|(g, w)| g != w);
+    panic!(
+        "{what}: {} against {} items, first difference at {first:?}",
+        got.len(),
+        want.len()
+    );
+}
+
 pub fn ms(samples: &[f32]) -> u64 {
     samples.len() as u64 * 1000 / 16_000
 }
@@ -121,16 +156,26 @@ pub fn check_shape(t: &Transcript, clip_ms: u64) {
         assert!(!s.text.trim().is_empty(), "empty segment text");
         assert!(
             s.start_ms <= s.end_ms && s.end_ms <= clip_ms,
-            "{s:?} in {clip_ms} ms"
+            "{} in {clip_ms} ms",
+            seg_info(s)
         );
-        assert!(!s.words.is_empty(), "segment without words: {s:?}");
+        assert!(
+            !s.words.is_empty(),
+            "segment without words: {}",
+            seg_info(s)
+        );
         for w in &s.words {
             assert!(!w.text.trim().is_empty());
-            assert!(w.start_ms <= w.end_ms, "{w:?}");
-            assert!(w.end_ms <= clip_ms, "{w:?} past the {clip_ms} ms clip");
+            assert!(w.start_ms <= w.end_ms, "{}", word_info(w));
+            assert!(
+                w.end_ms <= clip_ms,
+                "{} past the {clip_ms} ms clip",
+                word_info(w)
+            );
             assert!(
                 w.start_ms >= last_end,
-                "words out of order at {w:?} (last end {last_end})"
+                "words out of order at {} (last end {last_end})",
+                word_info(w)
             );
             last_end = w.end_ms;
         }

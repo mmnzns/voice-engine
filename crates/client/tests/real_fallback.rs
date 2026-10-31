@@ -3,7 +3,8 @@
 //! model. `VOICE_ENGINE_GPU=fail` makes the Vulkan build abort on its first real request, the way a driver crash would
 //! (`fail_on_purpose` in `crates/llm/src/lib.rs` and `crates/stt/src/helper.rs`); the client must start the processor
 //! helper, answer the same call, and say `fell_back`. A test whose variables are not set is skipped with a message that
-//! names them (it prints why and passes). Prints backend names and counts only.
+//! names them (it prints why and passes). With `VOICE_ENGINE_TEST_EXPECT_CARD=1` a test that finds the Vulkan helper
+//! did not run on a card fails instead of skipping. Prints backend names and counts only.
 //!
 //! ```powershell
 //! cargo build --release -p voice-engine-stt --features vulkan
@@ -86,6 +87,11 @@ fn a_forced_card_failure_in_the_real_speech_helper_falls_back_to_the_processor_h
         loaded.backend.backend, loaded.backend.device, loaded.fell_back
     );
     if loaded.backend.backend == "cpu" {
+        assert!(
+            !support::expect_card(),
+            "{} is set, but the Vulkan helper found no card (backend cpu)",
+            support::EXPECT_CARD_ENV
+        );
         return eprintln!("SKIPPED: the Vulkan helper found no card, so there is nothing to fail");
     }
     let audio = vec![0.0f32; 3 * 16_000];
@@ -133,6 +139,11 @@ fn a_forced_card_failure_in_the_real_ai_helper_falls_back_to_the_processor_helpe
         loaded.backend.backend, loaded.backend.device, loaded.fell_back
     );
     if loaded.backend.backend == "cpu" {
+        assert!(
+            !support::expect_card(),
+            "{} is set, but the Vulkan helper found no card (backend cpu)",
+            support::EXPECT_CARD_ENV
+        );
         return eprintln!("SKIPPED: the Vulkan helper found no card, so there is nothing to fail");
     }
     let completion = || Completion {

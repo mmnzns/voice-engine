@@ -3,10 +3,13 @@
 //! nothing) and a shared folder next to it. No test touches the real shared model folder, any app's real folder or
 //! the network. Tests that need real hashes use a locally built `ModelInfo` through `move_in_with`.
 
+mod support;
+
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use support::{assert_not_real, check_not_real, real_places};
 use voice_engine_models::imports::import_id;
 use voice_engine_models::moving::{ImportedGguf, MoveHooks, MoveReport};
 use voice_engine_models::{
@@ -93,41 +96,6 @@ impl World {
             .into_iter()
             .filter(|n| n != ".engine")
             .collect()
-    }
-}
-
-/// The places a test must never touch: the real shared model folder and every real old app folder `LegacySource`
-/// would read on this computer (the roots of Talaan, Ensayo and Parlato). Not the whole local data folder: on a Windows
-/// PC the temp folder is `%LOCALAPPDATA%\Temp`, and a test's temp folder is no danger to anything.
-fn real_places() -> Vec<PathBuf> {
-    let mut real: Vec<PathBuf> = SharedStore::default_dir().into_iter().collect();
-    for app in App::ALL {
-        real.extend(
-            LegacySource::on_this_computer(app)
-                .into_iter()
-                .map(|source| source.root),
-        );
-    }
-    real
-}
-
-/// Err when `dir` is, is inside, or contains one of `real`.
-fn check_not_real(dir: &Path, real: &[PathBuf]) -> Result<(), String> {
-    for real in real {
-        if dir.starts_with(real) || real.starts_with(dir) {
-            return Err(format!(
-                "a test must never use a real folder: {} (touches {})",
-                dir.display(),
-                real.display()
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn assert_not_real(dir: &Path) {
-    if let Err(message) = check_not_real(dir, &real_places()) {
-        panic!("{message}");
     }
 }
 
