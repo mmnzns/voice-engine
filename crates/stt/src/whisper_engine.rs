@@ -23,6 +23,7 @@ use crate::threads::{ThreadKind, logical_cores, resolve_threads};
 use crate::words::{clean, clean_flagged};
 use std::borrow::Cow;
 use std::path::Path;
+use voice_engine_protocol::Fallback;
 use voice_engine_protocol::gpu::{Device, DeviceKind, pick, whisper_gpu_index};
 use whisper_rs::whisper_rs_sys as sys;
 
@@ -280,18 +281,19 @@ pub fn choose_gpu(devices: &[Device], mac: bool) -> Option<(&Device, i32)> {
     whisper_gpu_index(devices, chosen).map(|n| (chosen, n))
 }
 
-/// What `backend()` says: the device that runs the model, or the processor, and whether the card was refused.
-pub fn describe_backend(gpu: Option<&Device>, asked_gpu: bool) -> SpeechBackend {
+/// What `backend()` says: the device that runs the model, or the processor and why the card was not used
+/// (`fallback`: `None` when the app did not ask for the card; ignored when a device runs the model).
+pub fn describe_backend(gpu: Option<&Device>, fallback: Option<Fallback>) -> SpeechBackend {
     match gpu {
         Some(d) => SpeechBackend {
             backend: d.backend.to_ascii_lowercase(),
             device: Some(d.description.clone()),
-            fell_back: false,
+            fallback: None,
         },
         None => SpeechBackend {
             backend: "cpu".into(),
             device: None,
-            fell_back: asked_gpu,
+            fallback,
         },
     }
 }
@@ -344,8 +346,8 @@ pub struct WhisperEngine {
 
 impl WhisperEngine {
     /// Loads the ggml file. `opts.gpu` tries the graphics card first (Metal on the Mac, Vulkan with the `vulkan`
-    /// feature); if it is not there or cannot load the model, the processor loads it and `backend().fell_back`
-    /// is true. The thread count is `opts.threads` or the default for where the model actually runs.
+    /// feature); if it is not there or cannot load the model, the processor loads it and `backend().fallback`
+    /// says why. The thread count is `opts.threads` or the default for where the model actually runs.
     pub fn load(file: &Path, opts: LoadOptions) -> Result<Self, SpeechError> {
         // whisper.cpp and ggml log to stderr by default; drop it (errors come back as kinds).
         whisper_rs::install_logging_hooks();
@@ -354,19 +356,26 @@ impl WhisperEngine {
         }
         let logical = logical_cores();
         let mac = cfg!(target_os = "macos");
+        // Why the card is not running the model, when the app asked for it.
+        let mut fallback = opts.gpu.then_some(Fallback::NoCardPath);
         if opts.gpu {
             let all = crate::devices();
-            if let Some((device, number)) = choose_gpu(&all, mac)
-                && gpu_starts(device)
-            {
-                // Flash attention only pays off on Metal; on the processor it costs 10-15% (Talaan).
-                if let Ok((ctx, state)) = open(file, Some(number), mac) {
-                    return Ok(WhisperEngine {
-                        state,
-                        ctx,
-                        threads: resolve_threads(ThreadKind::Gpu, opts.threads, logical),
-                        backend: describe_backend(Some(device), true),
-                    });
+            if let Some((device, number)) = choose_gpu(&all, mac) {
+                fallback = Some(Fallback::CardFailed);
+                if gpu_starts(device) {
+                    // Flash attention only pays off on Metal; on the processor it costs 10-15% (Talaan).
+                    match open(file, Some(number), mac) {
+                        Ok((ctx, state)) => {
+                            return Ok(WhisperEngine {
+                                state,
+                                ctx,
+                                threads: resolve_threads(ThreadKind::Gpu, opts.threads, logical),
+                                backend: describe_backend(Some(device), None),
+                            });
+                        }
+                        Err(SpeechError::OutOfMemory) => fallback = Some(Fallback::CardOutOfMemory),
+                        Err(_) => {}
+                    }
                 }
             }
         }
@@ -375,7 +384,7 @@ impl WhisperEngine {
             state,
             ctx,
             threads: resolve_threads(ThreadKind::Processor, opts.threads, logical),
-            backend: describe_backend(None, opts.gpu),
+            backend: describe_backend(None, fallback),
         })
     }
 

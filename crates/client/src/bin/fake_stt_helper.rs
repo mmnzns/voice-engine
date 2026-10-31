@@ -17,9 +17,9 @@
 //! - `gpu_ok` reports a Vulkan card and works; `gpu_die` reports a card and dies on `transcribe`; `gpu_die_once`
 //!   does that for the first `transcribe` (over all starts) and works after; `gpu_error` reports a
 //!   card and answers `transcribe` with the graphics card failed; `cpu_fallback` runs the model on the processor
-//!   though the card was asked for (`fell_back` in `loaded` and `transcribed`).
+//!   though the card was asked for (`fallback` in `loaded` and `transcribed`).
 //! - `gpu_oom` reports a card and dies of memory on `transcribe`; `metal_refused` is a Mac helper whose card did not
-//!   take the model: `ready` says `metal`, and `loaded` and `transcribed` say `cpu` with `fell_back`.
+//!   take the model: `ready` says `metal`, and `loaded` and `transcribed` say `cpu` with a `fallback`.
 //! - `too_long` answers `transcribe` with too long (max 40 s); `missing` answers `load` with model missing;
 //!   `slow_load` takes 4 s to load, far past the tests' 600 ms stall limit (the client stops it at the limit).
 //!
@@ -44,7 +44,7 @@ use voice_engine_protocol::stt::{
     ChunkOptions, Segment, SpeechBackend, SttErrorKind, SttEvent, SttLoad, SttRequest, Timing,
     Transcript, Word, decode_request, decode_samples,
 };
-use voice_engine_protocol::{Backend, PROTOCOL_VERSION, encode};
+use voice_engine_protocol::{Backend, Fallback, PROTOCOL_VERSION, encode};
 
 fn send(ev: &SttEvent) {
     let mut out = std::io::stdout().lock();
@@ -113,13 +113,14 @@ fn main() {
         SpeechBackend {
             backend: "vulkan".into(),
             device: Some("Fake GPU".into()),
-            fell_back: false,
+            fallback: None,
         }
     } else {
         SpeechBackend {
             backend: "cpu".into(),
             device: None,
-            fell_back: matches!(mode.as_str(), "cpu_fallback" | "metal_refused"),
+            fallback: matches!(mode.as_str(), "cpu_fallback" | "metal_refused")
+                .then_some(Fallback::CardFailed),
         }
     };
     let protocol = if mode == "wrong_protocol" {

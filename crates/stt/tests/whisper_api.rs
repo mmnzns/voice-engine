@@ -11,7 +11,7 @@ use voice_engine_stt::whisper_engine::{
 };
 use voice_engine_stt::words::clean;
 use voice_engine_stt::{
-    ChunkOptions, LoadOptions, Segment, SpeechError, Timing, Transcriber, Word, load,
+    ChunkOptions, Fallback, LoadOptions, Segment, SpeechError, Timing, Transcriber, Word, load,
 };
 
 fn w(text: &str, a: u64, b: u64) -> Word {
@@ -587,21 +587,27 @@ fn a_build_without_a_gpu_has_nothing_to_choose() {
 }
 
 #[test]
-fn backend_says_where_it_runs_and_whether_the_gpu_was_refused() {
+fn backend_says_where_it_runs_and_why_the_gpu_was_not_used() {
     let metal = dev(0, "Apple M3 Pro", "Metal", DeviceKind::Gpu, 24_000);
-    let on_gpu = describe_backend(Some(&metal), true);
+    let on_gpu = describe_backend(Some(&metal), None);
     assert_eq!(on_gpu.backend, "metal");
     assert_eq!(on_gpu.device.as_deref(), Some("Apple M3 Pro"));
-    assert!(!on_gpu.fell_back);
-    let refused = describe_backend(None, true);
+    assert!(!on_gpu.fell_back());
+    for why in [
+        Fallback::NoCardPath,
+        Fallback::CardFailed,
+        Fallback::CardOutOfMemory,
+    ] {
+        let refused = describe_backend(None, Some(why));
+        assert_eq!(
+            (refused.backend.as_str(), refused.device, refused.fallback),
+            ("cpu", None, Some(why))
+        );
+    }
+    let chosen = describe_backend(None, None);
     assert_eq!(
-        (refused.backend.as_str(), refused.device, refused.fell_back),
-        ("cpu", None, true)
-    );
-    let chosen = describe_backend(None, false);
-    assert_eq!(
-        (chosen.backend.as_str(), chosen.device, chosen.fell_back),
-        ("cpu", None, false)
+        (chosen.backend.as_str(), chosen.device, chosen.fallback),
+        ("cpu", None, None)
     );
 }
 

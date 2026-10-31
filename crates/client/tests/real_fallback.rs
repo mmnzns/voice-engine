@@ -2,7 +2,7 @@
 //! builds of a helper, the Vulkan one (`--features vulkan`, so a Windows PC with a card) and the processor one, and a
 //! model. `VOICE_ENGINE_GPU=fail` makes the Vulkan build abort on its first real request, the way a driver crash would
 //! (`fail_on_purpose` in `crates/llm/src/lib.rs` and `crates/stt/src/helper.rs`); the client must start the processor
-//! helper, answer the same call, and say `fell_back`. A test whose variables are not set is skipped with a message that
+//! helper, answer the same call, and say `fallback`. A test whose variables are not set is skipped with a message that
 //! names them (it prints why and passes). With `VOICE_ENGINE_TEST_EXPECT_CARD=1` a test that finds the Vulkan helper
 //! did not run on a card fails instead of skipping. Prints backend names and counts only.
 //!

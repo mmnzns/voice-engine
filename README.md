@@ -65,8 +65,9 @@ card (`gpu: false`). When the app asked for the card (`gpu: true`) and the proce
 | `NoCardHelper` | `gpu_helper` is not set and the one helper is a processor build | nothing; this build has no card helper |
 | `NoCardPath` | the one helper is a card helper (the Mac's Metal helper) and still answered with the processor | nothing; the model has no card runtime |
 
-`Outcome::fell_back()` is `fallback.is_some()`. The client works the reason out; no helper message carries it, so a
-helper from v0.2.x works as before.
+`Outcome::fell_back()` is `fallback.is_some()`. The client works the reason out; a speech helper also says its own
+(`SpeechBackend::fallback`, below), which the client uses when the card helper ran the model, and a helper from v0.2.x
+(it sends the bool `fell_back` only, read as `CardFailed`) works as before.
 
 When `gpu_helper` is set and the card helper fails (it dies, says the card failed, or failed in an earlier run), the
 processor helper gets the same request with `gpu: false` (`load`, `complete`, `embed` in `LlmClient`; the `load` in
@@ -123,6 +124,13 @@ struct an app only reads; an app that builds a `Reply` itself, in a test, adds `
   whenever the app asked for the card and the processor ran, not only on the call where the card failed: to say "graphics
   card failed" once, match `Some(Fallback::CardFailed | Fallback::CardOutOfMemory)`; `RememberedFailure`, `NoCardHelper`
   and `NoCardPath` need no message. `Fallback` is exported from `voice_engine_client` and `voice_engine_protocol`.
+- The same for speech: `SpeechBackend::fell_back` (a field, what `Transcriber::backend()` returns in process and what the
+  speech helper's `loaded` and `transcribed` carry) is `SpeechBackend::fallback: Option<Fallback>`, with `fell_back()` as a
+  method. In process it is `NoCardPath` (the model has no card runtime here: the ONNX models on the Mac, a build without
+  `directml`, Parakeet Unified and Nemotron, or no usable card), `CardFailed` (the card did not start or load the model)
+  or `CardOutOfMemory`, and only when `gpu: true` was asked. On the wire a v0.3.0 helper writes both `fallback` and
+  `fell_back` (the derived bool), so a v0.2.x client still reads it; a v0.2.x helper's `fell_back: true` reads as
+  `CardFailed`. `Fallback` is exported from `voice_engine_stt` too.
 
 ## Local AI servers
 
@@ -155,7 +163,7 @@ for segment in &transcript.segments {
     for word in &segment.words { /* word.text, word.start_ms, word.end_ms */ }
 }
 let ran = engine.backend();                             // ran.backend: "metal", "vulkan", "directml" or "cpu"
-if ran.fell_back { /* show "Graphics card failed, used processor" once, then pass gpu: false */ }
+if let Some(Fallback::CardFailed | Fallback::CardOutOfMemory) = ran.fallback { /* show "Graphics card failed, used processor" once, then pass gpu: false */ }
 ```
 
 `load` takes the catalog entry and the model's folder in the shared store. A `Box<dyn Transcriber>` is `Send`: keep it
@@ -186,8 +194,10 @@ used by the helper) for Whisper, DirectML on Windows (the `directml` feature) fo
 card only, the one with the most memory, never the integrated graphics (DirectML is given that card's adapter number, not
 Windows' adapter 0, and `backend().device` names it). With only integrated graphics DirectML is not tried and the model
 runs on the processor. When the card cannot be used, or this build has no way to use it for this model, the model loads on the processor, nothing fails, and
-`backend()` says `cpu` with `fell_back: true`. That is also what an ONNX model on the Mac reports for `gpu: true`: there
-is no card path to fall back from, but the app asked for one, so it is told once and can pass `gpu: false` from then on.
+`backend()` says `cpu` with `fallback` set (`CardFailed`, `CardOutOfMemory` when the card ran out of memory, or
+`NoCardPath` when there is no card path for this model). `NoCardPath` is also what an ONNX model on the Mac reports for
+`gpu: true`: there is no card path to fall back from, but the app asked for one, so it is told and can pass `gpu: false`
+from then on.
 Nothing uses CoreML (parakeet-rs measures it slower than the processor for these graphs).
 
 **Threads.** The engine's rule, on every system: on the processor three quarters of the logical cores, at least 2 and at
@@ -293,7 +303,7 @@ is no fall back to the processor. Check what a built file imports with `dumpbin 
 | Speaker separation (`diarize`) | the processor | the processor |
 | Voice detection (`vad::detect`) | the processor | the processor |
 
-Nothing uses CoreML. On the Mac, `gpu: true` for an ONNX model runs on the processor and reports `fell_back: true`.
+Nothing uses CoreML. On the Mac, `gpu: true` for an ONNX model runs on the processor and reports `fallback: Some(NoCardPath)`.
 
 ### What was verified, and where
 
@@ -564,7 +574,7 @@ $env:VOICE_ENGINE_TEST_CLIP = "$PWD\docs\data\clip-bench.wav"           # or any
 cargo run --release -p voice-engine-stt --example bench                    # Whisper Turbo and Parakeet Ultra on the processor
 $env:VOICE_ENGINE_TEST_CLIP = "$PWD\docs\data\clip-sentence.wav"
 cargo test --release -p voice-engine-stt -- --ignored --test-threads=1     # the real-model tests (Whisper, Parakeet, voice detection)
-cargo test --release -p voice-engine-stt --features directml -- --ignored --test-threads=1   # also: gpu: true gives directml, or cpu with fell_back
+cargo test --release -p voice-engine-stt --features directml -- --ignored --test-threads=1   # also: gpu: true gives directml, or cpu with a fallback
 ```
 
 The real tests expect the clip to say that sentence. A test that needs the `say` command's own wording or several
@@ -578,13 +588,13 @@ vulkan` (Whisper) or `--features directml` (Parakeet), see "Check the graphics c
 
 For a PC with a discrete card (the Vulkan SDK installed and `VULKAN_SDK` set to build `vulkan`; DirectML needs nothing, Windows
 brings `DirectML.dll`). Every line a bench prints has `backend`, `device` (the adapter's name, `-` on the processor) and
-`fell_back` (the card was asked for and the processor ran): on a PC with two adapters (an RTX card and the Ryzen's Radeon)
+`fallback` (why the card was not used when it was asked for): on a PC with two adapters (an RTX card and the Ryzen's Radeon)
 `device` must be the discrete card. Each step is one block, run from a clone of the engine, with the clip and the models set
 as above (`$env:VOICE_ENGINE_TEST_CLIP = "$PWD\docs\data\clip-bench.wav"`).
 
 Set `VOICE_ENGINE_TEST_EXPECT_CARD=1` for the test steps (4 and 5). A card test whose model or helper variables are not
 set still skips. With the variable set, a test that finds the card did not run (the work ran on the processor, with
-`fell_back`, or the helper found no card) fails instead of printing SKIPPED and passing.
+a `fallback`, or the helper found no card) fails instead of printing SKIPPED and passing.
 
 1. Parakeet on DirectML and Whisper on Vulkan in this process (the `vulkan` feature builds the Vulkan backend into the
    example), next to the processor rows:
@@ -617,7 +627,7 @@ cargo test --release -p voice-engine-stt --features vulkan,directml -- --ignored
 ```
 
 5. The forced fallback against the real helpers: `VOICE_ENGINE_GPU=fail` makes the Vulkan helper abort on its first real request,
-   and the client must answer the same call from the processor helper with `fell_back` true (a test whose variables are not set
+   and the client must answer the same call from the processor helper with `fallback` set (`CardFailed`) (a test whose variables are not set
    says which and passes). The Vulkan build is copied aside because the processor build overwrites it:
 
 ```powershell

@@ -351,8 +351,8 @@ impl SttClient {
                         },
                         None => r.ready.clone(),
                     };
-                    let refused = spoken.is_some_and(|s| s.fell_back);
-                    let fallback = self.fallback_reason(request, &backend, failed_now, refused, r);
+                    let said = spoken.and_then(|s| s.fallback);
+                    let fallback = self.fallback_reason(request, &backend, failed_now, said, r);
                     return Ok(Outcome {
                         value,
                         backend,
@@ -540,13 +540,13 @@ impl SttClient {
 
     /// Why `request`, which ran on `ran`, was not on the card (see [`Outcome::fallback`]). The app asked for the
     /// card in a `load` that says `gpu: true`, and in a `transcribe` with a model loaded that way. `failed_now`: the
-    /// card failed during this call. `refused`: the helper said it tried the card and ran on the processor.
+    /// card failed during this call. `said`: the reason the helper gave for running on the processor, when it gave one.
     fn fallback_reason(
         &self,
         request: &SttRequest,
         ran: &Backend,
         failed_now: Option<Fallback>,
-        refused: bool,
+        said: Option<Fallback>,
         r: &Running,
     ) -> Option<Fallback> {
         let asked = match request {
@@ -562,13 +562,18 @@ impl SttClient {
         } else if r.processor_fallback {
             // The processor helper took over after the card failed, now or earlier: its load said `gpu: false`.
             Fallback::RememberedFailure
-        } else if r.card_helper || (r.ready.on_gpu() && refused) {
-            // The helper that can use the card said it did not.
-            Fallback::CardFailed
-        } else if r.ready.on_gpu() {
-            Fallback::NoCardPath
-        } else {
+        } else if !r.card_helper && !r.ready.on_gpu() {
+            // Only the processor helper is here: it cannot tell the app that no card helper exists.
             Fallback::NoCardHelper
+        } else if let Some(why) = said {
+            // The helper that can use the card says why the model is not on it (a v0.2.x helper only says that it is
+            // not, which reads as `CardFailed`).
+            why
+        } else if r.card_helper {
+            // The helper that can use the card ran on the processor without saying why.
+            Fallback::CardFailed
+        } else {
+            Fallback::NoCardPath
         })
     }
 

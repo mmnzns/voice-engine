@@ -35,7 +35,7 @@ pub fn model_dir(id: &str) -> PathBuf {
 /// Whether the graphics card is asked for in Whisper's tests: Metal on the Mac, and Vulkan in this process when the
 /// tests are built with `--features vulkan` (a Windows PC with the Vulkan SDK). Elsewhere the tests run on the
 /// processor (a runner or a Windows PC without the Vulkan build has no card to ask for). On a PC with the feature but
-/// no usable card, `gpu: true` runs on the processor and says `fell_back`; the tests accept that. Parakeet's card tests
+/// no usable card, `gpu: true` runs on the processor and says `fallback`; the tests accept that. Parakeet's card tests
 /// are in `real_parakeet.rs` (the `directml` feature).
 pub fn use_gpu() -> bool {
     cfg!(target_os = "macos") || cfg!(feature = "vulkan")

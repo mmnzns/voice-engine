@@ -502,12 +502,12 @@ fn backend_names_the_card_with_it_and_cpu_without() {
         match b.backend.as_str() {
             "metal" | "vulkan" => {
                 assert!(b.device.is_some(), "{b:?}");
-                assert!(!b.fell_back, "{b:?}");
+                assert!(!b.fell_back(), "{b:?}");
             }
             // A `vulkan` build on a PC with no discrete card, or one whose card did not start: the processor, said so.
             "cpu" => {
                 assert_eq!(b.device, None);
-                assert!(b.fell_back, "{b:?}");
+                assert!(b.fell_back(), "{b:?}");
                 assert!(
                     !expect_card(),
                     "{EXPECT_CARD_ENV} is set, but the card did not run: {b:?}"
@@ -522,7 +522,7 @@ fn backend_names_the_card_with_it_and_cpu_without() {
     eprintln!("cpu: {b:?}");
     assert_eq!(b.backend, "cpu");
     assert_eq!(b.device, None);
-    assert!(!b.fell_back, "the app did not ask for the card");
+    assert!(!b.fell_back(), "the app did not ask for the card");
 }
 
 #[test]

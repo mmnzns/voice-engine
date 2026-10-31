@@ -12,7 +12,7 @@
 //!         // word.text, word.start_ms, word.end_ms: times on the audio's clock
 //!     }
 //! }
-//! assert!(!engine.backend().backend.is_empty()); // "metal", "vulkan" or "cpu"; `fell_back` says if a GPU was refused
+//! assert!(!engine.backend().backend.is_empty()); // "metal", "vulkan" or "cpu"; `fell_back()` says if a GPU was refused
 //! # Ok::<(), voice_engine_stt::SpeechError>(())
 //! ```
 //!
@@ -27,7 +27,7 @@ use voice_engine_models::catalog::{Kind, ModelInfo};
 pub struct LoadOptions {
     /// Metal on the Mac (Whisper), Vulkan (Whisper) or DirectML (Parakeet, with the `directml` feature) on Windows.
     /// When the device cannot be used, or the model has no path to it here (the ONNX models on the Mac), the model
-    /// loads on the processor and [`Transcriber::backend`] says `fell_back` (no error).
+    /// loads on the processor and [`Transcriber::backend`] says why in `fallback` (no error).
     pub gpu: bool,
     /// `None`: the engine's rule (`threads::default_threads`). `Some(n)`: the app's own setting (at least 1).
     pub threads: Option<usize>,
@@ -44,7 +44,7 @@ pub trait Transcriber: Send {
     /// One piece of audio (16 kHz mono). Times are on the audio's clock; the app adds the chunk's offset.
     fn transcribe(&mut self, audio: &[f32], opts: &ChunkOptions)
     -> Result<Transcript, SpeechError>;
-    /// Where it runs now (after a fallback: the processor, with `fell_back` true).
+    /// Where it runs now (after a fallback: the processor, with `fallback` set).
     fn backend(&self) -> SpeechBackend;
 }
 

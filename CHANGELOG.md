@@ -4,7 +4,10 @@
 
 Breaking: `EngineError::Crashed` is `Crashed { exit_code, signal, detail }`; match `Crashed { .. }`. `Outcome::fell_back`
 is `Outcome::fallback: Option<Fallback>` (the field is gone, `fell_back()` is a method); it is `Some` whenever the card was
-asked for and the processor ran, so match `CardFailed | CardOutOfMemory` to say "card failed" once. `Segment` has a new field, `starts_word`.
+asked for and the processor ran, so match `CardFailed | CardOutOfMemory` to say "card failed" once. The same for speech: `SpeechBackend::fell_back` is
+`SpeechBackend::fallback: Option<Fallback>` (`fell_back()` is a method; `Transcriber::backend()` sets `NoCardPath`,
+`CardFailed` or `CardOutOfMemory` only when `gpu: true` was asked). On the wire a v0.3.0 speech helper writes `fallback`
+and the derived `fell_back` bool, and a v0.2.x helper's `fell_back: true` reads as `CardFailed`. `Segment` has a new field, `starts_word`.
 
 - feat: out-of-memory deaths are recognised from more messages, Windows' `STATUS_NO_MEMORY` and a Unix SIGKILL, and
   `EngineError::Crashed` carries the exit code, the signal and a short stderr tail with no user text (#26). A helper

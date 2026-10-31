@@ -587,7 +587,7 @@ fn a_graphics_card_error_from_the_helper_also_falls_back() {
 fn a_model_that_runs_on_the_processor_though_the_card_was_asked_for_has_a_reason() {
     let _t = turn();
     let (_d, st) = state();
-    // The helper itself reports `fell_back` (the engine could not start the card): the app hears it as a reason
+    // The helper itself reports a `fallback` (the engine could not start the card): the app hears it as a reason
     // without any process having died. This helper is the processor build (it said `cpu` at start): no card helper.
     let client = SttClient::new(config("cpu_fallback", &st));
     let loaded = client.load(model("whisper-turbo")).unwrap();
@@ -617,7 +617,7 @@ fn a_model_loaded_without_asking_for_the_card_has_no_reason() {
 fn a_mac_helper_that_could_not_use_the_card_says_the_card_failed() {
     let _t = turn();
     let (_d, st) = state();
-    // The single helper started on `metal`, and its load says `cpu` with `fell_back`.
+    // The single helper started on `metal`, and its load says `cpu` with a `fallback`.
     let client = SttClient::new(config("metal_refused", &st));
     let loaded = client.load(model("whisper-turbo")).unwrap();
     assert_eq!(loaded.fallback, Some(Fallback::CardFailed));

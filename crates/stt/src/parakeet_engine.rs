@@ -21,11 +21,13 @@
 //!   prompt (the catalog's `keeps_fillers` is measured separately).
 //! * The graphics card: with the `directml` feature on Windows, `gpu: true` runs the model through ONNX Runtime's
 //!   DirectML provider when the catalog says the model has that path (Parakeet TDT), on the GPU thread rule, and
-//!   falls back to the processor (`fell_back: true`, the processor's rule) when the provider does not start. It runs
+//!   falls back to the processor (`fallback: Some(CardFailed)`, or `CardOutOfMemory` when the provider ran out of
+//!   memory; the processor's rule) when the provider does not start. It runs
 //!   on the PC's discrete card (the one with the most memory, [`crate::directml`]) and `device` names it; with no
 //!   discrete card (only integrated graphics) DirectML is not tried and the model runs on the processor.
 //!   Without the feature, on the Mac, or for a model without a DirectML path, `gpu: true` runs on the processor
-//!   with `fell_back: true`: there is no card path to fall back from, but the app asked for one, so it is told.
+//!   with `fallback: Some(NoCardPath)`: there is no card path to fall back from, but the app asked for one, so it is
+//!   told.
 //!   Nothing here uses CoreML (parakeet-rs measures it slower than the processor for these graphs).
 //!
 //! The pure parts are public so `tests/parakeet_api.rs` can test them with a scripted [`WordModel`].
@@ -40,6 +42,7 @@ use crate::whisper_engine::{Pass, PassDecoder, decode_with_resume};
 use crate::words::clean;
 use std::path::Path;
 use voice_engine_models::catalog::{Kind, ModelInfo};
+use voice_engine_protocol::Fallback;
 
 /// Half a second of silence on each side of every decode (16 kHz). Talaan's and Ensayo's value, kept on purpose:
 /// on a Mac (Parakeet Ultra, the processor, 15 s windows cut at six offsets from `docs/data/clip-bench.wav`) a pad of
@@ -341,9 +344,9 @@ pub struct Loaded<T> {
 /// Builds the model on the best provider for this load. `build(provider, threads)` makes it. With `gpu`, a discrete
 /// card to run DirectML on (`card`: None when the build has no DirectML or the PC has no discrete card) and a DirectML
 /// path in the catalog (`model_has_directml`) DirectML is tried first with the GPU thread rule, and the backend names
-/// the card; if it does not start the processor builds it with its own rule and `fell_back` is true. In every other case
-/// the processor builds it, and `fell_back` is whether the app asked for the card. `requested_threads` wins on
-/// every provider.
+/// the card; if it does not start the processor builds it with its own rule and `fallback` is `CardFailed` (or
+/// `CardOutOfMemory`). In every other case the processor builds it, and `fallback` is `NoCardPath` when the app asked
+/// for the card and `None` when it did not. `requested_threads` wins on every provider.
 pub fn load_on_best_provider<T>(
     gpu: bool,
     card: Option<&Adapter>,
@@ -352,21 +355,26 @@ pub fn load_on_best_provider<T>(
     logical: usize,
     mut build: impl FnMut(Provider, usize) -> Result<T, SpeechError>,
 ) -> Result<Loaded<T>, SpeechError> {
+    let mut fallback = gpu.then_some(Fallback::NoCardPath);
     if gpu
         && model_has_directml
         && let Some(card) = card
     {
         let threads = resolve_threads(ThreadKind::Gpu, requested_threads, logical);
-        if let Ok(value) = build(Provider::DirectMl(card.index), threads) {
-            return Ok(Loaded {
-                value,
-                backend: SpeechBackend {
-                    backend: "directml".into(),
-                    device: Some(card.name.clone()),
-                    fell_back: false,
-                },
-                threads,
-            });
+        match build(Provider::DirectMl(card.index), threads) {
+            Ok(value) => {
+                return Ok(Loaded {
+                    value,
+                    backend: SpeechBackend {
+                        backend: "directml".into(),
+                        device: Some(card.name.clone()),
+                        fallback: None,
+                    },
+                    threads,
+                });
+            }
+            Err(SpeechError::OutOfMemory) => fallback = Some(Fallback::CardOutOfMemory),
+            Err(_) => fallback = Some(Fallback::CardFailed),
         }
     }
     let threads = resolve_threads(ThreadKind::Processor, requested_threads, logical);
@@ -376,7 +384,7 @@ pub fn load_on_best_provider<T>(
         backend: SpeechBackend {
             backend: "cpu".into(),
             device: None,
-            fell_back: gpu,
+            fallback,
         },
         threads,
     })

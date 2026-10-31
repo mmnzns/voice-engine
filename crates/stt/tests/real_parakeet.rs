@@ -458,8 +458,8 @@ fn the_gpu_option_runs_on_the_processor_and_says_so_on_the_mac() {
     let b = with.backend();
     eprintln!("gpu: true -> {b:?}");
     assert_eq!(
-        (b.backend.as_str(), b.fell_back, b.device.as_deref()),
-        ("cpu", true, None)
+        (b.backend.as_str(), b.fallback, b.device.as_deref()),
+        ("cpu", Some(voice_engine_stt::Fallback::NoCardPath), None)
     );
     let without = load(
         m,
@@ -473,8 +473,8 @@ fn the_gpu_option_runs_on_the_processor_and_says_so_on_the_mac() {
     let b = without.backend();
     eprintln!("gpu: false -> {b:?}");
     assert_eq!(
-        (b.backend.as_str(), b.fell_back, b.device.as_deref()),
-        ("cpu", false, None)
+        (b.backend.as_str(), b.fallback, b.device.as_deref()),
+        ("cpu", None, None)
     );
 }
 
@@ -492,7 +492,7 @@ fn the_gpu_option_uses_directml_or_reports_the_fallback() {
     eprintln!("gpu: true -> {b:?}");
     match b.backend.as_str() {
         "directml" => {
-            assert!(!b.fell_back, "{b:?}");
+            assert!(!b.fell_back(), "{b:?}");
             // The adapter's name is reported, and it is the discrete card the engine chose, not adapter 0.
             let card = voice_engine_stt::discrete_card()
                 .expect("DirectML ran, so there is a discrete card");
@@ -503,7 +503,7 @@ fn the_gpu_option_uses_directml_or_reports_the_fallback() {
             );
         }
         "cpu" => {
-            assert!(b.fell_back, "{b:?}");
+            assert!(b.fell_back(), "{b:?}");
             assert!(
                 !expect_card(),
                 "{EXPECT_CARD_ENV} is set, but the card did not run: {b:?}"
@@ -516,7 +516,7 @@ fn the_gpu_option_uses_directml_or_reports_the_fallback() {
         threads: None,
     })
     .backend();
-    assert_eq!((b.backend.as_str(), b.fell_back), ("cpu", false), "{b:?}");
+    assert_eq!((b.backend.as_str(), b.fell_back()), ("cpu", false), "{b:?}");
 }
 
 #[test]
