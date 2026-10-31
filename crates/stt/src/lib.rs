@@ -7,6 +7,7 @@
 //!   chunk of up to the catalog's `chunk_secs`, 40 s, per call; longer audio is `SpeechError::TooLong`). The thread
 //!   rule is in [`threads`].
 //! * [`vad::detect`]: where the speech is in a track (whisper.cpp's Silero detector, always on the processor).
+//!   [`vad::VadDetector`] is the same with the model loaded once, for apps that detect often (dictation).
 //! * [`diarize::load`] and [`diarize::Diarizer::run`]: who is talking, every 10 ms, for up to 8 speakers (NVIDIA's
 //!   Nemotron 3 Diarization through parakeet-rs's `sortformer`, always on the processor, on the ONNX thread rule).
 //!   Naming speakers and turning frames into turns is the app's.
