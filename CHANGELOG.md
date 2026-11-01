@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.3.3 (2026-10-31)
+
+Drop-in over v0.3.2.
 
 - fix: the AI helper uses as many threads as the computer has physical cores, 2 to 8, instead of logical cores (#36).
   On a 16-thread Ryzen 7 9800X3D, 16 threads ran about twice as slow as 8. The speech rule is unchanged.
