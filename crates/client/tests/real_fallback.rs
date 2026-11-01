@@ -17,7 +17,9 @@
 //!
 //! The AI helper is the same with `voice-engine-llm`: `VOICE_ENGINE_TEST_GPU_HELPER` (the `--features vulkan` build),
 //! `VOICE_ENGINE_TEST_HELPER` (the processor build) and `VOICE_ENGINE_TEST_LLM` (a `.gguf` file). The speech test reads
-//! `whisper-base` as the speed bench does (`VOICE_ENGINE_TEST_MODELS`, the shared folder, Talaan's folder), only ever read.
+//! the first Whisper model it finds, `whisper-base` first and then the other Whisper ids (`WHISPER_IDS`), where the
+//! speed bench looks (`VOICE_ENGINE_TEST_MODELS`, the shared folder, Talaan's folder), only ever read. With none of
+//! them present it skips, or fails when `VOICE_ENGINE_TEST_EXPECT_CARD=1`.
 //! On a Mac there is no Vulkan build, so there is nothing to run.
 
 use std::path::PathBuf;
@@ -46,6 +48,25 @@ fn files(names: &[&str]) -> Option<Vec<PathBuf>> {
     None
 }
 
+/// The Whisper models of the catalog, the one the speed bench uses first. Any of them does for this test: it only needs
+/// a model that loads and transcribes, and the file names come from the catalog.
+const WHISPER_IDS: &[&str] = &[
+    "whisper-base",
+    "whisper-base-en",
+    "whisper-tiny",
+    "whisper-tiny-en",
+    "whisper-small",
+    "whisper-small-en",
+    "whisper-turbo",
+    "whisper-turbo-full",
+    "whisper-medium",
+    "whisper-medium-en",
+    "whisper-large-v3",
+    "whisper-large-v3-full",
+    "whisper-large-v2",
+    "whisper-large-v2-full",
+];
+
 /// The helper is told to fail on the card (both of them: the processor build ignores it).
 fn fail_env() -> Vec<(String, String)> {
     vec![("VOICE_ENGINE_GPU".into(), "fail".into())]
@@ -60,10 +81,22 @@ fn a_forced_card_failure_in_the_real_speech_helper_falls_back_to_the_processor_h
     ]) else {
         return;
     };
-    let dir = match support::find_model_dir("whisper-base") {
-        Ok(d) => d,
-        Err(why) => return eprintln!("SKIPPED: {why}"),
+    let Some((model_id, dir)) = WHISPER_IDS
+        .iter()
+        .find_map(|id| support::find_model_dir(id).ok().map(|dir| (*id, dir)))
+    else {
+        assert!(
+            !support::expect_card(),
+            "{} is set, but no Whisper model was found; tried {}",
+            support::EXPECT_CARD_ENV,
+            WHISPER_IDS.join(", ")
+        );
+        return eprintln!(
+            "SKIPPED: no Whisper model found; tried {}",
+            WHISPER_IDS.join(", ")
+        );
     };
+    eprintln!("model: {model_id}");
     let client = SttClient::new(SttConfig {
         cpu_helper: f[1].clone(),
         gpu_helper: Some(f[0].clone()),
@@ -75,7 +108,7 @@ fn a_forced_card_failure_in_the_real_speech_helper_falls_back_to_the_processor_h
     });
     let loaded = client
         .load(SttLoad {
-            model_id: "whisper-base".into(),
+            model_id: model_id.into(),
             model_dir: dir.display().to_string(),
             kind: SttModelKind::Whisper,
             gpu: true,

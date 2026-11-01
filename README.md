@@ -602,6 +602,19 @@ brings `DirectML.dll`). Every line a bench prints has `backend`, `device` (the a
 `device` must be the discrete card. Each step is one block, run from a clone of the engine, with the clip and the models set
 as above (`$env:VOICE_ENGINE_TEST_CLIP = "$PWD\docs\data\clip-bench.wav"`).
 
+The Vulkan builds (steps 2, 3 and 5) fail with the default generator (MSBuild) on the Visual Studio 2026 BuildTools, and
+`-j 1` does not help. Build them with Ninja and a short target folder, as `scripts\build-helpers.ps1` does. Open "Developer
+PowerShell for VS" (Visual Studio's own `ninja.exe` is on `PATH` there), or add the folder that holds it
+(`Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja` under the Visual Studio folder) to `PATH`, then in that window:
+
+```powershell
+$env:CMAKE_GENERATOR = "Ninja"
+$env:CARGO_TARGET_DIR = "C:\tg"
+```
+
+The built files are then in `C:\tg\release`, not `target\release`; the commands below use that folder. Run every step in
+the same window so the two variables stay set.
+
 Set `VOICE_ENGINE_TEST_EXPECT_CARD=1` for the test steps (4 and 5). A card test whose model or helper variables are not
 set still skips. With the variable set, a test that finds the card did not run (the work ran on the processor, with
 a `fallback`, or the helper found no card) fails instead of printing SKIPPED and passing.
@@ -618,13 +631,15 @@ cargo run --release -p voice-engine-stt --features vulkan,directml --example ben
 
 ```powershell
 cargo build --release -p voice-engine-stt --features vulkan
+$env:VOICE_ENGINE_TEST_HELPER = "C:\tg\release\voice-engine-stt.exe"
 cargo run --release -p voice-engine-client --example bench_stt
 ```
 
-3. The AI helper on the card (`$env:VOICE_ENGINE_TEST_HELPER` is the helper to measure, `target\release\voice-engine-llm.exe` by default):
+3. The AI helper on the card (`$env:VOICE_ENGINE_TEST_HELPER` is the helper to measure):
 
 ```powershell
 cargo build --release -p voice-engine-llm --features vulkan
+$env:VOICE_ENGINE_TEST_HELPER = "C:\tg\release\voice-engine-llm.exe"
 cargo run --release -p voice-engine-client --example bench_llm
 ```
 
@@ -642,14 +657,14 @@ cargo test --release -p voice-engine-stt --features vulkan,directml -- --ignored
 
 ```powershell
 cargo build --release -p voice-engine-stt --features vulkan
-Copy-Item target\release\voice-engine-stt.exe $env:TEMP\stt-vulkan.exe -Force
+Copy-Item C:\tg\release\voice-engine-stt.exe $env:TEMP\stt-vulkan.exe -Force
 cargo build --release -p voice-engine-llm --features vulkan
-Copy-Item target\release\voice-engine-llm.exe $env:TEMP\llm-vulkan.exe -Force
+Copy-Item C:\tg\release\voice-engine-llm.exe $env:TEMP\llm-vulkan.exe -Force
 cargo build --release -p voice-engine-stt -p voice-engine-llm
 $env:VOICE_ENGINE_TEST_STT_GPU_HELPER = "$env:TEMP\stt-vulkan.exe"
-$env:VOICE_ENGINE_TEST_STT_HELPER = "$PWD\target\release\voice-engine-stt.exe"
+$env:VOICE_ENGINE_TEST_STT_HELPER = "C:\tg\release\voice-engine-stt.exe"
 $env:VOICE_ENGINE_TEST_GPU_HELPER = "$env:TEMP\llm-vulkan.exe"
-$env:VOICE_ENGINE_TEST_HELPER = "$PWD\target\release\voice-engine-llm.exe"
+$env:VOICE_ENGINE_TEST_HELPER = "C:\tg\release\voice-engine-llm.exe"
 $env:VOICE_ENGINE_TEST_LLM = "C:\path\to\model.gguf"      # any chat model, a .gguf file
 $env:VOICE_ENGINE_TEST_EXPECT_CARD = "1"
 cargo test --release -p voice-engine-client --test real_fallback -- --ignored --nocapture --test-threads=1
