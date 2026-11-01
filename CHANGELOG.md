@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- fix: the AI helper uses as many threads as the computer has physical cores, 2 to 8, instead of logical cores (#36).
+  On a 16-thread Ryzen 7 9800X3D, 16 threads ran about twice as slow as 8. The speech rule is unchanged.
+- docs: a local Vulkan helper build on Windows uses `CMAKE_GENERATOR=Ninja` and a short `CARGO_TARGET_DIR` (`C:\tg`)
+  instead of `-j 1`, which did not fix the MSBuild errors (#44). The README's "Check the graphics card on a Windows PC"
+  steps and `docs/building-helpers.md` say so.
+- test: the speech half of `real_fallback` uses the first Whisper model it finds (`whisper-base`, then the other Whisper
+  ids), and fails instead of skipping when none is found and `VOICE_ENGINE_TEST_EXPECT_CARD=1` (#44).
+
 ## v0.3.2 (2026-10-31)
 
 Drop-in over v0.3.1: nothing that existed changes.

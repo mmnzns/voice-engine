@@ -240,5 +240,15 @@ files you already have; this repository's CI runs it on every artifact, on a run
 has built them.
 
 A Vulkan helper built locally on Windows with the Visual Studio 2026 BuildTools (MSVC 19.51) and Vulkan SDK 1.4.363.0
-can fail with an MSBuild ordering error in `vulkan-shaders-gen`. Building with one job works, though slower:
-`cargo build --release -j 1 --features vulkan`. The release builds use the workflow and are not affected.
+fails with the default generator (MSBuild): an ordering error in `vulkan-shaders-gen`, or "Not a file ..." (MSB8066).
+`-j 1` does not fix it. Ninja does, with a short target folder, which is what `scripts/build-helpers.ps1` sets for the
+Vulkan builds. Open "Developer PowerShell for VS" (it has Visual Studio's own `ninja.exe` on `PATH`), or add the folder
+that holds it, `Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja` under the Visual Studio folder, to `PATH`, then:
+
+```powershell
+$env:CMAKE_GENERATOR = "Ninja"
+$env:CARGO_TARGET_DIR = "C:\tg"
+cargo build --release --features vulkan
+```
+
+The release builds use the workflow and are not affected.

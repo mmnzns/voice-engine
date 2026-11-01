@@ -180,11 +180,20 @@ pub(crate) fn load<'a>(
     Ok((&loaded.as_ref().expect("loaded above").model, seconds))
 }
 
+/// Threads for the model: the physical cores, 2 to 8. On a Ryzen 7 9800X3D (8 cores, 16 threads) all 16 threads ran
+/// about twice as slow as 8 (#36); physical cores leave out the second hardware thread of each core.
 pub(crate) fn threads() -> i32 {
-    std::thread::available_parallelism()
-        .map(|n| n.get() as i32)
-        .unwrap_or(4)
-        .clamp(2, 8)
+    let logical = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    threads_for(Some(num_cpus::get_physical()), logical)
+}
+
+/// `threads` from the physical core count (None when unknown) and the logical one: the physical count, else the
+/// logical, clamped to 2 to 8.
+fn threads_for(physical: Option<usize>, logical: usize) -> i32 {
+    let n = physical.filter(|&n| n > 0).unwrap_or(logical);
+    n.clamp(2, 8) as i32
 }
 
 /// Context settings. Off the card in a build that has one (Metal, Vulkan), the KV cache and big batches stay off it
@@ -214,6 +223,23 @@ mod tests {
     #[test]
     fn ensayo_threads_stay_between_two_and_eight() {
         assert!((2..=8).contains(&threads()));
+    }
+
+    #[test]
+    fn threads_are_the_physical_cores_between_two_and_eight() {
+        assert_eq!(threads_for(Some(8), 16), 8);
+        assert_eq!(threads_for(Some(6), 12), 6);
+        assert_eq!(threads_for(Some(1), 2), 2);
+        assert_eq!(threads_for(Some(16), 32), 8);
+        assert_eq!(threads_for(Some(4), 4), 4);
+    }
+
+    #[test]
+    fn threads_fall_back_to_the_logical_cores() {
+        assert_eq!(threads_for(None, 12), 8);
+        assert_eq!(threads_for(None, 6), 6);
+        assert_eq!(threads_for(None, 1), 2);
+        assert_eq!(threads_for(Some(0), 4), 4);
     }
 
     fn card(index: usize) -> Device {
