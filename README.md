@@ -603,9 +603,9 @@ brings `DirectML.dll`). Every line a bench prints has `backend`, `device` (the a
 as above (`$env:VOICE_ENGINE_TEST_CLIP = "$PWD\docs\data\clip-bench.wav"`).
 
 Every step builds the `vulkan` feature, which fails with the default generator (MSBuild) on the Visual Studio 2026
-BuildTools; `-j 1` does not help. Build them with Ninja and a short target folder, as `scripts\build-helpers.ps1` does. Open "Developer
-PowerShell for VS" (Visual Studio's own `ninja.exe` is on `PATH` there), or add the folder that holds it
-(`Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja` under the Visual Studio folder) to `PATH`, then in that window:
+BuildTools; `-j 1` does not help. Build them with Ninja and a short target folder, as `scripts\build-helpers.ps1`
+does. Open "Developer PowerShell for VS" (Visual Studio's own `ninja.exe` is on `PATH` there), or add the folder
+that holds it (`Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja` under the Visual Studio folder) to `PATH`, then in that window:
 
 ```powershell
 $env:CMAKE_GENERATOR = "Ninja"
