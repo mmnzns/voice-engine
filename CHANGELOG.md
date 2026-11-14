@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+Drop-in over v0.3.4: the same API, the same models, the same speech output.
+
+- build: Rust 1.100 builds on Windows again (#49). `ort` 2.0.0-rc.15 (`ort-sys` copies ONNX Runtime's DLLs next to the
+  build with the new Cargo build-directory layout in mind; rc.13 took the wrong folder and failed on the DirectML copy)
+  with `parakeet-rs` 0.4.4, which holds `ort` at rc.15 and brings ONNX Runtime 1.31. whisper-rs 0.16.0 and
+  llama-cpp-sys-2 0.1.159 are unchanged. CI and `build-helpers.yml` use the stable toolchain again; the v0.3.4 pin to
+  Rust 1.99.1 is gone.
+- change (inside): parakeet-rs 0.4 takes ONNX Runtime's environment from the caller, so the engine creates the process's
+  one environment (telemetry off) and gives it to every Parakeet, Parakeet Unified, Nemotron and speaker separation
+  session. Nothing an app calls changes. `parakeet_rs::Error` is `#[non_exhaustive]`: an error kind added later is an
+  internal error until the engine maps it.
+
 ## v0.3.4 (2026-11-13)
 
 Drop-in over v0.3.3. No code change.
