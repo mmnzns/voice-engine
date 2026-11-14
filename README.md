@@ -236,7 +236,7 @@ minimum silence with a little padding (Parlato used 100 ms and 30 ms) to get mor
 per 10 ms, with a probability from 0 to 1 for each of up to 8 speakers (NVIDIA's Nemotron 3 Diarization through
 parakeet-rs). The column order carries no meaning beyond one call. Naming speakers and turning frames into turns is the
 app's job. The engine warms the model up on the first 10 minutes (a streaming model must hear a voice before it can tell
-it apart) and feeds long tracks in 5-minute calls. It works around a bug in parakeet-rs 0.3.8: a call whose mel frame
+it apart) and feeds long tracks in 5-minute calls. It works around a bug in parakeet-rs 0.3.8, kept on 0.4.4: a call whose mel frame
 count is a multiple of 8 and that fits in one window (a track, or the last 5 minutes, up to about 30 s: one length in
 eight) fails with "Array has a non-contiguous layout", because the library hands ONNX Runtime a copy that kept a
 column-major layout. The engine gives those calls 10 ms more silence and drops the extra frame. Expect it to need more
