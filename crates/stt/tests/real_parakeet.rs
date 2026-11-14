@@ -173,7 +173,9 @@ fn compare_with_parakeet_rs(clip: &[f32]) {
     );
     assert_eq!(words.stopped_early_at_ms, None);
 
-    let config = parakeet_rs::ExecutionConfig::new().with_intra_threads(threads);
+    let config = parakeet_rs::ExecutionConfig::new()
+        .with_environment(voice_engine_stt::parakeet_engine::ort_environment().unwrap())
+        .with_intra_threads(threads);
     let mut theirs = parakeet_rs::ParakeetTDT::from_pretrained(ultra_dir(), Some(config)).unwrap();
     let len_ms = ms(clip);
     // Talaan's and Ensayo's own code, copied: half a second of silence each side, seconds to whole milliseconds with

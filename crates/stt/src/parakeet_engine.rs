@@ -425,16 +425,43 @@ pub(crate) fn from_parakeet(e: &parakeet_rs::Error, loading: bool) -> SpeechErro
         parakeet_rs::Error::Tokenizer(_) => SpeechError::Internal("tokenizer error".into()),
         parakeet_rs::Error::Config(_) => SpeechError::Internal("config error".into()),
         parakeet_rs::Error::Audio(_) => SpeechError::Internal("audio error".into()),
+        // parakeet-rs's Error is #[non_exhaustive] since 0.4: a kind added later is an internal error until mapped.
+        _ => SpeechError::Internal("speech model error".into()),
     }
 }
 
+/// The one ONNX Runtime environment of this process. parakeet-rs 0.4 (ort 2.0.0-rc.15) takes it from the caller, and ONNX
+/// Runtime allows one per process, so every Parakeet, Parakeet Unified, Nemotron and speaker separation session shares
+/// this one. Telemetry off (Microsoft's own DirectML build would send some). Public only so the engine's own tests can
+/// build parakeet-rs's sessions in the same process.
+#[doc(hidden)]
+pub fn ort_environment() -> Result<ort::environment::Environment, SpeechError> {
+    static ENVIRONMENT: std::sync::OnceLock<Option<ort::environment::Environment>> =
+        std::sync::OnceLock::new();
+    ENVIRONMENT
+        .get_or_init(|| {
+            parakeet_rs::ort::init()
+                .with_name("voice-engine")
+                .with_telemetry(false)
+                .build()
+                .ok()
+        })
+        .clone()
+        .ok_or_else(|| SpeechError::Internal("onnx runtime: no environment".into()))
+}
+
 /// parakeet-rs's session settings for one provider and thread count.
-fn execution_config(provider: Provider, threads: usize) -> parakeet_rs::ExecutionConfig {
-    let config = parakeet_rs::ExecutionConfig::new().with_intra_threads(threads);
-    match provider {
+fn execution_config(
+    provider: Provider,
+    threads: usize,
+) -> Result<parakeet_rs::ExecutionConfig, SpeechError> {
+    let config = parakeet_rs::ExecutionConfig::new()
+        .with_environment(ort_environment()?)
+        .with_intra_threads(threads);
+    Ok(match provider {
         Provider::Processor => config,
         Provider::DirectMl(id) => with_provider(config, directml_provider(id)),
-    }
+    })
 }
 
 /// Adds an execution provider that must start or the session fails to build (parakeet-rs's own DirectML option
@@ -564,7 +591,7 @@ impl ParakeetEngine {
             model.gpu.windows_directml,
             opts.threads,
             logical_cores(),
-            |provider, threads| NvidiaModel::load(kind, dir, execution_config(provider, threads)),
+            |provider, threads| NvidiaModel::load(kind, dir, execution_config(provider, threads)?),
         )?;
         Ok(ParakeetEngine {
             model: loaded.value,

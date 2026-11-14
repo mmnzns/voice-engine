@@ -210,7 +210,9 @@ pub fn load(model_dir: &Path, threads: Option<usize>) -> Result<Diarizer, Speech
         return Err(SpeechError::BadModel);
     }
     let threads = thread_count(threads, logical_cores());
-    let config = parakeet_rs::ExecutionConfig::new().with_intra_threads(threads);
+    let config = parakeet_rs::ExecutionConfig::new()
+        .with_environment(crate::parakeet_engine::ort_environment()?)
+        .with_intra_threads(threads);
     let model = Sortformer::with_config(&file, Some(config), DiarizationConfig::default())
         .map_err(|e| from_parakeet(&e, true))?;
     Ok(Diarizer { model, threads })
