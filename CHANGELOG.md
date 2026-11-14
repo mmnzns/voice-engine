@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.3.5 (2026-11-14)
 
 Drop-in over v0.3.4: the same API, the same models, the same speech output.
 
