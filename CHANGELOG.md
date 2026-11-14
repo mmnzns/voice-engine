@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.3.4 (2026-11-13)
+
+Drop-in over v0.3.3. No code change.
+
+- ci: the helper build (`build-helpers.yml`) and CI pin Rust 1.99.1. On Rust 1.100.0 (2026-11-09) the Windows x64 helper
+  build fails in `ort-sys` 2.0.0-rc.13's build script (`copy_dylibs`, `dynamic_link.rs:42`, "The system cannot find the
+  path specified") while copying the DirectML ONNX Runtime DLL. Every app's Windows release builds its helpers here, so
+  this blocked them all (#47). Unpin once `ort-sys` or the copy is fixed.
+
 ## v0.3.3 (2026-10-31)
 
 Drop-in over v0.3.2.
