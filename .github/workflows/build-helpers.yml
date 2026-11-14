@@ -157,7 +157,7 @@ jobs:
         with:
           repository: mmnzns/voice-engine
           ref: ${{ steps.pick.outputs.ref }}
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.1 # pinned: Rust 1.100 breaks ort-sys's DLL copy on Windows (#47)
         if: steps.pick.outputs.helpers != ''
       - uses: Swatinem/rust-cache@v2
         if: steps.pick.outputs.helpers != '' && inputs.cache

@@ -438,7 +438,7 @@ is false for `Cancelled` and `Stalled`: nothing went wrong, the partial file is 
 ## Use it in an app
 
 ```toml
-voice-engine-protocol = { git = "https://github.com/mmnzns/voice-engine", tag = "v0.3.3" }
+voice-engine-protocol = { git = "https://github.com/mmnzns/voice-engine", tag = "v0.3.4" }
 ```
 
 Every engine crate in one app uses the same tag. Each helper program stays in the app as a 3-line `main.rs`:
