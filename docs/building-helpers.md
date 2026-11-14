@@ -22,9 +22,10 @@ triple: `ensayo-llm-vulkan-x86_64-pc-windows-msvc.exe`. Vulkan builds exist for 
 Both Vulkan helpers are built with `--features vulkan` only. The speech helper runs Whisper only; Parakeet runs in the
 app's own process, so an app that wants Parakeet on the card enables `voice-engine-stt/directml` in its own
 `Cargo.toml`. From `ort-sys 2.0.0-rc.15`'s build script: that build links ONNX Runtime statically and the program
-imports `DirectML.dll`, `D3D12.dll`, `DXGI.dll` and `DXCORE.dll` at load time (`ort`'s `copy-dylibs` is off, so nothing
-is copied next to the exe). All four come from Windows: `DirectML.dll` has been in `C:\Windows\System32` since Windows
-10 1903. Nothing ships with the app. These are load-time imports, not something Parakeet asks for when it loads a model:
+imports `DirectML.dll`, `D3D12.dll`, `DXGI.dll` and `DXCORE.dll` at load time. The build script also copies the
+`DirectML.dll` it downloaded into the build's target folder, next to the built `.exe` files (the step Rust 1.100 broke on
+rc.13, #49), so a program run from the build folder loads that copy first. Nothing ships with the app: on a user's PC
+all four come from Windows, and `DirectML.dll` has been in `C:\Windows\System32` since Windows 10 1903. These are load-time imports, not something Parakeet asks for when it loads a model:
 the DirectML link line is added to every Windows build by `ort-sys`, and `ort` is an unconditional dependency of
 `voice-engine-stt`. So a Windows helper (and any app that links the speech crate) may import `DirectML.dll` whatever its
 features are. If an export ONNX Runtime needs is missing from the in-box file (for example `DMLCreateDevice1` on a very

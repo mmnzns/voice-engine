@@ -13,6 +13,11 @@ Drop-in over v0.3.4: the same API, the same models, the same speech output.
   one environment (telemetry off) and gives it to every Parakeet, Parakeet Unified, Nemotron and speaker separation
   session. Nothing an app calls changes. `parakeet_rs::Error` is `#[non_exhaustive]`: an error kind added later is an
   internal error until the engine maps it.
+- apps: an app that names `ort` or `parakeet-rs` in its own `Cargo.toml` (an `=2.0.0-rc.13` pin, `parakeet-rs` 0.3.8)
+  moves to `ort` `=2.0.0-rc.15` and `parakeet-rs` 0.4.4 in the same change as the tag, or Cargo finds two `ort`
+  versions that cannot both link. An app that builds its own parakeet-rs sessions passes them
+  `voice_engine_stt::parakeet_engine::ort_environment()`, since ONNX Runtime allows one environment per process. Apps
+  can drop their own Rust 1.99.1 pins.
 
 ## v0.3.4 (2026-11-13)
 
