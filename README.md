@@ -717,9 +717,9 @@ only when the assertion is about that text itself (a parity test that compares t
 
 | App | Engine tag |
 | --- | --- |
-| Talaan | v0.3.3 (shipped); moving to v0.3.5 |
-| Ensayo | v0.3.3 (shipped); moving to v0.3.5 |
-| Parlato | v0.3.3 (shipped); moving to v0.3.5 |
+| Talaan | v0.3.4 (shipped in 1.2.2); main on v0.3.5, not released; v0.4.0 next |
+| Ensayo | v0.3.4 (shipped in 0.3.0); main on v0.3.5, not released; v0.4.0 next |
+| Parlato | v0.3.3 (shipped in 0.16.0); main on v0.3.5, not released; v0.4.0 next |
 
 ## Licence
 
