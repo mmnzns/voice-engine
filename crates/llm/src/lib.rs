@@ -12,6 +12,7 @@
 //! request asks for the other place (`model::place`, `model::Key`).
 
 mod failure;
+mod gemma;
 mod generate;
 mod inbox;
 mod inspect;
