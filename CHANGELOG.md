@@ -51,7 +51,10 @@ Not drop-in: `Kind` is `#[non_exhaustive]` and has two new variants, so an app t
   - Multitalker needs the `diarization` model downloaded as well as `multitalker-tdt`; the app passes both folders to
     `multitalker::load`.
   - An app that builds `ModelInfo` itself (a test double) adds `word_times`.
-  - Nothing else changes: the same protocol (2), the same helpers, the same speech output for the models that were there.
+  - Gemma 4 needs the v0.4.0 AI helper: an app moves its helper build to v0.4.0 (`build-helpers.yml@v0.4.0` and
+    `engine-ref: v0.4.0`, or its own fetch script's engine ref) in the same change. An older helper cannot write Gemma 4's
+    prompt and fails the request.
+  - Nothing else changes: the same protocol (2), the same speech output for the models that were there.
 
 ## v0.3.5 (2026-11-14)
 
