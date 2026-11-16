@@ -1,4 +1,5 @@
-//! Helpers the real-model tests share (`real_whisper.rs`, `real_parakeet.rs`, `real_diarize.rs`, `real_fillers.rs`): one
+//! Helpers the real-model tests share (`real_whisper.rs`, `real_parakeet.rs`, `real_cohere.rs`, `real_multitalker.rs`,
+//! `real_diarize.rs`, `real_fillers.rs`): one
 //! lock so only one test loads a model at a time, where the models are, and where the speech comes from, and small
 //! text helpers. Only ever reads the models folders.
 //!
@@ -78,6 +79,50 @@ pub fn say_with(voice: Option<&str>, text: &str) -> Vec<f32> {
         return clip.unwrap_or_else(|e| panic!("{e}"));
     }
     support::say_samples(voice, text).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// Starts a test that needs two different voices speaking their own words: a Mac (`say`) or a Windows PC (the
+/// Windows voices). Skipped (it prints why and passes) anywhere else, and when `VOICE_ENGINE_TEST_CLIP` is set: a clip
+/// from a file has one voice only. A test that only needs the voices' own wording uses `voices_available`.
+#[macro_export]
+macro_rules! need_voices {
+    () => {
+        if let Err(why) = $crate::common::voices_available() {
+            eprintln!("SKIPPED: {why}");
+            return;
+        }
+    };
+}
+
+/// Whether `voice_pair` can make two voices here.
+pub fn voices_available() -> Result<(), String> {
+    if support::clip_from_env().is_some() {
+        return Err(format!(
+            "{} is set, and a clip from a file has one voice only",
+            support::CLIP_ENV
+        ));
+    }
+    if cfg!(target_os = "macos") || cfg!(windows) {
+        Ok(())
+    } else {
+        Err("this test needs two voices: the macOS `say` command or the Windows voices".into())
+    }
+}
+
+/// Two different voices (a woman's and a man's) saying `a` and `b`, 16 kHz mono: Samantha and Daniel on a Mac, Zira
+/// and David on Windows. Panics when `voices_available` says no.
+pub fn voice_pair(a: &str, b: &str) -> (Vec<f32>, Vec<f32>) {
+    if cfg!(target_os = "macos") {
+        (
+            support::say_samples(Some("Samantha"), a).unwrap_or_else(|e| panic!("{e}")),
+            support::say_samples(Some("Daniel"), b).unwrap_or_else(|e| panic!("{e}")),
+        )
+    } else {
+        (
+            support::sapi_samples("Microsoft Zira Desktop", a).unwrap_or_else(|e| panic!("{e}")),
+            support::sapi_samples("Microsoft David Desktop", b).unwrap_or_else(|e| panic!("{e}")),
+        )
+    }
 }
 
 /// A segment for a failure message: times and counts, never its text.

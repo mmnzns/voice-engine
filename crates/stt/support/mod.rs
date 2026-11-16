@@ -184,6 +184,36 @@ pub fn say_samples(voice: Option<&str>, text: &str) -> Result<Vec<f32>, String> 
     read_wav(&wav)
 }
 
+/// Can `sapi_samples` make speech here: a Windows PC (System.Speech comes with Windows).
+pub fn sapi_available() -> Result<(), String> {
+    if cfg!(windows) {
+        Ok(())
+    } else {
+        Err("Windows speech voices (System.Speech) exist on Windows only".into())
+    }
+}
+
+/// 16 kHz mono samples of `text` spoken by the installed Windows voice `voice` ("Microsoft David Desktop",
+/// "Microsoft Zira Desktop"), made with System.Speech through PowerShell into a temporary WAV file. Windows only.
+/// The voice, the text and the file go in environment variables, so nothing needs quoting.
+pub fn sapi_samples(voice: &str, text: &str) -> Result<Vec<f32>, String> {
+    sapi_available()?;
+    let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let wav = dir.path().join("clip.wav");
+    let script = "Add-Type -AssemblyName System.Speech;         $s = New-Object System.Speech.Synthesis.SpeechSynthesizer;         $s.SelectVoice($env:VE_VOICE);         $f = New-Object System.Speech.AudioFormat.SpeechAudioFormatInfo(16000,             [System.Speech.AudioFormat.AudioBitsPerSample]::Sixteen, [System.Speech.AudioFormat.AudioChannel]::Mono);         $s.SetOutputToWaveFile($env:VE_OUT, $f);         $s.Speak($env:VE_TEXT);         $s.Dispose()";
+    let status = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .env("VE_VOICE", voice)
+        .env("VE_TEXT", text)
+        .env("VE_OUT", &wav)
+        .status()
+        .map_err(|e| format!("powershell: {e}"))?;
+    if !status.success() {
+        return Err(format!("the Windows voice {voice} failed"));
+    }
+    read_wav(&wav)
+}
+
 /// `secs` seconds of speech for a speed bench: the clip of `VOICE_ENGINE_TEST_CLIP` repeated (0.3 s apart) and cut to
 /// the length, or, only when that is not set and on a Mac, `sentences` said by `say` in turn the same way.
 pub fn bench_clip(secs: f64, sentences: &[&str]) -> Result<Vec<f32>, String> {

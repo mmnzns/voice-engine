@@ -623,3 +623,109 @@ fn load_through_the_api_gives_a_transcriber_that_can_be_dropped_and_loaded_again
         check_shape(&t, ms(&clip));
     }
 }
+
+// ---- Parakeet Unified for 25 languages (`parakeet-unified-25`) ----
+//
+// The same load path as the English Unified model, with a language: `ChunkOptions::language` is passed on as the
+// model's own short code, `None` lets it detect. Looked up on its own like `parakeet-ultra`.
+
+const UNIFIED_25: &str = "parakeet-unified-25";
+
+fn unified_25(opts: LoadOptions) -> ParakeetEngine {
+    let dir = model_dir(UNIFIED_25);
+    ParakeetEngine::load(find(UNIFIED_25).unwrap(), &dir, opts).unwrap()
+}
+
+fn language(code: &str) -> ChunkOptions {
+    ChunkOptions {
+        language: Some(code.into()),
+        timing: Timing::Words,
+        ..ChunkOptions::default()
+    }
+}
+
+#[test]
+#[ignore]
+fn unified_25_gives_timed_words_and_reports_the_language_it_was_given() {
+    need_clip!();
+    let _g = guard();
+    let clip = say(SENTENCE);
+    let started = Instant::now();
+    let mut e = unified_25(LoadOptions {
+        gpu: false,
+        threads: None,
+    });
+    eprintln!(
+        "unified-25 load: {:.1} s, {} threads on {:?}",
+        started.elapsed().as_secs_f64(),
+        e.threads(),
+        e.backend().backend
+    );
+    assert_eq!(e.max_secs(), 40);
+    assert_eq!(e.backend().backend, "cpu");
+    for timing in [Timing::Segments, Timing::Words] {
+        let t0 = Instant::now();
+        let t = e.transcribe(&clip, &options(timing)).unwrap();
+        eprintln!(
+            "{timing:?}: {} segments, {} words, {} chars in {:?}",
+            t.segments.len(),
+            words_of(&t).len(),
+            text_of(&t).chars().count(),
+            t0.elapsed()
+        );
+        check_shape(&t, ms(&clip));
+        let heard = lower_letters(&words_of(&t).join(" "));
+        assert!(heard.contains("speechengine"), "the clip was not heard");
+        // No hint: the model detects, and says no language.
+        assert_eq!(t.language, None);
+    }
+    // A hint is passed on as the model's own code, whatever its spelling.
+    for (hint, code) in [("en", "en"), ("en-US", "en"), ("EN", "en")] {
+        let t = e.transcribe(&clip, &language(hint)).unwrap();
+        assert_eq!(t.language.as_deref(), Some(code), "{hint}");
+        check_shape(&t, ms(&clip));
+        assert!(
+            lower_letters(&words_of(&t).join(" ")).contains("speechengine"),
+            "{hint}: the clip was not heard"
+        );
+    }
+    // Another language than the one spoken still decodes (what it writes is not asserted), and the model keeps no
+    // memory of the last hint: no hint again is "auto".
+    let t = e.transcribe(&clip, &language("de")).unwrap();
+    assert_eq!(t.language.as_deref(), Some("de"));
+    eprintln!("hint de on English speech: {} words", words_of(&t).len());
+    let t = e.transcribe(&clip, &options(Timing::Words)).unwrap();
+    assert_eq!(t.language, None);
+    assert!(lower_letters(&words_of(&t).join(" ")).contains("speechengine"));
+    // A language the model lacks is detected, not an error.
+    let t = e.transcribe(&clip, &language("tl")).unwrap();
+    assert_eq!(t.language, None);
+}
+
+#[test]
+#[ignore]
+fn unified_25_asked_for_a_card_runs_on_the_processor_and_says_so() {
+    need_clip!();
+    let _g = guard();
+    let clip = say(SENTENCE);
+    let mut e = load(
+        find(UNIFIED_25).unwrap(),
+        &model_dir(UNIFIED_25),
+        LoadOptions {
+            gpu: true,
+            threads: Some(4),
+        },
+    )
+    .unwrap();
+    let b = e.backend();
+    assert_eq!(b.backend, "cpu");
+    assert_eq!(b.fallback, Some(voice_engine_stt::Fallback::NoCardPath));
+    let t = e.transcribe(&clip, &ChunkOptions::default()).unwrap();
+    check_shape(&t, ms(&clip));
+    // Longer than the chunk limit is refused, as for every ONNX model.
+    let long = vec![0.0f32; 40 * 16_000 + 1];
+    assert_eq!(
+        e.transcribe(&long, &ChunkOptions::default()).unwrap_err(),
+        SpeechError::TooLong { max_secs: 40 }
+    );
+}
