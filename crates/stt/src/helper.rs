@@ -3,7 +3,7 @@
 //! detection, and the fallback), so it never needs `vulkan-1.dll`, and a driver crash ends this process instead of the
 //! app. Built without it (and on the Mac, with Metal) it is the process fallback `SttClient` uses on any system.
 //!
-//! It serves Whisper only: Parakeet, Parakeet Unified and Nemotron run through ONNX Runtime inside the app's own
+//! It serves Whisper only: Parakeet, Parakeet Unified, Nemotron and Cohere run through ONNX Runtime inside the app's own
 //! process (`voice_engine_stt::load`), so a `load` of one of them is answered with `unsupported`.
 //!
 //! One JSON request per line on stdin, events on stdout, one request at a time. `load` reads the model and keeps it
@@ -286,7 +286,16 @@ mod tests {
                 "{kind:?}"
             );
         }
-        for id in ["no-such-model", "parakeet-ultra", "vad", "qwen3.5-4b", ""] {
+        for id in [
+            "no-such-model",
+            "parakeet-ultra",
+            "parakeet-unified-25",
+            "cohere-transcribe",
+            "multitalker-tdt",
+            "vad",
+            "qwen3.5-4b",
+            "",
+        ] {
             let f = check_load(&load_of(id, SttModelKind::Whisper)).unwrap_err();
             assert_eq!(f.error, SttErrorKind::BadRequest, "{id}");
         }

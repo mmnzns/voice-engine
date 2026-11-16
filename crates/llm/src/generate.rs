@@ -1,6 +1,7 @@
 //! Writing a reply and computing embeddings with a loaded model.
 
 use crate::failure::Failure;
+use crate::gemma;
 use crate::inbox::Inbox;
 use crate::model::{Loaded, Target, context_params, load};
 use crate::plain;
@@ -78,6 +79,11 @@ pub(crate) fn complete(
 
     // A file with a chat template gets its own format; one without gets the plain format (plain.rs) and says so.
     let (prompt, thinks, plain_format) = match model.chat_template(None) {
+        // Gemma 4's template is not one llama.cpp's built-in engine can run: the helper writes that prompt itself (gemma.rs).
+        // It has no `<think>` step, so no ending is added and a reply has no thinking.
+        Ok(template) if gemma::is_gemma4(&template.to_string().unwrap_or_default()) => {
+            (gemma::prompt(&c.system, &c.user), false, false)
+        }
         Ok(template) => {
             // Only a template with a thinking step gets a prompt ending, and only then can a reply have thinking.
             let thinks = think::template_thinks(&template.to_string().unwrap_or_default());

@@ -1,5 +1,61 @@
 # Changelog
 
+## v0.4.0 (2026-11-16)
+
+Not drop-in: `Kind` is `#[non_exhaustive]` and has two new variants, so an app that matches on `Kind` adds a wildcard arm.
+`ModelInfo` has a new field, `word_times`, so an app that builds one by hand adds it.
+
+- models: four new catalog entries, each pinned to a commit and checked against Hugging Face (`tools/verify-catalog.py`).
+  - `parakeet-unified-25` (Parakeet Unified, 25 European languages, NVIDIA, OpenMDW-1.1, 2.55 GB): the 25-language
+    Parakeet Unified. It takes a language or detects it, and loads through the same path as the English Unified model.
+    On NVIDIA's own 25-language test its average word error rate is 9.49, Parakeet v3's 10.55.
+  - `cohere-transcribe` (Cohere Transcribe 03-2026, int8, Apache-2.0, 3.07 GB, six files): 14 languages, text only, no
+    word times, chunks of up to 35 s.
+  - `multitalker-tdt` (Multitalker Parakeet TDT, CC-BY-4.0, 2.58 GB): who said what when people talk over each other, 25
+    European languages. A fine-tune of NVIDIA's Parakeet TDT v3 by a community author (not an NVIDIA release), pinned to
+    the commit before its folder gained a `speaker_gate` input that parakeet-rs 0.4.4 cannot feed. It needs the
+    `diarization` model too.
+  - `gemma-4-e4b` (Gemma 4 E4B, Google, Apache-2.0, 5.15 GB, Q4_0, text only): local AI, trained context 131072. On 8 GB
+    of memory only a context of 4096 tokens fits; 65536 on 16 GB (measured, `SOURCES.md`). `thinks` is false: Gemma 4's
+    template has no `<think>` step.
+- api (speech):
+  - `Kind::Cohere` loads with `voice_engine_stt::load` like the others (`cohere_engine::CohereEngine`, on the processor).
+    It gives text only: one segment over the whole chunk, `words` empty, whatever `Timing` says. Chunks are up to 35 s
+    (`TooLong { max_secs: 35 }`). It cannot detect the language: `ChunkOptions::language` picks one of its 14 (an
+    unsupported one is `SpeechError::Unsupported("language")`), `None` or "auto" means English. Run voice detection
+    first: the model writes text for silence and noise, and the engine adds no voice detection.
+  - New module `multitalker`: `multitalker::load(model, model_dir, diarization_dir, threads)` and
+    `Multitalker::run(&track)` return `SpeakerTurn`s (`speaker`, `start_ms`, `end_ms`, `text`, `words`) for a track of any
+    length; people who talk at once give turns whose times overlap. `load` of a Multitalker entry is `Unsupported`.
+  - The 25-language Parakeet Unified takes `ChunkOptions::language` ("fr", "fr-FR" and "FR" become the model's "fr"; `None`
+    or a language it lacks is detected). The English Unified model and Parakeet TDT still ignore it.
+  - The Whisper helper still serves Whisper only; the new models run in the app's own process.
+- api (local AI): the AI helper writes the prompt for Gemma 4 itself (`gemma.rs`, from the template in the model's own
+  GGUF file), because llama.cpp's built-in template engine cannot run that template (it answered "error -1"). Other
+  models are unchanged.
+- catalog: `Kind` is `#[non_exhaustive]` with new variants `Cohere` (a speech kind, `is_speech()` true) and `Multitalker`
+  (not a speech kind: it needs the speaker separation model and has its own API, `is_speech()` false). `ModelInfo::word_times`
+  says whether a transcript carries word times: true for every Whisper, Parakeet, Parakeet Unified and Nemotron entry and for
+  Multitalker, false for Cohere and for everything that is not a speech model.
+- change (inside): `parakeet-rs` gets the `cohere` feature next to `sortformer`.
+- test: real-model tests for the new models (`real_cohere.rs`, `real_multitalker.rs`, the Unified 25 cases in
+  `real_parakeet.rs`, `crates/client/tests/real_gemma.rs`); a Windows voice helper for tests that need voices that speak
+  their own words (`support::sapi_samples`, `common::voice_pair`). Measurements in `docs/bench-2026-11-16.md`.
+- apps: match arms and the catalog.
+  - An app that matches on `Kind` adds a wildcard arm. `Kind::Cohere` is a speech kind and `Kind::Multitalker` is not:
+    `catalog::speech()` includes Cohere and leaves Multitalker out.
+  - An app that needs word times (per-word timing, Timing::Words) skips models whose `word_times` is false (Cohere). An app
+    that only needs text takes them.
+  - An app that offers Cohere asks for a language (it cannot detect one), cuts audio into chunks of at most 35 s, and runs
+    voice detection before it.
+  - Multitalker needs the `diarization` model downloaded as well as `multitalker-tdt`; the app passes both folders to
+    `multitalker::load`.
+  - An app that builds `ModelInfo` itself (a test double) adds `word_times`.
+  - Gemma 4 needs the v0.4.0 AI helper: an app moves its helper build to v0.4.0 (`build-helpers.yml@v0.4.0` and
+    `engine-ref: v0.4.0`, or its own fetch script's engine ref) in the same change. An older helper cannot write Gemma 4's
+    prompt and fails the request.
+  - Nothing else changes: the same protocol (2), the same speech output for the models that were there.
+
 ## v0.3.5 (2026-11-14)
 
 Drop-in over v0.3.4: the same API, the same models, the same speech output.

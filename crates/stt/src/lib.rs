@@ -4,17 +4,24 @@
 //!   with `Timing::Segments` (Talaan's settings) or `Timing::Words` (Ensayo's). Whisper runs in process
 //!   ([`whisper_engine`]: Metal on the Mac, Vulkan with the `vulkan` feature, else the processor); Parakeet,
 //!   Parakeet Unified and Nemotron run in process too ([`parakeet_engine`]: ONNX Runtime through parakeet-rs, one
-//!   chunk of up to the catalog's `chunk_secs`, 40 s, per call; longer audio is `SpeechError::TooLong`). The thread
-//!   rule is in [`threads`].
+//!   chunk of up to the catalog's `chunk_secs`, 40 s, per call; longer audio is `SpeechError::TooLong`). Cohere
+//!   Transcribe runs in process as well ([`cohere_engine`]): text only, one segment per chunk with no word times
+//!   (the catalog's `word_times` is false), chunks of up to 35 s, one of its 14 languages (English when the app
+//!   gives none). It writes text for silence and noise, so an app runs [`vad::detect`] first and sends speech only;
+//!   there is no voice detection inside. The thread rule is in [`threads`].
 //! * [`vad::detect`]: where the speech is in a track (whisper.cpp's Silero detector, always on the processor).
 //!   [`vad::VadDetector`] is the same with the model loaded once, for apps that detect often (dictation).
 //! * [`diarize::load`] and [`diarize::Diarizer::run`]: who is talking, every 10 ms, for up to 8 speakers (NVIDIA's
 //!   Nemotron 3 Diarization through parakeet-rs's `sortformer`, always on the processor, on the ONNX thread rule).
 //!   Naming speakers and turning frames into turns is the app's.
+//! * [`multitalker::load`] and [`multitalker::Multitalker::run`]: who said what when people talk over each other
+//!   (the catalog's `multitalker-tdt`, a Parakeet TDT v3 fine-tune, with the `diarization` model), as turns with
+//!   words and times, any length, 25 European languages. Not a [`Transcriber`]: it has its own API, and `load` of
+//!   its catalog entry is `Unsupported`.
 //! * [`run_helper`]: the speech helper (Windows Vulkan, and a process fallback on any system), protocol 2
 //!   (`voice_engine_protocol::stt`), driven by `voice_engine_client::SttClient`. It loads a Whisper model on `load`,
 //!   keeps it for every `transcribe`, frees it on `unload`, and returns the same [`Transcript`] as [`load`]. It serves
-//!   Whisper only: the ONNX models (Parakeet, Parakeet Unified, Nemotron) run in the app's own process through
+//!   Whisper only: the ONNX models (Parakeet, Parakeet Unified, Nemotron, Cohere) run in the app's own process through
 //!   [`load`], and a helper `load` of one of them is answered with `unsupported`.
 //! * This crate never depends on `voice-engine-llm`: no llama.cpp is linked next to whisper.cpp, so an app can use
 //!   it in process (no duplicate ggml symbols).
@@ -28,19 +35,23 @@
 //!   failed: `backend()` says `cpu` with `fallback: Some(NoCardPath)`. This is the case for every ONNX model on the Mac (nothing
 //!   here uses CoreML: parakeet-rs measures it slower than the processor for these graphs), for a Windows build
 //!   without the `directml` feature, and for the models the catalog gives no DirectML path (Parakeet Unified,
-//!   Nemotron). There is no card path to fall back from, but the app asked for one, so it is told, once, and can
+//!   Nemotron, Cohere). There is no card path to fall back from, but the app asked for one, so it is told, once, and can
 //!   pass `gpu: false` from then on.
 //!
 //! # Options the ONNX models ignore
 //!
-//! `ChunkOptions::keep_fillers` and `vocabulary` do nothing for Parakeet, Parakeet Unified and Nemotron: they
+//! `ChunkOptions::keep_fillers` and `vocabulary` do nothing for Parakeet, Parakeet Unified, Nemotron and Cohere: they
 //! transcribe fillers as heard and have no prompt (the catalog's `keeps_fillers` is measured separately).
-//! `language` is a prompt for Nemotron only ("fr" becomes "fr-FR"); the other two ignore it.
+//! `language` is a prompt for Nemotron ("fr" becomes "fr-FR"), for Parakeet Unified (25 languages: the language
+//! it decodes in; the English model ignores it) and for Cohere (required in effect: English when none, and a language
+//! outside its 14 is `SpeechError::Unsupported`); Parakeet TDT ignores it.
 
 mod api;
+pub mod cohere_engine;
 pub mod diarize;
 pub mod directml;
 mod helper;
+pub mod multitalker;
 pub mod parakeet_engine;
 pub mod threads;
 pub mod vad;

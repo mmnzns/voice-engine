@@ -261,6 +261,7 @@ fn local_model(id: &'static str, files: &[(&str, &[u8])]) -> &'static ModelInfo 
         gpu: template.gpu,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: false,
         llm: None,
     }))
 }
