@@ -8,7 +8,7 @@ The local AI and speech engine shared by three desktop apps by Miguel Monzones:
 | --- | --- |
 | `voice-engine-protocol` | Messages between an app and its helper programs |
 | `voice-engine-llm` | The local AI helper (llama.cpp in its own process) |
-| `voice-engine-stt` | Speech: Whisper, Parakeet, Parakeet Unified and Nemotron, voice detection, speaker separation, and the Whisper helper |
+| `voice-engine-stt` | Speech: Whisper, Parakeet, Parakeet Unified, Nemotron and Cohere Transcribe, who said what for overlapping voices (Multitalker), voice detection, speaker separation, and the Whisper helper |
 | `voice-engine-client` | What an app uses to talk to its helpers: `LlmClient` and `SttClient` |
 | `voice-engine-models` | The model catalog, the shared model folder, the downloader and the one-time move |
 
@@ -127,7 +127,7 @@ struct an app only reads; an app that builds a `Reply` itself, in a test, adds `
 - The same for speech: `SpeechBackend::fell_back` (a field, what `Transcriber::backend()` returns in process and what the
   speech helper's `loaded` and `transcribed` carry) is `SpeechBackend::fallback: Option<Fallback>`, with `fell_back()` as a
   method. In process it is `NoCardPath` (the model has no card runtime here: the ONNX models on the Mac, a build without
-  `directml`, Parakeet Unified and Nemotron, or no usable card), `CardFailed` (the card did not start or load the model)
+  `directml`, Parakeet Unified, Nemotron and Cohere, or no usable card), `CardFailed` (the card did not start or load the model)
   or `CardOutOfMemory`, and only when `gpu: true` was asked. On the wire a v0.3.0 helper writes both `fallback` and
   `fell_back` (the derived bool), so a v0.2.x client still reads it; a v0.2.x helper's `fell_back: true` reads as
   `CardFailed`. `Fallback` is exported from `voice_engine_stt` too.
@@ -148,7 +148,8 @@ and it blocks, so call it from a worker thread. `detect_at(&[Probe])` looks at o
 
 `voice-engine-stt` loads one speech model and turns audio (16 kHz mono `f32`) into a `Transcript`: segments, each with
 its timed words, and the language. Whisper, Parakeet (TDT v2, v3 and Ultra), Parakeet Unified and Nemotron all answer
-the same way.
+the same way. Cohere Transcribe answers with text only: one segment per chunk and no words (the catalog's `word_times` is
+false for it; see "Cohere Transcribe" below). The catalog's `word_times` tells an app which models give word times.
 
 ```rust,ignore
 use voice_engine_stt::{load, ChunkOptions, LoadOptions, Timing};
@@ -181,7 +182,7 @@ words, so an app that needs sentences and an app that needs word times make the 
 
 `Segment::text` is trimmed. `Segment::starts_word` says whether a space goes before it when segments are joined. Whisper:
 the raw segment text began with whitespace (it does not in Chinese, Japanese or Korean, where words are not spaced).
-Parakeet, Parakeet Unified and Nemotron: always `true`. The first segment's value does not matter. A helper from before
+Parakeet, Parakeet Unified, Nemotron and Cohere: always `true`. The first segment's value does not matter. A helper from before
 the field reads as `true`. `join_segments(&segments)` joins by it: a single space before each segment that starts a
 word, none before one that does not.
 
@@ -217,7 +218,30 @@ Whisper takes audio of any length in one call (whisper.cpp cuts its own 30 s win
 **ONNX models** (Parakeet, Parakeet Unified, Nemotron) take one chunk of up to the catalog's `chunk_secs` (40 s) per
 call. Longer audio is `SpeechError::TooLong { max_secs }` and nothing is decoded: the app cuts the audio (voice
 detection helps) and calls again. `keep_fillers` and `vocabulary` do nothing for them (they transcribe fillers as heard
-and have no prompt); `language` is a prompt for Nemotron only ("fr" becomes "fr-FR").
+and have no prompt); `language` is a prompt for Nemotron ("fr" becomes "fr-FR") and for the 25-language Parakeet Unified
+(`parakeet-unified-25`: "fr", "fr-FR" and "FR" all become the model's own "fr"; `None` or a language it lacks lets the
+model detect, and `Transcript::language` is the language that was set, `None` when it detected). The English Unified
+model and Parakeet TDT ignore it.
+
+**Cohere Transcribe** (`cohere-transcribe`, `Kind::Cohere`, `voice_engine_stt::cohere_engine`) is loaded with `load` like
+the others and differs in four ways. It gives text only: `Transcript` has one segment over the whole chunk (`0` to the
+audio's length) with `words` empty, whatever `Timing` says, so an app that needs per-word times skips models whose
+`word_times` is false. Chunks are up to 35 s (`chunk_secs`; longer is `TooLong { max_secs: 35 }`). It cannot detect the
+language: `ChunkOptions::language` ("fr", "en-US", "pt_BR") picks one of its 14 (ar, de, el, en, es, fr, it, ja, ko, nl,
+pl, pt, vi, zh), `None` or "auto" means English, and any other language is `SpeechError::Unsupported("language")`;
+`Transcript::language` is the language it decoded in. Punctuation and capitals are on and numbers come as digits, as
+Whisper and Parakeet write them. It writes text for silence and noise (its card says so), and the engine adds no voice
+detection: an app runs `vad::detect` first and sends only the speech. It always runs on the processor.
+
+**Who said what** (`multitalker`, `Kind::Multitalker`). `multitalker::load(model, model_dir, diarization_dir, threads)`
+loads the catalog's `multitalker-tdt` (NVIDIA's Parakeet TDT v3 fine-tuned by a community author to transcribe one speaker
+at a time, 25 European languages) with the `diarization` model, which must be downloaded too. `Multitalker::run(&track)`
+takes a track of any length (16 kHz mono) and returns `SpeakerTurn`s in the order they start: `speaker` (the separation
+model's own number, meaningful inside one call), `start_ms`, `end_ms`, `text` and `words` (whole words with times on the
+track's clock). People who talk at the same time give turns whose times overlap. It runs the model once per speaker in
+chunks of about 20 s, so it is slower when many people talk, and it is only as good as the speaker separation: a voice the
+separation misses stays missed. It is not a `Transcriber` (`load` of its entry is `Unsupported`), and it always runs on the
+processor.
 
 **Errors** are `SpeechError`, a kind to match on, never text: `ModelMissing`, `BadModel`, `OutOfMemory`,
 `Unsupported(String)`, `TooLong { max_secs }`, `Internal(String)`. No message holds audio, a word the person said or a
@@ -303,7 +327,9 @@ is no fall back to the processor. Check what a built file imports with `dumpbin 
 | --- | --- | --- |
 | Whisper (every variant) | in process: Metal with `gpu: true`, else the processor | the Vulkan helper through `SttClient` (`vulkan` feature), the processor helper as its fallback; in process on the processor |
 | Parakeet TDT (v2, v3, Ultra) | the processor | DirectML in process with the `directml` feature and `gpu: true`, else the processor |
-| Parakeet Unified, Nemotron | the processor | the processor (the catalog gives no DirectML path) |
+| Parakeet Unified (English and 25 languages), Nemotron | the processor | the processor (the catalog gives no DirectML path) |
+| Cohere Transcribe | the processor | the processor |
+| Multitalker (`multitalker`) | the processor | the processor |
 | Speaker separation (`diarize`) | the processor | the processor |
 | Voice detection (`vad::detect`) | the processor | the processor |
 
@@ -317,8 +343,13 @@ Nothing uses CoreML. On the Mac, `gpu: true` for an ONNX model runs on the proce
   timing modes, any length, vocabulary, threads, language, early stop, Metal and processor), Parakeet Ultra, voice
   detection and speaker separation (all pass except the two-voices test described above), and `SttClient` with the real
   Whisper helper (`crates/client/tests/real_stt.rs`).
-- No real model has been run for Parakeet Unified and Nemotron (none was on the test Mac; their code is tested with a
-  scripted model and against the catalog's file lists) or for the other Parakeet variants.
+- No real model has been run for the English Parakeet Unified and Nemotron (none was on the test Mac; their code is tested
+  with a scripted model and against the catalog's file lists) or for the other Parakeet variants.
+- v0.4.0, on a Windows 11 PC (16 logical cores, an RTX 5070 Ti that none of these use, everything on the processor): the real
+  models of `parakeet-unified-25`, `cohere-transcribe` and `multitalker-tdt` (`real_parakeet.rs`, `real_cohere.rs`,
+  `real_multitalker.rs`, with the Windows voices for the speech) and `gemma-4-e4b` through the real helper
+  (`crates/client/tests/real_gemma.rs`), and `real_parakeet.rs` again for Parakeet Ultra. The numbers are in
+  `docs/bench-2026-11-16.md`.
 - Windows: compiled, and the tests without a model run, by CI (`windows-latest`) only. The Vulkan helper, DirectML and a
   real model have not run on a Windows computer; the manual `windows-gpu` CI job builds the Vulkan versions.
 - `crates/stt/tests/no_llama.rs` fails if `voice-engine-stt` can reach `llama-cpp-2`, `llama-cpp-sys-2` or
@@ -328,14 +359,17 @@ Nothing uses CoreML. On the Mac, `gpu: true` for an ONNX model runs on the proce
 ## Catalog
 
 `voice-engine-models` has one catalog for every kind of model. Each entry has a `Kind`: `Whisper`, `Parakeet`,
-`ParakeetUnified`, `Nemotron` (the four speech kinds, `Kind::is_speech`), `Vad` (Silero voice detection),
-`Diarization` (speaker separation), `Embedding` (search by meaning) and `Llm` (local AI).
+`ParakeetUnified`, `Nemotron` and `Cohere` (the speech kinds, `Kind::is_speech`), `Multitalker` (who said what for
+overlapping voices: it needs the `diarization` model too and has its own API, so it is not a speech kind), `Vad`
+(Silero voice detection), `Diarization` (speaker separation), `Embedding` (search by meaning) and `Llm` (local AI).
+`Kind` is `#[non_exhaustive]`: a match on it needs a wildcard arm, so a kind added later does not break the app.
 
 Every entry carries: `id`, `name`, `maker`, `note`, `kind`, `languages`, `english_only`, `speed` and `accuracy` (1 to
 3), `licence` (SPDX name and link), `files` (each with a url pinned to a commit, size and sha256), `gpu` (which of Mac
 Metal, Windows Vulkan and Windows DirectML run it), `keeps_fillers` (whether it keeps "um", "uh" and "like"; measured, so `None` for a model that was not: only Whisper Large Turbo and Parakeet Ultra have a value so far, `Some(true)`, see `docs/bench-2026-10-29.md`), `chunk_secs` (the longest
-chunk to send; None means any length) and `llm` (local AI only: `context_max`, `context_8gb`, `context_16gb`,
-`thinks`). Look models up with `catalog::find`, `catalog::all()`, `catalog::speech()` and `catalog::local_ai()`.
+chunk to send; None means any length), `word_times` (speech: whether the transcript carries word times; false for Cohere
+Transcribe, which gives one piece of text per chunk, and for everything that is not a speech model) and `llm` (local AI
+only: `context_max`, `context_8gb`, `context_16gb`, `thinks`). Look models up with `catalog::find`, `catalog::all()`, `catalog::speech()` and `catalog::local_ai()`.
 
 The catalog never recommends a model. Which one an app offers first is the app's business.
 
@@ -438,7 +472,7 @@ is false for `Cancelled` and `Stalled`: nothing went wrong, the partial file is 
 ## Use it in an app
 
 ```toml
-voice-engine-protocol = { git = "https://github.com/mmnzns/voice-engine", tag = "v0.3.5" }
+voice-engine-protocol = { git = "https://github.com/mmnzns/voice-engine", tag = "v0.4.0" }
 ```
 
 Every engine crate in one app uses the same tag. Each helper program stays in the app as a 3-line `main.rs`:
@@ -590,7 +624,9 @@ cargo test --release -p voice-engine-stt --features directml -- --ignored --test
 The real tests expect the clip to say that sentence. A test that needs the `say` command's own wording or several
 voices (the Whisper vocabulary test, two voice detection tests, the Parakeet short-sentences test, and everything in
 `real_fillers.rs` and `real_diarize.rs`) is skipped with a message when `VOICE_ENGINE_TEST_CLIP` is set or the computer is
-not a Mac. Metal is asked for on the Mac; on Windows the tests run on the processor unless built with `--features
+not a Mac. `real_multitalker.rs` and the numbers test of `real_cohere.rs` need voices that speak their own words and run on
+a Mac (`say`) and on Windows (the installed Microsoft David and Zira voices, made at test time with System.Speech through
+PowerShell); they are skipped when `VOICE_ENGINE_TEST_CLIP` is set. Metal is asked for on the Mac; on Windows the tests run on the processor unless built with `--features
 vulkan` (Whisper) or `--features directml` (Parakeet), see "Check the graphics card on a Windows PC" below. Use
 `--release`: the native libraries must be the optimized ones (see "Build settings an app must copy").
 
