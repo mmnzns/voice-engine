@@ -10,7 +10,7 @@ use voice_engine_stt::directml::Adapter;
 use voice_engine_stt::parakeet_engine::{
     DEFAULT_MAX_SECS, PAD_SAMPLES, Provider, RawWord, WordModel, check_files,
     load_on_best_provider, nemotron_locale, pad_both_sides, segments_from_words, sentence_text,
-    shift_words, transcribe_chunk,
+    shift_words, transcribe_chunk, unified_language,
 };
 use voice_engine_stt::threads::{ThreadKind, default_threads};
 use voice_engine_stt::whisper_engine::MAX_PASSES;
@@ -300,6 +300,40 @@ fn no_hint_an_unknown_language_or_the_english_only_model_means_no_prompt() {
     assert_eq!(nemotron_locale(Some("xx"), NEMOTRON_KEYS), None);
     // the English-only variant lists no languages at all
     assert_eq!(nemotron_locale(Some("fr"), &[]), None);
+}
+
+/// The codes `ParakeetUnified::available_languages` gives for the 25-language model (short ones; the locales are the
+/// same languages again and are not needed).
+const UNIFIED_CODES: &[&str] = &[
+    "bg", "cs", "da", "de", "el", "en", "es", "et", "fi", "fr", "hr", "hu", "it", "lt", "lv", "mt",
+    "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk",
+];
+
+#[test]
+fn unified_takes_the_short_language_code_in_any_spelling() {
+    let lang = |h: &str| unified_language(Some(h), UNIFIED_CODES);
+    assert_eq!(lang("de").as_deref(), Some("de"));
+    assert_eq!(lang("DE").as_deref(), Some("de"));
+    assert_eq!(lang("de-DE").as_deref(), Some("de"));
+    assert_eq!(lang("fr_FR").as_deref(), Some("fr"));
+    assert_eq!(lang(" es ").as_deref(), Some("es"));
+    // The model's own list gives "es" and "es-ES" different ids; the short code is the one used.
+    assert_eq!(lang("es-ES").as_deref(), Some("es"));
+    for code in UNIFIED_CODES {
+        assert_eq!(lang(code).as_deref(), Some(*code));
+    }
+}
+
+#[test]
+fn unified_detects_when_there_is_no_usable_hint() {
+    assert_eq!(unified_language(None, UNIFIED_CODES), None);
+    assert_eq!(unified_language(Some(""), UNIFIED_CODES), None);
+    assert_eq!(unified_language(Some("auto"), UNIFIED_CODES), None);
+    // A language the model lacks.
+    assert_eq!(unified_language(Some("tl"), UNIFIED_CODES), None);
+    assert_eq!(unified_language(Some("ja"), UNIFIED_CODES), None);
+    // The English-only model lists no languages and takes none.
+    assert_eq!(unified_language(Some("en"), &[]), None);
 }
 
 // ---- the files a catalog entry names ----

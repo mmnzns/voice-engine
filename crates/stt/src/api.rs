@@ -61,7 +61,7 @@ pub enum SpeechError {
     /// Not available here (a kind this build cannot run, or a file that is not a speech model).
     Unsupported(String),
     /// The audio is longer than the model takes in one call (Parakeet, Parakeet Unified and Nemotron: the catalog's
-    /// `chunk_secs`, 40 s). Nothing was decoded; the app cuts the audio and calls again.
+    /// `chunk_secs`, 40 s; Cohere: 35 s). Nothing was decoded; the app cuts the audio and calls again.
     TooLong { max_secs: u32 },
     /// Anything else; the string is the engine's own error code, never user data.
     Internal(String),
@@ -89,9 +89,9 @@ impl std::error::Error for SpeechError {}
 
 /// Loads a speech model from its folder `dir` (as the shared store lays it out: the catalog's file names).
 ///
-/// Whisper and the ONNX kinds (Parakeet, Parakeet Unified, Nemotron) run in process; the folder holds the catalog's
-/// files for the model. Voice detection, speaker separation, embeddings and the local AI are not speech models
-/// (`Unsupported`).
+/// Whisper and the ONNX kinds (Parakeet, Parakeet Unified, Nemotron, Cohere) run in process; the folder holds the
+/// catalog's files for the model. Multitalker has its own entry point, [`crate::multitalker::load`] (`Unsupported`
+/// here). Voice detection, speaker separation, embeddings and the local AI are not speech models (`Unsupported`).
 pub fn load(
     model: &ModelInfo,
     dir: &Path,
@@ -110,8 +110,13 @@ pub fn load(
             let engine = crate::parakeet_engine::ParakeetEngine::load(model, dir, opts)?;
             Ok(Box::new(engine))
         }
-        Kind::Vad | Kind::Diarization | Kind::Embedding | Kind::Llm => {
-            Err(SpeechError::Unsupported("not a speech model".into()))
+        Kind::Cohere => {
+            let engine = crate::cohere_engine::CohereEngine::load(model, dir, opts)?;
+            Ok(Box::new(engine))
         }
+        // Not a plain speech model: it needs the speaker separation model too, and returns turns, not a transcript.
+        Kind::Multitalker => Err(SpeechError::Unsupported("use multitalker::load".into())),
+        // `Kind` is non-exhaustive: a kind added later is not a speech model this build knows.
+        _ => Err(SpeechError::Unsupported("not a speech model".into())),
     }
 }

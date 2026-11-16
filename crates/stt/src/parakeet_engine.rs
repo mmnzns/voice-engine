@@ -16,7 +16,9 @@
 //!   (it builds them from the same words; [`segments_from_words`] is that step, kept here because parakeet-rs
 //!   keeps it private and a second decode would double the time), each with its words attached.
 //! * Nemotron takes a language prompt: a hint "fr" becomes the locale "fr-FR" ([`nemotron_locale`]); no hint or an
-//!   unknown one means the model detects. Parakeet and Parakeet Unified take no language.
+//!   unknown one means the model detects. The multilingual Parakeet Unified (25 languages) takes one too, as its own
+//!   short code ("fr", [`unified_language`]), with the same fallback to detection; the English Unified model and
+//!   Parakeet TDT take no language. `Transcript::language` is the language that was set, `None` when the model detected.
 //! * `keep_fillers` and `vocabulary` do nothing here: the ONNX models transcribe fillers as heard and have no
 //!   prompt (the catalog's `keeps_fillers` is measured separately).
 //! * The graphics card: with the `directml` feature on Windows, `gpu: true` runs the model through ONNX Runtime's
@@ -210,6 +212,26 @@ pub fn nemotron_locale(hint: Option<&str>, available: &[&str]) -> Option<String>
     } else {
         bare_code(&hint, available)
     }
+}
+
+/// Parakeet Unified's language for the app's hint: the model's own short code ("de", "fr", "es"), whatever way the
+/// hint is spelled ("de-DE", "de_DE", "DE"). `None` (the model detects) for no hint, "auto", a language the model
+/// lacks, and the English-only variant (`available` is empty). The short code and not the locale, because the model's
+/// own list gives "es" and "es-ES" different ids.
+pub fn unified_language(hint: Option<&str>, available: &[&str]) -> Option<String> {
+    let hint = hint?.trim();
+    if hint.is_empty() || hint.eq_ignore_ascii_case("auto") {
+        return None;
+    }
+    let code = hint
+        .split(['-', '_'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    available
+        .iter()
+        .find(|k| **k == code)
+        .map(|k| k.to_string())
 }
 
 fn bare_code(code: &str, available: &[&str]) -> Option<String> {
@@ -451,7 +473,7 @@ pub fn ort_environment() -> Result<ort::environment::Environment, SpeechError> {
 }
 
 /// parakeet-rs's session settings for one provider and thread count.
-fn execution_config(
+pub(crate) fn execution_config(
     provider: Provider,
     threads: usize,
 ) -> Result<parakeet_rs::ExecutionConfig, SpeechError> {
@@ -500,8 +522,9 @@ fn directml_provider(_device_id: u32) -> ort::ep::ExecutionProviderDispatch {
 /// The NVIDIA models: Parakeet TDT (v2, v3, Ultra), Parakeet Unified and Nemotron. Same padding, same timestamps;
 /// they differ only in how they load and decode.
 enum NvidiaModel {
-    Tdt(parakeet_rs::ParakeetTDT),
-    Unified(parakeet_rs::ParakeetUnified),
+    Tdt(Box<parakeet_rs::ParakeetTDT>),
+    /// With the language codes the model accepts ("de", "fr"...); empty for the English-only model.
+    Unified(Box<parakeet_rs::ParakeetUnified>, Vec<&'static str>),
     /// With the language prompts the model accepts ("en-US", "fr-FR"...); empty for the English-only variant.
     Nemotron(Box<parakeet_rs::Nemotron>, Vec<&'static str>),
 }
@@ -514,9 +537,14 @@ impl NvidiaModel {
     ) -> Result<Self, SpeechError> {
         let failed = |e: parakeet_rs::Error| from_parakeet(&e, true);
         Ok(match kind {
-            Kind::ParakeetUnified => NvidiaModel::Unified(
-                parakeet_rs::ParakeetUnified::from_pretrained(dir, Some(config)).map_err(failed)?,
-            ),
+            Kind::ParakeetUnified => {
+                let handle = parakeet_rs::ParakeetUnifiedHandle::from_pretrained(dir, Some(config))
+                    .map_err(failed)?;
+                NvidiaModel::Unified(
+                    Box::new(parakeet_rs::ParakeetUnified::from_shared(&handle).map_err(failed)?),
+                    handle.available_languages(),
+                )
+            }
             Kind::Nemotron => {
                 let handle = parakeet_rs::NemotronHandle::from_pretrained(dir, Some(config))
                     .map_err(failed)?;
@@ -525,9 +553,9 @@ impl NvidiaModel {
                     handle.available_languages(),
                 )
             }
-            _ => NvidiaModel::Tdt(
+            _ => NvidiaModel::Tdt(Box::new(
                 parakeet_rs::ParakeetTDT::from_pretrained(dir, Some(config)).map_err(failed)?,
-            ),
+            )),
         })
     }
 }
@@ -538,7 +566,7 @@ impl WordModel for NvidiaModel {
         let mode = Some(parakeet_rs::TimestampMode::Words);
         let result = match self {
             NvidiaModel::Tdt(m) => m.transcribe_samples(audio, 16_000, 1, mode),
-            NvidiaModel::Unified(m) => m.transcribe_samples(audio, 16_000, 1, mode),
+            NvidiaModel::Unified(m, _) => m.transcribe_samples(audio, 16_000, 1, mode),
             NvidiaModel::Nemotron(m, _) => m.transcribe_audio_with_timestamps(&audio, mode),
         }
         .map_err(|e| from_parakeet(&e, false))?;
@@ -554,6 +582,16 @@ impl WordModel for NvidiaModel {
     }
 
     fn set_language(&mut self, hint: Option<&str>) -> Option<String> {
+        if let NvidiaModel::Unified(model, languages) = self {
+            // The English-only variant takes no language.
+            if languages.is_empty() {
+                return None;
+            }
+            // The model keeps the language of the last call, so "no hint" has to say "auto" again.
+            let code = unified_language(hint, languages);
+            let _ = model.set_target_lang(code.as_deref().unwrap_or("auto"));
+            return code;
+        }
         let NvidiaModel::Nemotron(model, languages) = self else {
             return None;
         };

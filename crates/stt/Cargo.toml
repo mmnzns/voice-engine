@@ -28,7 +28,7 @@ whisper-rs = { version = "0.16.0", features = ["raw-api"] }
 # parakeet-rs's default features switch ort's own defaults back on (download-binaries: a static ONNX Runtime fetched
 # once into the ort cache at build time, no DLL to ship), whatever `default-features = false` says here.
 # `sortformer` is speaker separation (`diarize.rs`, Talaan's feature set).
-parakeet-rs = { version = "0.4.4", features = ["sortformer"] }
+parakeet-rs = { version = "0.4.4", features = ["sortformer", "cohere"] }
 ort = { version = "=2.0.0-rc.15", default-features = false }
 
 # Metal on the Mac, in process. Cargo unifies the features with the entry above.
