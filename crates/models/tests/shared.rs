@@ -118,6 +118,7 @@ fn local_model(
         gpu: template.gpu,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: false,
         llm: None,
     }))
 }

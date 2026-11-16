@@ -2,7 +2,9 @@
 //! AI), with its files, sizes, hashes, licence and what runs it. The catalog never recommends; which model an app
 //! offers first is the app's business.
 
+/// `#[non_exhaustive]`: a kind can be added in a minor release, so an app that matches on it needs a wildcard arm.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Kind {
     /// Whisper (whisper.cpp ggml files).
     Whisper,
@@ -12,6 +14,11 @@ pub enum Kind {
     ParakeetUnified,
     /// Nemotron ASR (multilingual).
     Nemotron,
+    /// Cohere Transcribe: text only, one piece of text per chunk, no word times.
+    Cohere,
+    /// Multitalker Parakeet TDT: who said what, for overlapping speech. It needs the speaker separation model
+    /// and has its own API (`voice_engine_stt::multitalker`), so it is not a plain speech model.
+    Multitalker,
     /// Voice activity detection (Silero).
     Vad,
     /// Speaker separation for the Them track.
@@ -23,11 +30,12 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// A model that turns speech into text (the ones an app offers as speech models).
+    /// A model that turns speech into text (the ones an app offers as speech models). `Multitalker` is not one:
+    /// it needs the speaker separation model and has its own API.
     pub fn is_speech(self) -> bool {
         matches!(
             self,
-            Kind::Whisper | Kind::Parakeet | Kind::ParakeetUnified | Kind::Nemotron
+            Kind::Whisper | Kind::Parakeet | Kind::ParakeetUnified | Kind::Nemotron | Kind::Cohere
         )
     }
 }
@@ -71,6 +79,11 @@ pub mod licences {
     pub const CC_BY_4: Licence = Licence {
         spdx: "CC-BY-4.0",
         url: "https://creativecommons.org/licenses/by/4.0/",
+    };
+    /// Gemma 4 is released under Apache 2.0; Google's own page for it is the link on the model card.
+    pub const GEMMA_4: Licence = Licence {
+        spdx: "Apache-2.0",
+        url: "https://ai.google.dev/gemma/docs/gemma_4_license",
     };
     pub const NVIDIA_OPEN_MODEL: Licence = Licence {
         spdx: "NVIDIA-Open-Model-License",
@@ -131,6 +144,10 @@ pub struct ModelInfo {
     pub keeps_fillers: Option<bool>,
     /// Speech: the longest chunk to send (seconds). None: any length (Whisper).
     pub chunk_secs: Option<u32>,
+    /// Speech: whether the transcript carries word times. False for Cohere: one segment per chunk, no words. True
+    /// for every Whisper, Parakeet, Parakeet Unified and Nemotron entry, and for Multitalker. False for every entry
+    /// that is not a speech model (voice detection, speaker separation, search, local AI).
+    pub word_times: bool,
     /// Local AI only.
     pub llm: Option<LlmInfo>,
 }
@@ -188,6 +205,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: Some(true),
         chunk_secs: None,
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -213,6 +231,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -276,6 +295,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::PARAKEET_TDT,
         keeps_fillers: None,
         chunk_secs: Some(40),
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -348,6 +368,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::PARAKEET_TDT,
         keeps_fillers: None,
         chunk_secs: Some(40),
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -373,6 +394,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -398,6 +420,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -423,6 +446,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -448,6 +472,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -473,6 +498,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -498,6 +524,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -523,6 +550,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -548,6 +576,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -573,6 +602,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -598,6 +628,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -623,6 +654,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -648,6 +680,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -711,6 +744,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::PARAKEET_TDT,
         keeps_fillers: Some(true),
         chunk_secs: Some(40),
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -774,6 +808,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::PARAKEET_TDT,
         keeps_fillers: None,
         chunk_secs: Some(40),
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -846,6 +881,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::PARAKEET_TDT,
         keeps_fillers: None,
         chunk_secs: Some(40),
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -900,6 +936,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::NONE,
         keeps_fillers: None,
         chunk_secs: Some(40),
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -954,6 +991,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::NONE,
         keeps_fillers: None,
         chunk_secs: Some(40),
+        word_times: true,
         llm: None,
     },
     ModelInfo {
@@ -1008,6 +1046,139 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::NONE,
         keeps_fillers: None,
         chunk_secs: Some(40),
+        word_times: true,
+        llm: None,
+    },
+    // Parakeet Unified for 25 European languages (NVIDIA's nemotron-labs-unified-asr-0.6b, the ONNX export in the
+    // parakeet-rs repository). The same files and load path as the English Unified model; the encoder takes a language.
+    ModelInfo {
+        id: "parakeet-unified-25",
+        name: "Parakeet Unified (25 languages)",
+        maker: "NVIDIA",
+        note: "25 European languages, with punctuation. Takes the language, or detects it. About 2.5 GB. On NVIDIA’s 25-language test its average word error rate is 9.49, Parakeet v3’s 10.55.",
+        kind: Kind::ParakeetUnified,
+        languages: "25 European languages",
+        english_only: false,
+        speed: 3,
+        accuracy: 2,
+        licence: licences::OPENMDW_1_1,
+        files: &[
+            ModelFile {
+                name: "encoder.onnx",
+                url: concat!(
+                    "https://huggingface.co/altunenes/parakeet-rs/resolve/664cc742197053fa11afd12f5100749fb8000181/nemotron-labs-unified-asr-0.6b/",
+                    "encoder.onnx"
+                ),
+                size: 4_176_628,
+                sha256: "3e985eef88699f66f34ff67decaa0136e3915f58d79dcc209240a6a8f9e23cf9",
+            },
+            ModelFile {
+                name: "encoder.onnx.data",
+                url: concat!(
+                    "https://huggingface.co/altunenes/parakeet-rs/resolve/664cc742197053fa11afd12f5100749fb8000181/nemotron-labs-unified-asr-0.6b/",
+                    "encoder.onnx.data"
+                ),
+                size: 2_495_885_312,
+                sha256: "ba6d0f46f2a4572c86503cfff437d935a3e0d9d759add4681f2f41984ae35510",
+            },
+            ModelFile {
+                name: "decoder_joint.onnx",
+                url: concat!(
+                    "https://huggingface.co/altunenes/parakeet-rs/resolve/664cc742197053fa11afd12f5100749fb8000181/nemotron-labs-unified-asr-0.6b/",
+                    "decoder_joint.onnx"
+                ),
+                size: 51_578_226,
+                sha256: "da1e234ca1908dcce10e01f3cd5a4bab28583fe558d39a980a2f606240fd614c",
+            },
+            ModelFile {
+                name: "tokenizer.model",
+                url: concat!(
+                    "https://huggingface.co/altunenes/parakeet-rs/resolve/664cc742197053fa11afd12f5100749fb8000181/nemotron-labs-unified-asr-0.6b/",
+                    "tokenizer.model"
+                ),
+                size: 296_524,
+                sha256: "f910aa78502daf04410654c3211180e6f83aafd6ef23a38739f25b6568421ba7",
+            },
+        ],
+        gpu: gpu::NONE,
+        keeps_fillers: None,
+        chunk_secs: Some(40),
+        word_times: true,
+        llm: None,
+    },
+    // Cohere Transcribe 03-2026 (2B parameters, the int8 ONNX export by onnx-community). Text only: no word times. The
+    // external-data files sit flat next to the .onnx files, which name them by relative path.
+    ModelInfo {
+        id: "cohere-transcribe",
+        name: "Cohere Transcribe",
+        maker: "Cohere",
+        note: "14 languages. Gives the text of each chunk, with no word times. Trained on clips of up to 35 seconds. About 3.1 GB. It can write text for silence or noise, so give it audio that has speech in it.",
+        kind: Kind::Cohere,
+        languages: "14 languages",
+        english_only: false,
+        speed: 1,
+        accuracy: 3,
+        licence: licences::APACHE_2,
+        files: &[
+            ModelFile {
+                name: "encoder_model_quantized.onnx",
+                url: concat!(
+                    "https://huggingface.co/onnx-community/cohere-transcribe-03-2026-ONNX/resolve/31b1c6211c9000d76b077ddd23b74c9090badeba/",
+                    "onnx/encoder_model_quantized.onnx"
+                ),
+                size: 1_420_203,
+                sha256: "9e7e59a14821e5a08c71b0d849a956b6375007a5f0be795c448499b0328d7923",
+            },
+            ModelFile {
+                name: "encoder_model_quantized.onnx_data",
+                url: concat!(
+                    "https://huggingface.co/onnx-community/cohere-transcribe-03-2026-ONNX/resolve/31b1c6211c9000d76b077ddd23b74c9090badeba/",
+                    "onnx/encoder_model_quantized.onnx_data"
+                ),
+                size: 2_096_573_952,
+                sha256: "8733a14ed4e365cacaa8f1af8764e31b7f728fc4db79d8e8d4836e59d396ccea",
+            },
+            ModelFile {
+                name: "encoder_model_quantized.onnx_data_1",
+                url: concat!(
+                    "https://huggingface.co/onnx-community/cohere-transcribe-03-2026-ONNX/resolve/31b1c6211c9000d76b077ddd23b74c9090badeba/",
+                    "onnx/encoder_model_quantized.onnx_data_1"
+                ),
+                size: 774_430_720,
+                sha256: "a86b005d5c77583389f0f0dcf558ebe4ed615fad96f3473303eaaf7d9990a7ae",
+            },
+            ModelFile {
+                name: "decoder_model_merged_quantized.onnx",
+                url: concat!(
+                    "https://huggingface.co/onnx-community/cohere-transcribe-03-2026-ONNX/resolve/31b1c6211c9000d76b077ddd23b74c9090badeba/",
+                    "onnx/decoder_model_merged_quantized.onnx"
+                ),
+                size: 196_039,
+                sha256: "e9916f9a7ec732fd2181157e7899950d895ecf21867cea1aa0e8fff13a85fd53",
+            },
+            ModelFile {
+                name: "decoder_model_merged_quantized.onnx_data",
+                url: concat!(
+                    "https://huggingface.co/onnx-community/cohere-transcribe-03-2026-ONNX/resolve/31b1c6211c9000d76b077ddd23b74c9090badeba/",
+                    "onnx/decoder_model_merged_quantized.onnx_data"
+                ),
+                size: 195_903_488,
+                sha256: "84d949b4b89d2b2b4e9ba201b28344f2c517fe03bd50a6b92be1756942f9d40b",
+            },
+            ModelFile {
+                name: "tokenizer.json",
+                url: concat!(
+                    "https://huggingface.co/onnx-community/cohere-transcribe-03-2026-ONNX/resolve/31b1c6211c9000d76b077ddd23b74c9090badeba/",
+                    "tokenizer.json"
+                ),
+                size: 1_152_395,
+                sha256: "e263c0ba13be0f0803705b002756908f84efc6e75a4c273231a01c4371908a2b",
+            },
+        ],
+        gpu: gpu::NONE,
+        keeps_fillers: None,
+        chunk_secs: Some(35),
+        word_times: false,
         llm: None,
     },
     // Silero voice activity detection, used with every model. Downloaded with the first model.
@@ -1031,6 +1202,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::NONE,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: false,
         llm: None,
     },
     // Speaker separation (named speakers): NVIDIA Nemotron 3 Diarization, ONNX export for parakeet-rs.
@@ -1054,6 +1226,65 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::NONE,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: false,
+        llm: None,
+    },
+    // Multitalker Parakeet TDT: a community fine-tune (altunenes, in the parakeet-rs repository) of NVIDIA's
+    // parakeet-tdt-0.6b-v3. Pinned to the commit before the folder gained a `speaker_gate` input that parakeet-rs 0.4.4
+    // cannot feed. It needs the `diarization` model too. It cuts the audio itself (about 20 s at a time), so it takes any length.
+    ModelInfo {
+        id: "multitalker-tdt",
+        name: "Multitalker Parakeet TDT",
+        maker: "altunenes",
+        note: "Who said what when people talk over each other, in 25 European languages. A fine-tune of NVIDIA’s Parakeet TDT v3 by a community author, not an NVIDIA release. Needs the speaker separation model as well. About 2.6 GB.",
+        kind: Kind::Multitalker,
+        languages: "25 European languages",
+        english_only: false,
+        speed: 2,
+        accuracy: 2,
+        licence: licences::CC_BY_4,
+        files: &[
+            ModelFile {
+                name: "encoder-model.onnx",
+                url: concat!(
+                    "https://huggingface.co/altunenes/parakeet-rs/resolve/7f997807e4dcfae115c260a4a537a1d3bfb2e738/multitalker-tdt-0.6b-v3/",
+                    "encoder-model.onnx"
+                ),
+                size: 3_916_579,
+                sha256: "12e70570b3c777271e3a981a5b858b0afebc9d20a2b847df065a1a6d2c12f869",
+            },
+            ModelFile {
+                name: "encoder-model.onnx.data",
+                url: concat!(
+                    "https://huggingface.co/altunenes/parakeet-rs/resolve/7f997807e4dcfae115c260a4a537a1d3bfb2e738/multitalker-tdt-0.6b-v3/",
+                    "encoder-model.onnx.data"
+                ),
+                size: 2_505_949_184,
+                sha256: "0964d537682c69c219a40d8bd87b286a5173c43ed9c947e134633f57dff0b419",
+            },
+            ModelFile {
+                name: "decoder_joint-model.onnx",
+                url: concat!(
+                    "https://huggingface.co/altunenes/parakeet-rs/resolve/7f997807e4dcfae115c260a4a537a1d3bfb2e738/multitalker-tdt-0.6b-v3/",
+                    "decoder_joint-model.onnx"
+                ),
+                size: 72_584_074,
+                sha256: "9ce45c12b84c88366e259d51701eb6061bb40a8f3caee486fb7c3fe52ac131ac",
+            },
+            ModelFile {
+                name: "vocab.txt",
+                url: concat!(
+                    "https://huggingface.co/altunenes/parakeet-rs/resolve/7f997807e4dcfae115c260a4a537a1d3bfb2e738/multitalker-tdt-0.6b-v3/",
+                    "vocab.txt"
+                ),
+                size: 93_939,
+                sha256: "d58544679ea4bc6ac563d1f545eb7d474bd6cfa467f0a6e2c1dc1c7d37e3c35d",
+            },
+        ],
+        gpu: gpu::NONE,
+        keeps_fillers: None,
+        chunk_secs: None,
+        word_times: true,
         llm: None,
     },
     // Search by meaning: Qwen3-Embedding 0.6B, 100+ languages.
@@ -1077,6 +1308,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::NONE,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: false,
         llm: None,
     },
     ModelInfo {
@@ -1099,6 +1331,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: false,
         // Measured with the helper on the processor, 18 GB M-series Mac, 2026-10-29 (table in SOURCES.md).
         // Rule: context_8gb is the largest tested n_ctx with a peak size of at most 5 GiB, context_16gb the largest
         // with at most 11 GiB (4096 when even 8192 does not fit), both capped at context_max. The sweep went up to
@@ -1130,6 +1363,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: false,
         // Measured with the helper on the processor, 18 GB M-series Mac, 2026-10-29 (table in SOURCES.md).
         // Rule: context_8gb is the largest tested n_ctx with a peak size of at most 5 GiB, context_16gb the largest
         // with at most 11 GiB (4096 when even 8192 does not fit), both capped at context_max. The sweep went up to
@@ -1161,6 +1395,7 @@ pub static CATALOG: &[ModelInfo] = &[
         gpu: gpu::WHISPER_AND_LLM,
         keeps_fillers: None,
         chunk_secs: None,
+        word_times: false,
         // Measured with the helper on the processor, 18 GB M-series Mac, 2026-10-29 (table in SOURCES.md).
         // Rule: context_8gb is the largest tested n_ctx with a peak size of at most 5 GiB, context_16gb the largest
         // with at most 11 GiB (4096 when even 8192 does not fit), both capped at context_max. The sweep went up to
@@ -1170,6 +1405,43 @@ pub static CATALOG: &[ModelInfo] = &[
             context_8gb: 32768,
             context_16gb: 65536,
             thinks: true,
+        }),
+    },
+    ModelInfo {
+        id: "gemma-4-e4b",
+        name: "Gemma 4 E4B",
+        maker: "Google",
+        note: "Google’s small Gemma 4 model, 4.5 billion effective parameters, trained for 4-bit use; the download is about 5.2 GB and it needs 16 GB of memory for a long context: on 8 GB of memory only a context of 4096 tokens fits. Text only here.",
+        kind: Kind::Llm,
+        languages: "Many languages",
+        english_only: false,
+        speed: 3,
+        accuracy: 2,
+        licence: licences::GEMMA_4,
+        files: &[ModelFile {
+            name: "gemma-4-E4B_q4_0-it.gguf",
+            url: concat!(
+                "https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/4b4a2c1d584be7264f87aac328a1bc739ce81b6c/",
+                "gemma-4-E4B_q4_0-it.gguf"
+            ),
+            size: 5_154_941_280,
+            sha256: "676c35070db6dbe52f93e9c864ee0fba4eddea94b9c875d9cb10daff453fbaee",
+        }],
+        gpu: gpu::WHISPER_AND_LLM,
+        keeps_fillers: None,
+        chunk_secs: None,
+        word_times: false,
+        // Measured with the helper on the processor, Windows 11 PC with 32 GB, 2026-11-16 (table in SOURCES.md), by the same
+        // rule as the entries above, with the peak working set where the Mac used the peak resident size: context_8gb
+        // is the largest tested n_ctx with a peak of at most 5 GiB (4096 when even 8192 does not fit: 5.27 GiB at 8192,
+        // and 5.05 GiB at 4096, the weights alone are 4.8 GiB), context_16gb the largest with at most 11 GiB (8.34 GiB
+        // at 65536, 11.84 GiB at 131072). context_max is read from the GGUF header. `thinks` is false: the template's
+        // thinking is a channel it opens only when asked, and has no `<think>` block, so the helper never has Gemma think.
+        llm: Some(LlmInfo {
+            context_max: 131072,
+            context_8gb: 4096,
+            context_16gb: 65536,
+            thinks: false,
         }),
     },
 ];
@@ -1335,8 +1607,119 @@ mod tests {
                 Kind::Parakeet | Kind::ParakeetUnified | Kind::Nemotron => {
                     assert_eq!(m.chunk_secs, Some(40), "{}", m.id)
                 }
-                Kind::Whisper => assert_eq!(m.chunk_secs, None, "{}", m.id),
+                // Trained on clips of up to 35 s.
+                Kind::Cohere => assert_eq!(m.chunk_secs, Some(35), "{}", m.id),
+                // Whisper takes any length, and Multitalker cuts the audio itself.
+                Kind::Whisper | Kind::Multitalker => assert_eq!(m.chunk_secs, None, "{}", m.id),
                 _ => {}
+            }
+        }
+    }
+
+    /// `word_times` is a speech field: true for every entry that gives words with times, false for Cohere (one piece
+    /// of text per chunk) and false for everything that is not a speech model.
+    #[test]
+    fn word_times_follow_the_kind() {
+        for m in all() {
+            let want = matches!(
+                m.kind,
+                Kind::Whisper
+                    | Kind::Parakeet
+                    | Kind::ParakeetUnified
+                    | Kind::Nemotron
+                    | Kind::Multitalker
+            );
+            assert_eq!(m.word_times, want, "{}", m.id);
+        }
+        assert!(!find("cohere-transcribe").unwrap().word_times);
+        assert!(find("multitalker-tdt").unwrap().word_times);
+        assert!(find("whisper-turbo").unwrap().word_times);
+        // Every speech entry that is not Cohere has word times.
+        for m in speech().filter(|m| m.kind != Kind::Cohere) {
+            assert!(m.word_times, "{}", m.id);
+        }
+    }
+
+    #[test]
+    fn multitalker_is_not_a_plain_speech_model() {
+        assert!(Kind::Cohere.is_speech());
+        assert!(!Kind::Multitalker.is_speech());
+        assert!(speech().all(|m| m.id != "multitalker-tdt"));
+        assert!(speech().any(|m| m.id == "cohere-transcribe"));
+    }
+
+    const U25: &str = "https://huggingface.co/altunenes/parakeet-rs/resolve/664cc742197053fa11afd12f5100749fb8000181/nemotron-labs-unified-asr-0.6b/";
+    const MULTITALKER: &str = "https://huggingface.co/altunenes/parakeet-rs/resolve/7f997807e4dcfae115c260a4a537a1d3bfb2e738/multitalker-tdt-0.6b-v3/";
+    const COHERE: &str = "https://huggingface.co/onnx-community/cohere-transcribe-03-2026-ONNX/resolve/31b1c6211c9000d76b077ddd23b74c9090badeba/";
+    const GEMMA: &str = "https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/4b4a2c1d584be7264f87aac328a1bc739ce81b6c/";
+
+    /// The v0.4.0 entries: each pinned to the commit it was checked against (`tools/verify-catalog.py` checks the sizes and
+    /// hashes against Hugging Face), with the file lists and sizes the engine loads.
+    #[test]
+    fn the_v0_4_0_entries_are_pinned_and_complete() {
+        let u25 = find("parakeet-unified-25").unwrap();
+        assert_eq!(u25.kind, Kind::ParakeetUnified);
+        assert!(!u25.english_only);
+        assert_eq!(u25.licence.spdx, "OpenMDW-1.1");
+        assert_eq!(u25.chunk_secs, Some(40));
+        assert_eq!(u25.size(), 2_551_936_690);
+        assert!(u25.files.iter().all(|f| f.url.starts_with(U25)));
+        let names: Vec<_> = u25.files.iter().map(|f| f.name).collect();
+        assert_eq!(
+            names,
+            [
+                "encoder.onnx",
+                "encoder.onnx.data",
+                "decoder_joint.onnx",
+                "tokenizer.model"
+            ]
+        );
+
+        let cohere = find("cohere-transcribe").unwrap();
+        assert_eq!(cohere.kind, Kind::Cohere);
+        assert_eq!(cohere.licence.spdx, "Apache-2.0");
+        assert!(cohere.files.iter().all(|f| f.url.starts_with(COHERE)));
+        assert_eq!(cohere.files.len(), 6);
+        assert_eq!(cohere.size(), 3_069_676_797);
+        // The store is flat: a name is the bare file name, the url keeps the folder.
+        assert!(cohere.files.iter().all(|f| !f.name.contains('/')));
+        assert!(cohere.files.iter().any(|f| f.name == "tokenizer.json"));
+
+        let multi = find("multitalker-tdt").unwrap();
+        assert_eq!(multi.kind, Kind::Multitalker);
+        assert_eq!(multi.licence.spdx, "CC-BY-4.0");
+        assert!(multi.files.iter().all(|f| f.url.starts_with(MULTITALKER)));
+        assert_eq!(multi.files.len(), 4);
+        assert_eq!(multi.size(), 2_582_543_776);
+        // The commit before the folder gained a `speaker_gate` input.
+        assert!(!MULTITALKER.contains("/resolve/main/"));
+        // The speaker separation model it needs is in the catalog too.
+        assert!(find("diarization").is_some());
+
+        let gemma = find("gemma-4-e4b").unwrap();
+        assert_eq!(gemma.kind, Kind::Llm);
+        assert_eq!(gemma.licence.spdx, "Apache-2.0");
+        assert_eq!(
+            gemma.licence.url,
+            "https://ai.google.dev/gemma/docs/gemma_4_license"
+        );
+        assert_eq!(
+            gemma.files.len(),
+            1,
+            "no mmproj: the model is text only here"
+        );
+        assert!(gemma.files[0].url.starts_with(GEMMA));
+        assert_eq!(gemma.files[0].size, 5_154_941_280);
+        assert!(gemma.llm.is_some());
+        assert!(gemma.gpu.mac_metal && gemma.gpu.windows_vulkan);
+    }
+
+    /// A catalog note names no app and recommends nothing.
+    #[test]
+    fn notes_name_no_app() {
+        for m in all() {
+            for app in ["Talaan", "Ensayo", "Parlato"] {
+                assert!(!m.note.contains(app), "{}", m.id);
             }
         }
     }
@@ -1358,7 +1741,10 @@ mod tests {
     #[test]
     fn local_ai_numbers_are_measured_not_placeholders() {
         let ids: Vec<_> = local_ai().map(|m| m.id).collect();
-        assert_eq!(ids, ["qwen3.5-4b", "qwen3.5-9b", "granite-4.2-3b"]);
+        assert_eq!(
+            ids,
+            ["qwen3.5-4b", "qwen3.5-9b", "granite-4.2-3b", "gemma-4-e4b"]
+        );
         for m in local_ai() {
             let l = m.llm.unwrap();
             assert!(l.context_8gb >= 4096, "{}", m.id);
